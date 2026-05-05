@@ -1,220 +1,143 @@
 # Hygur
 
-> Ton double numerique local -- memoire privee alimentee par LLM.
+> Your local digital twin — private memory powered by LLM.
 
-Hygur est un assistant personnel local qui s'execute entierement sur ta machine. Il combine un sidecar Go pour la communication avec LM Studio et une application macOS native pour l'interface utilisateur.
+Hygur is a personal AI assistant that runs entirely on your machine. It combines a Go sidecar for LM Studio communication and a native macOS app for the user interface.
 
-## Prerequis
+## Requirements
 
 - macOS 14.0+ (Sonoma)
 - Go 1.21+
 - LM Studio running on localhost:1234
-- Xcode 15+ (pour l'app macOS)
-- XcodeGen (pour generer le projet Xcode)
+- Xcode 15+
+- XcodeGen (`brew install xcodegen`)
+- create-dmg (`brew install create-dmg`)
+
+## Quick Start
+
+```bash
+# Run tests, build sidecar and macOS app
+make test
+
+# Start the sidecar in dev mode
+make dev
+
+# Build + sign + launch the app directly
+make open
+```
 
 ## Installation
 
-### Sidecar Go
+### From DMG (recommended)
+
+1. Download `Hygur-x.y.z.dmg` from [Releases](https://github.com/hygurlabs/hygur-app/releases)
+2. Drag `Hygur.app` to `/Applications`
+3. Right-click → Open (one-time Gatekeeper bypass — no Apple Developer account yet)
+
+### From source
 
 ```bash
-cd sidecar
-make build
-./bin/hygur
+git clone git@github.com:hygurlabs/hygur-app.git
+cd hygur-app
+make open
 ```
 
-Le sidecar demarre sur le port 8420 par defaut et genere un token d'authentification dans `~/.hygur/.token`.
+The sidecar starts on port 8420 and writes its auth token to `~/Library/Application Support/Hygur/token`.
 
-### App macOS
+## Development
+
+### Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `make test` | Go tests + binary check + app build |
+| `make dev` | Start sidecar in watch mode |
+| `make check-api` | Smoke-test all API endpoints (sidecar must be running) |
+| `make open` | Build + ad-hoc sign + launch the app |
+| `make verify-dmg` | Full DMG build, mount, verify, unmount |
+| `make release` | Build DMG + draft GitHub release |
+| `make clean` | Remove all build artifacts |
+
+### Running tests
 
 ```bash
-# Installer XcodeGen si necessaire
-brew install xcodegen
+# All Go tests with race detector
+cd sidecar && go test -race ./...
 
-cd macos-app
-xcodegen generate
-open Hygur.xcodeproj
-# Build & Run (Cmd+R)
+# Integration tests only
+cd sidecar && go test ./tests/integration/... -v
 ```
 
-## Configuration
-
-Le sidecar lit `config.yaml` a la racine du repertoire sidecar :
-
-```yaml
-server:
-  host: "127.0.0.1"
-  port: 8420
-  read_timeout: "30s"
-  write_timeout: "30s"
-  shutdown_timeout: "5s"
-
-lm_studio:
-  url: "http://localhost:1234/v1"
-  model_default: "llama-3.2-3b-instruct"
-  timeout: "60s"
-  max_retries: 3
-```
-
-### Options de configuration
-
-| Option | Description | Defaut |
-|--------|-------------|--------|
-| `server.port` | Port HTTP du sidecar | 8420 |
-| `server.host` | Adresse d'ecoute | 127.0.0.1 |
-| `lm_studio.url` | URL de l'API LM Studio | http://localhost:1234/v1 |
-| `lm_studio.model_default` | Modele par defaut | - |
-| `lm_studio.timeout` | Timeout des requetes LLM | 60s |
-| `lm_studio.max_retries` | Nombre de tentatives | 3 |
-
-## API
-
-Le sidecar expose une API REST/SSE sur localhost :
-
-| Endpoint | Methode | Auth | Description |
-|----------|---------|------|-------------|
-| `/health` | GET | Non | Statut du sidecar et de LM Studio |
-| `/models` | GET | Oui | Liste des modeles disponibles |
-| `/chat` | POST | Oui | Chat avec streaming SSE |
-
-### Authentification
-
-Tous les endpoints (sauf `/health`) necessitent le header `X-Hygur-Token` :
+### Building the sidecar
 
 ```bash
-curl -H "X-Hygur-Token: $(cat ~/.hygur/.token)" http://localhost:8420/models
+cd sidecar && make build-for-bundle   # universal binary (arm64 + amd64)
 ```
-
-### Exemples
-
-#### Health Check
-
-```bash
-curl http://localhost:8420/health
-```
-
-Reponse :
-```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "lm_studio": "connected",
-  "uptime_seconds": 3842
-}
-```
-
-#### Liste des modeles
-
-```bash
-curl -H "X-Hygur-Token: $(cat ~/.hygur/.token)" http://localhost:8420/models
-```
-
-Reponse :
-```json
-{
-  "models": [
-    {"id": "llama-3.2-3b-instruct", "name": "llama-3.2-3b-instruct"},
-    {"id": "qwen2.5-7b-instruct", "name": "qwen2.5-7b-instruct"}
-  ]
-}
-```
-
-#### Chat streaming
-
-```bash
-curl -X POST http://localhost:8420/chat \
-  -H "Content-Type: application/json" \
-  -H "X-Hygur-Token: $(cat ~/.hygur/.token)" \
-  -d '{"messages": [{"role": "user", "content": "Bonjour!"}], "stream": true}'
-```
-
-Reponse (SSE) :
-```
-data: {"delta": "Bonjour", "done": false}
-data: {"delta": " ! Comment", "done": false}
-data: {"delta": " puis-je vous aider ?", "done": false}
-data: {"done": true, "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}}
-```
-
-Voir `docs/api-contract.md` pour la documentation complete de l'API.
 
 ## Architecture
 
 ```
 hygur/
-├── sidecar/           # Backend Go
-│   ├── cmd/hygur/     # Point d'entree
-│   ├── internal/
-│   │   ├── api/       # Serveur HTTP et handlers
-│   │   ├── auth/      # Gestion des tokens
-│   │   ├── config/    # Configuration YAML
-│   │   ├── llm/       # Client LM Studio
-│   │   └── version/   # Informations de version
-│   └── tests/
-│       └── integration/  # Tests E2E
-├── macos-app/         # App SwiftUI
-│   ├── Sources/       # Code Swift
-│   │   ├── Views/     # ChatView, SettingsView
-│   │   ├── Models/    # Message, Model
-│   │   └── Services/  # SidecarService
-│   └── project.yml    # Configuration XcodeGen
-└── docs/              # Documentation
-    ├── api-contract.md
-    └── IMPLEMENTATION_PLAN.md
+├── sidecar/                  # Go backend
+│   ├── cmd/hygur/            # Entry point
+│   └── internal/
+│       ├── api/              # HTTP server + handlers
+│       ├── auth/             # Token management
+│       ├── config/           # YAML config loader
+│       ├── connectors/       # IMAP, Files, Notes connectors
+│       ├── ingest/           # Document parsing + chunking
+│       ├── llm/              # LM Studio client
+│       ├── marketplace/      # Connector catalog
+│       ├── plugin/           # Connector factory + scheduler
+│       ├── retrieval/        # Hybrid RAG (BM25 + vector)
+│       └── store/            # SQLite + vector store
+├── macos-app/                # SwiftUI app
+│   ├── Sources/
+│   │   ├── App/
+│   │   ├── DesignSystem/     # Tokens, modifiers
+│   │   ├── Models/
+│   │   ├── Services/         # SidecarService, SidecarSupervisor
+│   │   ├── ViewModels/
+│   │   └── Views/
+│   └── project.yml           # XcodeGen config
+├── .github/workflows/        # CI/CD — release on v*.*.* tag
+└── Makefile                  # Root build orchestration
 ```
 
-Voir `docs/IMPLEMENTATION_PLAN.md` pour le plan d'implementation complet.
+## API
 
-## Developpement
+The sidecar exposes a REST/SSE API on `http://localhost:8420`.
 
-### Tests
+All endpoints except `/health` require the `X-Hygur-Token` header:
 
 ```bash
-# Backend - tous les tests
-cd sidecar && make test
-
-# Backend - avec couverture
-cd sidecar && go test ./... -coverprofile=coverage.out
-go tool cover -func=coverage.out
-
-# Tests d'integration uniquement
-cd sidecar && go test ./tests/integration/... -v
+TOKEN=$(cat ~/Library/Application\ Support/Hygur/token)
+curl -H "X-Hygur-Token: $TOKEN" http://localhost:8420/marketplace/connectors
 ```
 
-### Build
+Key endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Sidecar + LM Studio status |
+| `/models` | GET | Available LLM models |
+| `/chat` | POST | Streaming SSE chat |
+| `/knowledge` | GET/POST | Document knowledge base |
+| `/connectors/instances` | GET | Connector instances |
+| `/connectors/{type}/instances` | POST | Create connector instance |
+| `/marketplace/connectors` | GET | Connector catalog |
+
+## Release
+
+Tagging triggers the GitHub Actions pipeline automatically:
 
 ```bash
-# Backend
-cd sidecar && make build
-
-# Frontend (necessite Xcode)
-cd macos-app && xcodebuild -scheme Hygur build
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-### Lint
+The workflow builds a universal binary, packages a DMG, and creates a GitHub release.
 
-```bash
-cd sidecar && golangci-lint run
-```
+## License
 
-## Statut du projet
-
-### Lot 1 - Core (Complet)
-
-- [x] Sidecar Go avec API REST
-- [x] Endpoint /health avec statut LM Studio
-- [x] Endpoint /models pour lister les modeles
-- [x] Endpoint /chat avec streaming SSE
-- [x] Authentification par token
-- [x] App macOS avec ChatView
-- [x] Tests unitaires > 80% couverture
-- [x] Tests d'integration E2E
-
-### Lots suivants (A venir)
-
-- [ ] Lot 2 - Knowledge Base
-- [ ] Lot 3 - Email Integration
-- [ ] Lot 4 - Tools
-
-## Licence
-
-Projet personnel - Tous droits reserves.
+AGPL-3.0 — see [LICENSE](LICENSE).
