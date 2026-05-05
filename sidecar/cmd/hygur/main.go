@@ -485,7 +485,8 @@ func migrateDataDir(oldDir, newDir string, logger zerolog.Logger) error {
 	if err := os.MkdirAll(newDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir new data dir: %w", err)
 	}
-	for _, f := range []string{"hygur.db", "config.yaml", "token"} {
+	// Top-level files to migrate.
+	for _, f := range []string{"hygur.db", "config.yaml", "token", ".hygur-token", ".cred_key"} {
 		src := filepath.Join(oldDir, f)
 		dst := filepath.Join(newDir, f)
 		if _, err := os.Stat(src); err != nil {
@@ -498,6 +499,31 @@ func migrateDataDir(oldDir, newDir string, logger zerolog.Logger) error {
 			return fmt.Errorf("copy %s: %w", f, err)
 		}
 		logger.Debug().Str("file", f).Msg("migrated data file")
+	}
+
+	// Migrate credentials directory (encrypted connector secrets + cred.key).
+	oldCreds := filepath.Join(oldDir, "credentials")
+	newCreds := filepath.Join(newDir, "credentials")
+	if err := os.MkdirAll(newCreds, 0o700); err != nil {
+		return fmt.Errorf("mkdir credentials: %w", err)
+	}
+	entries, err := os.ReadDir(oldCreds)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read old credentials dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		src := filepath.Join(oldCreds, entry.Name())
+		dst := filepath.Join(newCreds, entry.Name())
+		if _, err := os.Stat(dst); err == nil {
+			continue // already migrated
+		}
+		if err := copyFile(src, dst); err != nil {
+			return fmt.Errorf("copy credential %s: %w", entry.Name(), err)
+		}
+		logger.Debug().Str("file", entry.Name()).Msg("migrated credential file")
 	}
 	return nil
 }
