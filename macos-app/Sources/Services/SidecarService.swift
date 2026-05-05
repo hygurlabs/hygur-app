@@ -19,12 +19,14 @@ actor SidecarService {
         configuration.timeoutIntervalForResource = AppPreferences.shared.timeout * 2.5
         self.session = URLSession(configuration: configuration)
 
-        // Try to load token from Keychain first
-        if let keychainToken = Self.loadTokenFromKeychain(), !keychainToken.isEmpty {
+        // Prefer the token file — it is written by the sidecar and is always
+        // authoritative. The Keychain can hold a stale token from a previous
+        // install or data-dir migration, so we only fall back to it when the
+        // file does not exist yet (sidecar hasn't started for the first time).
+        if let fileToken = Self.loadTokenFromFileAndCache() {
+            self.token = fileToken
+        } else if let keychainToken = Self.loadTokenFromKeychain(), !keychainToken.isEmpty {
             self.token = keychainToken
-        } else {
-            // If not in Keychain, try to load from sidecar's token file
-            self.token = Self.loadTokenFromFileAndCache()
         }
     }
 
@@ -1499,6 +1501,33 @@ actor SidecarService {
         return try JSONDecoder().decode(BriefRunResponse.self, from: data)
     }
 
+    // MARK: - Sidecar Config
+
+    /// Fetch the current tunable sidecar configuration (GET /config).
+    func getConfig() async throws -> SidecarConfig {
+        var request = URLRequest(url: baseURL.appendingPathComponent("config"))
+        request.httpMethod = "GET"
+        addAuthHeader(&request)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(SidecarConfig.self, from: data)
+    }
+
+    /// Persist a partial config update (PATCH /config).
+    /// Only the fields explicitly set in `patch` are written to config.yaml.
+    func patchConfig(_ patch: SidecarConfigPatch) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("config"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuthHeader(&request)
+        request.httpBody = try JSONEncoder().encode(patch)
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 204 else {
+            try validateResponse(response)
+            return
+        }
+    }
+
     // MARK: - Memories
 
     /// Fetch every persistent memory the sidecar knows about. Sorted in the
@@ -1763,6 +1792,143 @@ enum SidecarError: LocalizedError {
         case .keychainError(let status):
             return "Keychain error: \(status)"
         }
+    }
+}
+
+// MARK: - Sidecar Config Models
+
+struct SidecarConfig: Codable, Sendable {
+    struct LMStudio: Codable, Sendable {
+        var url: String
+        var embeddingUrl: String
+        var modelDefault: String
+        var embeddingModel: String
+        var embeddingMaxTokens: Int
+        var timeoutSeconds: Int
+        var maxRetries: Int
+
+        enum CodingKeys: String, CodingKey {
+            case url
+            case embeddingUrl = "embedding_url"
+            case modelDefault = "model_default"
+            case embeddingModel = "embedding_model"
+            case embeddingMaxTokens = "embedding_max_tokens"
+            case timeoutSeconds = "timeout_seconds"
+            case maxRetries = "max_retries"
+        }
+    }
+
+    struct Logging: Codable, Sendable {
+        var level: String
+    }
+
+    struct DailyBrief: Codable, Sendable {
+        var enabled: Bool
+        var hourLocal: String
+        var maxItems: Int
+        var lookbackHours: Int
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case hourLocal = "hour_local"
+            case maxItems = "max_items"
+            case lookbackHours = "lookback_hours"
+        }
+    }
+
+    struct Retrieval: Codable, Sendable {
+        var useLlmIntent: Bool
+        var useJudge: Bool
+        var temporalScoringMode: String
+        var entitySearchFallback: Bool
+        var entitySearchMinScore: Double
+
+        enum CodingKeys: String, CodingKey {
+            case useLlmIntent = "use_llm_intent"
+            case useJudge = "use_judge"
+            case temporalScoringMode = "temporal_scoring_mode"
+            case entitySearchFallback = "entity_search_fallback"
+            case entitySearchMinScore = "entity_search_min_score"
+        }
+    }
+
+    var lmStudio: LMStudio
+    var logging: Logging
+    var dailyBrief: DailyBrief
+    var retrieval: Retrieval
+
+    enum CodingKeys: String, CodingKey {
+        case lmStudio = "lm_studio"
+        case logging
+        case dailyBrief = "daily_brief"
+        case retrieval
+    }
+}
+
+/// Partial update — only non-nil fields are sent to PATCH /config.
+struct SidecarConfigPatch: Codable, Sendable {
+    struct LMStudio: Codable, Sendable {
+        var url: String?
+        var embeddingUrl: String?
+        var modelDefault: String?
+        var embeddingModel: String?
+        var embeddingMaxTokens: Int?
+        var timeoutSeconds: Int?
+        var maxRetries: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case url
+            case embeddingUrl = "embedding_url"
+            case modelDefault = "model_default"
+            case embeddingModel = "embedding_model"
+            case embeddingMaxTokens = "embedding_max_tokens"
+            case timeoutSeconds = "timeout_seconds"
+            case maxRetries = "max_retries"
+        }
+    }
+
+    struct Logging: Codable, Sendable {
+        var level: String?
+    }
+
+    struct DailyBrief: Codable, Sendable {
+        var enabled: Bool?
+        var hourLocal: String?
+        var maxItems: Int?
+        var lookbackHours: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case hourLocal = "hour_local"
+            case maxItems = "max_items"
+            case lookbackHours = "lookback_hours"
+        }
+    }
+
+    struct Retrieval: Codable, Sendable {
+        var useLlmIntent: Bool?
+        var useJudge: Bool?
+        var temporalScoringMode: String?
+        var entitySearchFallback: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case useLlmIntent = "use_llm_intent"
+            case useJudge = "use_judge"
+            case temporalScoringMode = "temporal_scoring_mode"
+            case entitySearchFallback = "entity_search_fallback"
+        }
+    }
+
+    var lmStudio: LMStudio?
+    var logging: Logging?
+    var dailyBrief: DailyBrief?
+    var retrieval: Retrieval?
+
+    enum CodingKeys: String, CodingKey {
+        case lmStudio = "lm_studio"
+        case logging
+        case dailyBrief = "daily_brief"
+        case retrieval
     }
 }
 

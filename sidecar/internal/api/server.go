@@ -40,6 +40,7 @@ type Server struct {
 	briefHandler     *handlers.BriefHandler
 	timelineHandler  *handlers.TimelineHandler
 	agendaHandler    *handlers.AgendaHandler
+	configHandler    *handlers.ConfigHandler
 	token            string // Authentication token for API access
 }
 
@@ -346,4 +347,25 @@ func (s *Server) handleAgendaContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "agenda handler not configured")
+}
+
+// SetConfigHandler attaches the config read/write handler.
+func (s *Server) SetConfigHandler(handler *handlers.ConfigHandler) {
+	s.configHandler = handler
+}
+
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configHandler != nil {
+		s.configHandler.GetConfig(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "config handler not configured")
+}
+
+func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configHandler != nil {
+		s.configHandler.PatchConfig(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "config handler not configured")
 }

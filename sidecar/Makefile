@@ -94,20 +94,23 @@ build-backfill:
 	$(GO_BUILD) -o $(BUILD_DIR)/$(BACKFILL_BINARY_NAME) ./$(BACKFILL_CMD_DIR)
 
 # Build the sidecar then run it from ./bin.
+# On macOS, HYGUR_DATA_DIR is set to the canonical App Support location so that
+# `make dev` and the bundled app share the same database and config file.
+DATA_DIR_DARWIN := $(HOME)/Library/Application Support/Hygur
 run: build-sidecar
-	./$(BUILD_DIR)/$(BINARY_NAME)
+	HYGUR_DATA_DIR="$(DATA_DIR_DARWIN)" ./$(BUILD_DIR)/$(BINARY_NAME)
 
 # Build the reindex CLI then run it (Tier 1 entity backfill on an existing DB).
 reindex: build-reindex
-	./$(BUILD_DIR)/$(REINDEX_BINARY_NAME)
+	HYGUR_DATA_DIR="$(DATA_DIR_DARWIN)" ./$(BUILD_DIR)/$(REINDEX_BINARY_NAME)
 
 # Build the probe and run it (forwards extra args, e.g.: make probe ARGS='-q "..."').
 probe: build-probe
-	./$(BUILD_DIR)/$(PROBE_BINARY_NAME) $(ARGS)
+	HYGUR_DATA_DIR="$(DATA_DIR_DARWIN)" ./$(BUILD_DIR)/$(PROBE_BINARY_NAME) $(ARGS)
 
 # Build the backfill CLI and run it (forwards extra args, e.g.: make backfill ARGS='--dry-run').
 backfill: build-backfill
-	./$(BUILD_DIR)/$(BACKFILL_BINARY_NAME) $(ARGS)
+	HYGUR_DATA_DIR="$(DATA_DIR_DARWIN)" ./$(BUILD_DIR)/$(BACKFILL_BINARY_NAME) $(ARGS)
 
 # Install both binaries to ~/.hygur/bin so the macOS app's SidecarSupervisor
 # can launch the sidecar as a child process and so `hygur-reindex` is on PATH

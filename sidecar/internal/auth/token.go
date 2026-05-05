@@ -17,7 +17,12 @@ const (
 	TokenLength = 32
 
 	// TokenFileName is the name of the file storing the authentication token.
-	TokenFileName = ".hygur-token"
+	// Named "token" (no dot prefix) — matches the macOS Application Support convention.
+	TokenFileName = "token"
+
+	// tokenFileNameLegacy is the old dot-prefixed name used before the macOS
+	// data-dir migration. EnsureToken migrates it silently.
+	tokenFileNameLegacy = ".hygur-token"
 
 	// TokenFilePerms are the permissions for the token file (owner read/write only).
 	TokenFilePerms = 0600
@@ -62,7 +67,20 @@ func EnsureToken(dataDir string) (string, error) {
 		return token, nil
 	}
 
-	// If file doesn't exist, create a new token
+	// If file doesn't exist, check the legacy .hygur-token name and migrate.
+	if os.IsNotExist(err) {
+		legacyPath := filepath.Join(dataDir, tokenFileNameLegacy)
+		if legacyToken, legacyErr := readToken(legacyPath); legacyErr == nil {
+			// Copy to canonical name so future reads use the new path.
+			if writeErr := writeToken(tokenPath, legacyToken); writeErr == nil {
+				return legacyToken, nil
+			}
+			// Write failed but we still have the token — use it.
+			return legacyToken, nil
+		}
+	}
+
+	// If file doesn't exist (neither canonical nor legacy), create a new token.
 	if !os.IsNotExist(err) {
 		return "", fmt.Errorf("reading token file: %w", err)
 	}

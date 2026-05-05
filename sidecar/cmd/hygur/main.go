@@ -255,6 +255,7 @@ func main() {
 	defer pluginManager.Stop(context.Background())
 
 	connectorHandler := handlers.NewConnectorHandler(pluginManager, credStore, configPath, logger)
+	configHandler := handlers.NewConfigHandler(cfg, configPath, logger)
 	marketplaceHandler := handlers.NewMarketplaceHandler(pluginManager, logger)
 
 	// Create notes handler with embedding support for RAG search
@@ -330,6 +331,7 @@ func main() {
 	server.SetMemoryHandler(memoryHandler)
 	server.SetConnectorHandler(connectorHandler)
 	server.SetMarketplaceHandler(marketplaceHandler)
+	server.SetConfigHandler(configHandler)
 
 	// Timeline handler — consumes Phase 4 entity metadata to build a
 	// chaptered chronological view (POST /timeline/query).
@@ -485,10 +487,19 @@ func migrateDataDir(oldDir, newDir string, logger zerolog.Logger) error {
 	if err := os.MkdirAll(newDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir new data dir: %w", err)
 	}
-	// Top-level files to migrate.
-	for _, f := range []string{"hygur.db", "config.yaml", "token", ".hygur-token", ".cred_key"} {
-		src := filepath.Join(oldDir, f)
-		dst := filepath.Join(newDir, f)
+	// Top-level files to migrate (src name → dst name).
+	fileMappings := [][2]string{
+		{"hygur.db", "hygur.db"},
+		{"config.yaml", "config.yaml"},
+		// Canonicalise the token file name: old installs used ".hygur-token";
+		// the new canonical name is "token" (matches macOS App Support convention).
+		{".hygur-token", "token"},
+		{"token", "token"},
+		{".cred_key", ".cred_key"},
+	}
+	for _, m := range fileMappings {
+		src := filepath.Join(oldDir, m[0])
+		dst := filepath.Join(newDir, m[1])
 		if _, err := os.Stat(src); err != nil {
 			continue // src absent — skip
 		}
@@ -496,9 +507,9 @@ func migrateDataDir(oldDir, newDir string, logger zerolog.Logger) error {
 			continue // dst already exists — skip
 		}
 		if err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("copy %s: %w", f, err)
+			return fmt.Errorf("copy %s: %w", m[0], err)
 		}
-		logger.Debug().Str("file", f).Msg("migrated data file")
+		logger.Debug().Str("src", m[0]).Str("dst", m[1]).Msg("migrated data file")
 	}
 
 	// Migrate credentials directory (encrypted connector secrets + cred.key).

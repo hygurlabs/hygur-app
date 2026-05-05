@@ -122,6 +122,11 @@ func (s *Server) setupRoutes() {
 		// asynchronously; the result lands in /events as a `brief` event.
 		r.Post("/brief/run", s.handleBriefRun)
 
+		// Config read/write — exposes the tunable sidecar config to the macOS app.
+		// Changes are persisted to config.yaml and take effect on next restart.
+		r.Get("/config", s.handleGetConfig)
+		r.Patch("/config", s.handlePatchConfig)
+
 		// Streaming routes (no timeout — SSE can take minutes)
 		// Use r.Group to inherit the parent auth middleware; only bypass the timeout.
 		r.Group(func(r chi.Router) {

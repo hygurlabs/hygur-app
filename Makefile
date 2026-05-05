@@ -91,7 +91,13 @@ check-api:
 	echo "✅ check-api OK"
 
 ## Build + sign + ouvre l'app directement (sans passer par le DMG).
+## Quitte proprement l'instance précédente avant de lancer la nouvelle
+## pour éviter le conflit de port 8420 entre deux sidecars simultanés.
 open: sign-app
+	@echo "→ Arrêt de l'instance précédente..."
+	@osascript -e 'tell application "$(APP_NAME)" to quit' 2>/dev/null || true
+	@killall hygur-sidecar 2>/dev/null || true
+	@sleep 1
 	@echo "→ Ouverture de $(APP_NAME).app..."
 	open $(APP_PATH)
 
