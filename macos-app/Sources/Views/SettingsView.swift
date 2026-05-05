@@ -128,7 +128,7 @@ struct SettingsView: View {
             tokenMessage = "Token importé avec succès. Redémarrez l'application pour l'appliquer."
         } catch {
             tokenStatus = .missing
-            tokenMessage = "Impossible de lire ~/.hygur/.hygur-token : \(error.localizedDescription)"
+            tokenMessage = "Impossible de lire ~/Library/Application Support/Hygur/token : \(error.localizedDescription)"
         }
     }
 

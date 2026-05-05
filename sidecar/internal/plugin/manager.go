@@ -422,9 +422,6 @@ func (m *Manager) DeleteInstance(instanceID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("instance %q not found", instanceID)
 	}
-	delete(m.connectors, instanceID)
-	delete(m.configs, instanceID)
-	delete(m.metas, instanceID)
 	m.mu.Unlock()
 
 	m.scheduler.Remove(instanceID)
@@ -434,6 +431,13 @@ func (m *Manager) DeleteInstance(instanceID string) error {
 	if err := conn.Stop(stopCtx); err != nil {
 		m.logger.Warn().Str("instance", instanceID).Err(err).Msg("stop error during delete")
 	}
+
+	m.mu.Lock()
+	delete(m.connectors, instanceID)
+	delete(m.configs, instanceID)
+	delete(m.metas, instanceID)
+	m.mu.Unlock()
+
 	return nil
 }
 

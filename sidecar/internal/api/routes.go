@@ -123,8 +123,8 @@ func (s *Server) setupRoutes() {
 		r.Post("/brief/run", s.handleBriefRun)
 
 		// Streaming routes (no timeout — SSE can take minutes)
-		s.router.Group(func(r chi.Router) {
-			r.Use(s.authMiddleware)
+		// Use r.Group to inherit the parent auth middleware; only bypass the timeout.
+		r.Group(func(r chi.Router) {
 			r.Post("/chat", s.handleChat)
 			r.Get("/events", s.handleEvents)
 		})

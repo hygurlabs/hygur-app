@@ -361,9 +361,14 @@ func (d *DailyBrief) persistBrief(ctx context.Context, contentID, title, content
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	existing, _ := d.store.GetKnowledgeItem(ctx, contentID)
+	existing, err := d.store.GetKnowledgeItem(ctx, contentID)
+	if err != nil {
+		return contentID, fmt.Errorf("brief: check existing: %w", err)
+	}
 	if existing != nil {
-		_ = d.store.DeleteKnowledgeItem(ctx, contentID)
+		if err := d.store.DeleteKnowledgeItem(ctx, contentID); err != nil {
+			return contentID, fmt.Errorf("brief: delete existing: %w", err)
+		}
 	}
 	if err := d.store.InsertKnowledgeItem(ctx, item); err != nil {
 		return contentID, err

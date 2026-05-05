@@ -141,7 +141,9 @@ func SaveConnectorsConfig(configPath string, connectors map[string]ConnectorSett
 	// 1. Lire le YAML existant dans une map générique pour préserver toutes les sections
 	raw := make(map[string]any)
 	if data, err := os.ReadFile(configPath); err == nil {
-		_ = yaml.Unmarshal(data, &raw) // erreur ignorée : on écrit quand même
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("config file appears corrupt, refusing to overwrite: %w", err)
+		}
 	}
 
 	// 2. Mettre à jour uniquement la section "connectors"
@@ -164,7 +166,9 @@ func SaveConnectorsConfig(configPath string, connectors map[string]ConnectorSett
 func SaveConnectorInstancesConfig(configPath string, instances []ConnectorInstanceConfig) error {
 	raw := make(map[string]any)
 	if data, err := os.ReadFile(configPath); err == nil {
-		_ = yaml.Unmarshal(data, &raw)
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("config file appears corrupt, refusing to overwrite: %w", err)
+		}
 	}
 
 	raw["connector_instances"] = instances

@@ -126,12 +126,6 @@ func (h *ConnectorHandler) Configure(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn().Err(err).Msg("failed to persist connector configs")
 	}
 
-	if cfg.Enabled {
-		if err := h.manager.ReinitConnector(id); err != nil {
-			h.logger.Warn().Err(err).Str("connector", id).Msg("reinit after configure failed")
-		}
-	}
-
 	writeConnectorJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

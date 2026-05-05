@@ -9,7 +9,7 @@ final class ConnectorsViewModel {
     var isLoading = false
     var error: String?
 
-    private var currentPollingId: String? = nil
+    private var pollingTask: Task<Void, Never>? = nil
     private let healthPollInterval: Duration = .seconds(30)
 
     // Internal access intentional: ConnectorConfigForm needs OAuth URL fetch
@@ -154,46 +154,47 @@ final class ConnectorsViewModel {
 
     // MARK: - Health Polling
 
-    func startHealthPolling(id: String) async {
-        guard id != currentPollingId else { return }
-        currentPollingId = id
-        defer {
-            if currentPollingId == id { currentPollingId = nil }
-        }
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: healthPollInterval)
-            } catch {
-                // Task was cancelled; exit loop
-                return
-            }
-
-            guard !Task.isCancelled else { break }
-
-            do {
-                let health = try await service.getConnectorHealth(id)
-                // Update only the health of the currently displayed connector
-                if var detail = selectedConnector, detail.info.id == id {
-                    detail = ConnectorDetail(
-                        info: detail.info,
-                        capabilities: detail.capabilities,
-                        configSchema: detail.configSchema,
-                        config: detail.config,
-                        health: health
-                    )
-                    selectedConnector = detail
+    func startHealthPolling(id: String) {
+        // Cancel any in-flight poll for a previous connector before starting a
+        // new one. Using an explicit Task avoids the race where two concurrent
+        // callers could poll the same id simultaneously.
+        pollingTask?.cancel()
+        pollingTask = Task { @MainActor in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: healthPollInterval)
+                } catch {
+                    // Task was cancelled; exit loop.
+                    return
                 }
-                // Also refresh the list entry's health
-                if let index = connectors.firstIndex(where: { $0.id == id }) {
-                    let old = connectors[index]
-                    connectors[index] = ConnectorSummary(
-                        info: old.info,
-                        enabled: old.enabled,
-                        health: health
-                    )
+
+                guard !Task.isCancelled else { break }
+
+                do {
+                    let health = try await service.getConnectorHealth(id)
+                    // Update only the health of the currently displayed connector.
+                    if var detail = selectedConnector, detail.info.id == id {
+                        detail = ConnectorDetail(
+                            info: detail.info,
+                            capabilities: detail.capabilities,
+                            configSchema: detail.configSchema,
+                            config: detail.config,
+                            health: health
+                        )
+                        selectedConnector = detail
+                    }
+                    // Also refresh the list entry's health.
+                    if let index = connectors.firstIndex(where: { $0.id == id }) {
+                        let old = connectors[index]
+                        connectors[index] = ConnectorSummary(
+                            info: old.info,
+                            enabled: old.enabled,
+                            health: health
+                        )
+                    }
+                } catch {
+                    // Silently ignore polling errors; they're non-critical.
                 }
-            } catch {
-                // Silently ignore polling errors; they're non-critical
             }
         }
     }

@@ -25,6 +25,11 @@ struct HygurApp: App {
                     // work against a remote / manually-launched sidecar.
                     supervisor.start()
 
+                    // Wait for the sidecar HTTP server to be ready before
+                    // pushing secrets — supervisor.start() is non-blocking and
+                    // the process needs time to bind its port.
+                    await waitForSidecar()
+
                     // Push Keychain-stored secrets to the sidecar at launch so
                     // it can re-init enabled connectors with their credentials.
                     await ConnectorsViewModel().pushAllSecretsToSidecar()
@@ -107,11 +112,25 @@ struct HygurApp: App {
         MenuBarExtra {
             MenubarPanelView()
                 .environment(eventStream)
+                .environment(supervisor)
         } label: {
             MenubarStatusIcon()
                 .environment(eventStream)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+// MARK: - Sidecar Readiness
+
+/// Polls `/health` until the sidecar responds or the attempt budget is exhausted.
+/// `maxAttempts * delay` ≈ 6 s total wait at defaults — enough for a cold start on
+/// a mid-range Mac while keeping the UI responsive (each sleep is 300 ms).
+private func waitForSidecar(maxAttempts: Int = 20, delay: UInt64 = 300_000_000) async {
+    let sidecar = SidecarService.fromSettings()
+    for _ in 0..<maxAttempts {
+        if (try? await sidecar.health()) != nil { return }
+        try? await Task.sleep(nanoseconds: delay) // 300 ms between attempts
     }
 }
 

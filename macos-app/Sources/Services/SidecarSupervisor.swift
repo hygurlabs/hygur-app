@@ -36,18 +36,12 @@ final class SidecarSupervisor {
     /// Resolution order:
     /// 1. Bundled resource inside the .app (release builds) — `hygur-sidecar`
     /// 2. Development fallback — `~/.hygur/bin/hygur` (installed via `make install`)
+    ///
+    /// Note: chmod is intentionally NOT done here. This is a non-mutating computed
+    /// property and cannot write to `lastError`. The execute-bit fix is applied in
+    /// `start()` before the `isExecutableFile` check so errors are properly surfaced.
     var binaryPath: URL {
         if let bundled = Bundle.main.url(forResource: "hygur-sidecar", withExtension: nil) {
-            // Xcode's CpResource phase strips the execute bit — restore it so
-            // isExecutableFile() passes and Process can launch the binary.
-            let attrs = try? FileManager.default.attributesOfItem(atPath: bundled.path)
-            let perms = attrs?[.posixPermissions] as? Int ?? 0
-            if perms & 0o111 == 0 {
-                try? FileManager.default.setAttributes(
-                    [.posixPermissions: NSNumber(value: perms | 0o755)],
-                    ofItemAtPath: bundled.path
-                )
-            }
             return bundled
         }
         return FileManager.default.homeDirectoryForCurrentUser
@@ -63,19 +57,39 @@ final class SidecarSupervisor {
     }
 
     /// Spawn the sidecar. No-op if already running. Sets `lastError` if the
-    /// binary is missing.
+    /// binary is missing or cannot be made executable.
     func start() {
         guard !isRunning else { return }
         intentionalStop = false
 
-        guard FileManager.default.isExecutableFile(atPath: binaryPath.path) else {
+        // Xcode's CpResource phase strips the execute bit from bundled binaries.
+        // Restore it here (in a mutating context) so `isExecutableFile` passes.
+        // If chmod fails, surface a precise error rather than the generic
+        // "binary not found" message.
+        let path = binaryPath
+        let fm = FileManager.default
+        if let attrs = try? fm.attributesOfItem(atPath: path.path),
+           let perms = attrs[.posixPermissions] as? Int,
+           perms & 0o111 == 0 {
+            do {
+                try fm.setAttributes(
+                    [.posixPermissions: NSNumber(value: perms | 0o755)],
+                    ofItemAtPath: path.path
+                )
+            } catch {
+                lastError = "Cannot make sidecar binary executable: \(error.localizedDescription)"
+                return
+            }
+        }
+
+        guard fm.isExecutableFile(atPath: path.path) else {
             lastError = "Sidecar binary not found. In development, run `make install` in the sidecar repo."
             return
         }
         lastError = nil
 
         let proc = Process()
-        proc.executableURL = binaryPath
+        proc.executableURL = path
 
         // Pipe stdout/stderr to the rotating log file. We open in append mode
         // so multiple respawns share one log; truncation is left to log rotation.
@@ -83,10 +97,21 @@ final class SidecarSupervisor {
             FileManager.default.createFile(atPath: logPath.path, contents: nil)
         }
         if let handle = try? FileHandle(forWritingTo: logPath) {
-            _ = try? handle.seekToEnd()
-            self.logHandle = handle
-            proc.standardOutput = handle
-            proc.standardError = handle
+            var seekSucceeded = false
+            do {
+                try handle.seekToEnd()
+                seekSucceeded = true
+            } catch {
+                // seekToEnd failed — closing the handle avoids writing at offset 0,
+                // which would corrupt previously-written log content. Continue without
+                // a log handle; stdout/stderr fall back to the parent process.
+                try? handle.close()
+            }
+            if seekSucceeded {
+                self.logHandle = handle
+                proc.standardOutput = handle
+                proc.standardError = handle
+            }
         }
 
         proc.terminationHandler = { [weak self] terminated in

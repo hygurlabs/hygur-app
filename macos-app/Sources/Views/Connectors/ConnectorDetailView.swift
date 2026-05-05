@@ -60,7 +60,7 @@ struct ConnectorDetailView: View {
                 }
             }
 
-            await viewModel.startHealthPolling(id: connector.info.id)
+            viewModel.startHealthPolling(id: connector.info.id)
         }
         .onAppear {
             startEventStream()

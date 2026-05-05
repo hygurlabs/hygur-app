@@ -1272,20 +1272,20 @@ func (d *DB) GetDiagnosticStats(ctx context.Context) (*DiagnosticStats, error) {
 	}
 
 	// Count items by source type
-	rows, err := d.db.QueryContext(ctx, "SELECT source_type, COUNT(*) FROM knowledge_items GROUP BY source_type")
+	rows1, err := d.db.QueryContext(ctx, "SELECT source_type, COUNT(*) FROM knowledge_items GROUP BY source_type")
 	if err != nil {
 		return nil, fmt.Errorf("failed to count items by source type: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
+	defer rows1.Close()
+	for rows1.Next() {
 		var sourceType string
 		var count int
-		if err := rows.Scan(&sourceType, &count); err != nil {
+		if err := rows1.Scan(&sourceType, &count); err != nil {
 			return nil, fmt.Errorf("failed to scan source type count: %w", err)
 		}
 		stats.SourceTypeCounts[sourceType] = count
 	}
-	if err := rows.Err(); err != nil {
+	if err := rows1.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating source type counts: %w", err)
 	}
 
@@ -1314,35 +1314,13 @@ func (d *DB) GetDiagnosticStats(ctx context.Context) (*DiagnosticStats, error) {
 	}
 
 	// Get items missing chunks
-	rows, err = d.db.QueryContext(ctx, `
+	rows2, err := d.db.QueryContext(ctx, `
 		SELECT ki.content_id
 		FROM knowledge_items ki
 		WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.content_id = ki.content_id)
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query items missing chunks: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var contentID string
-		if err := rows.Scan(&contentID); err != nil {
-			return nil, fmt.Errorf("failed to scan content_id: %w", err)
-		}
-		stats.MissingChunks = append(stats.MissingChunks, contentID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating missing chunks: %w", err)
-	}
-
-	// Get items with chunks but missing embeddings
-	rows2, err := d.db.QueryContext(ctx, `
-		SELECT DISTINCT c.content_id
-		FROM chunks c
-		WHERE NOT EXISTS (SELECT 1 FROM chunk_vectors cv WHERE cv.chunk_id = c.chunk_id)
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query items missing embeddings: %w", err)
 	}
 	defer rows2.Close()
 
@@ -1351,9 +1329,31 @@ func (d *DB) GetDiagnosticStats(ctx context.Context) (*DiagnosticStats, error) {
 		if err := rows2.Scan(&contentID); err != nil {
 			return nil, fmt.Errorf("failed to scan content_id: %w", err)
 		}
-		stats.MissingEmbeddings = append(stats.MissingEmbeddings, contentID)
+		stats.MissingChunks = append(stats.MissingChunks, contentID)
 	}
 	if err := rows2.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating missing chunks: %w", err)
+	}
+
+	// Get items with chunks but missing embeddings
+	rows3, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT c.content_id
+		FROM chunks c
+		WHERE NOT EXISTS (SELECT 1 FROM chunk_vectors cv WHERE cv.chunk_id = c.chunk_id)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query items missing embeddings: %w", err)
+	}
+	defer rows3.Close()
+
+	for rows3.Next() {
+		var contentID string
+		if err := rows3.Scan(&contentID); err != nil {
+			return nil, fmt.Errorf("failed to scan content_id: %w", err)
+		}
+		stats.MissingEmbeddings = append(stats.MissingEmbeddings, contentID)
+	}
+	if err := rows3.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating missing embeddings: %w", err)
 	}
 
@@ -1688,9 +1688,12 @@ func (d *DB) SearchMemories(ctx context.Context, query string, limit int) ([]*Me
 	for rows.Next() {
 		var m Memory
 		if err := rows.Scan(&m.MemoryID, &m.Type, &m.Content, &m.ContextID, &m.CreatedAt, &m.ExpiresAt, &m.Score); err != nil {
-			continue
+			return nil, fmt.Errorf("scan memory: %w", err)
 		}
 		results = append(results, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }
@@ -1712,9 +1715,12 @@ func (d *DB) ListMemoriesAfter(ctx context.Context, since time.Time) ([]*Memory,
 	for rows.Next() {
 		var m Memory
 		if err := rows.Scan(&m.MemoryID, &m.Type, &m.Content, &m.ContextID, &m.CreatedAt, &m.ExpiresAt, &m.Score); err != nil {
-			continue
+			return nil, fmt.Errorf("scan memory: %w", err)
 		}
 		results = append(results, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }

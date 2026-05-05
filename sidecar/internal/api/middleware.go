@@ -2,6 +2,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -77,8 +78,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 func writeAuthError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	// Using a simple format that matches the spec
-	_, _ = w.Write([]byte(`{"code":"` + code + `","message":"` + message + `"}`))
+	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message})
 }
 
 // corsMiddleware adds CORS headers for local development.
@@ -102,7 +102,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		if allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Hygur-Token")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 		}
 

@@ -57,8 +57,8 @@ actor SidecarService {
     private static let keychainService = "com.hygur.sidecar"
     private static let keychainAccount = "api-token"
 
-    /// Default token file path used by the sidecar
-    private static let tokenFilePath = "~/.hygur/.hygur-token"
+    /// Default token file path used by the sidecar (post-migration S1 path).
+    private static let tokenFilePath = "~/Library/Application Support/Hygur/token"
 
     /// Load token from sidecar's file and cache it in Keychain
     private static func loadTokenFromFileAndCache() -> String? {
@@ -1116,11 +1116,9 @@ actor SidecarService {
         try validateResponse(response)
 
         // Async mode returns MailSyncAck; sync mode returns a SyncResult shape.
-        // Both share `status` so the ack decode is forgiving.
-        if let ack = try? JSONDecoder().decode(MailSyncAck.self, from: data) {
-            return ack
-        }
-        return MailSyncAck(status: "completed", jobId: nil, message: nil)
+        // Use `try` so a decode failure surfaces as a real error rather than
+        // silently returning a fake "completed" status.
+        return try JSONDecoder().decode(MailSyncAck.self, from: data)
     }
 
     /// Index a mail thread into the knowledge base
