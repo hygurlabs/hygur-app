@@ -73,10 +73,16 @@ func LoadWithOptions(opts *LoadOptions) (*Config, error) {
 	// Read config file (optional - env vars and defaults still work)
 	if err := v.ReadInConfig(); err != nil {
 		var configFileNotFoundError viper.ConfigFileNotFoundError
-		if !errors.As(err, &configFileNotFoundError) {
+		switch {
+		case errors.As(err, &configFileNotFoundError):
+			// Search-path lookup found nothing — use defaults.
+		case errors.Is(err, os.ErrNotExist):
+			// Specific config path requested but file doesn't exist yet
+			// (first-launch scenario when bundled app has no config.yaml).
+			// Use defaults; the file will be created when connectors are saved.
+		default:
 			return nil, fmt.Errorf("reading config file: %w", err)
 		}
-		// Config file not found is acceptable - use defaults and env vars
 	}
 
 	var cfg Config

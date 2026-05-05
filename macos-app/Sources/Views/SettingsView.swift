@@ -111,7 +111,7 @@ struct SettingsView: View {
     }
 
     private func loadTokenFromSidecar() {
-        let tokenPath = NSString(string: "~/.hygur/.hygur-token").expandingTildeInPath
+        let tokenPath = NSString(string: "~/Library/Application Support/Hygur/token").expandingTildeInPath
 
         do {
             let token = try String(contentsOfFile: tokenPath, encoding: .utf8)

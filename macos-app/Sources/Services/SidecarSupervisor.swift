@@ -38,6 +38,16 @@ final class SidecarSupervisor {
     /// 2. Development fallback — `~/.hygur/bin/hygur` (installed via `make install`)
     var binaryPath: URL {
         if let bundled = Bundle.main.url(forResource: "hygur-sidecar", withExtension: nil) {
+            // Xcode's CpResource phase strips the execute bit — restore it so
+            // isExecutableFile() passes and Process can launch the binary.
+            let attrs = try? FileManager.default.attributesOfItem(atPath: bundled.path)
+            let perms = attrs?[.posixPermissions] as? Int ?? 0
+            if perms & 0o111 == 0 {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: NSNumber(value: perms | 0o755)],
+                    ofItemAtPath: bundled.path
+                )
+            }
             return bundled
         }
         return FileManager.default.homeDirectoryForCurrentUser
