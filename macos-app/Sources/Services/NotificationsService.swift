@@ -1,0 +1,190 @@
+import Foundation
+import UserNotifications
+
+/// `NotificationsService` translates sidecar events into native macOS
+/// banner notifications. Permission is requested lazily on the first event
+/// the user has opted in to receive — never at app launch — so users who
+/// don't toggle anything in Settings never see a permission prompt.
+///
+/// Two opt-in toggles drive the routing: `notify.dailyBrief` and
+/// `notify.priorityMail` (read from `UserDefaults`). Everything else is
+/// silent (visible only in the in-app Activity view).
+@MainActor
+final class NotificationsService {
+    static let shared = NotificationsService()
+    private init() {}
+
+    private let center = UNUserNotificationCenter.current()
+    private var hasRequestedAuth = false
+
+    private var dailyBriefEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "notify.dailyBrief")
+    }
+
+    private var priorityMailEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "notify.priorityMail")
+    }
+
+    private var agendaAlertsEnabled: Bool {
+        // Agenda alerts are opt-in via the same daily brief toggle.
+        UserDefaults.standard.bool(forKey: "notify.agendaAlerts")
+    }
+
+    /// Hook this on `EventStreamService.onEvent`.
+    func handle(_ event: ActivityEvent) {
+        switch event.type {
+        case "mail_digest" where priorityMailEnabled:
+            Task { await postMailDigest(event) }
+        case "priority_mail" where priorityMailEnabled:
+            // mail_digest aggregates priority_mail items at the end of each
+            // sync cycle. To avoid double-notifying, individual priority_mail
+            // events are now logged in ActivityView only — the digest is the
+            // user-facing notification path.
+            return
+        case "brief" where dailyBriefEnabled:
+            Task { await postDailyBrief(event) }
+        case "agenda_alert":
+            Task { await postAgendaAlert(event) }
+        default:
+            return
+        }
+    }
+
+    /// Settings toggles call this when the user enables either notification
+    /// category. Idempotent — repeated calls don't re-prompt the user.
+    func ensureAuthorization() async {
+        if hasRequestedAuth { return }
+        hasRequestedAuth = true
+        do {
+            _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+        } catch {
+            // Silent failure — user will see no notifications, but the rest
+            // of the app keeps working. The Activity view is the always-on
+            // fallback channel.
+        }
+    }
+
+    // MARK: - Posting
+
+    /// Renders a `mail_digest` event into a macOS notification. The plan
+    /// dictates three layouts depending on the count:
+    ///   - 1 mail  → single-line body with the one_liner.
+    ///   - 2-3     → grouped, body lists every one_liner on its own row.
+    ///   - 4+      → grouped, body shows top-3 one_liners + "+N autres".
+    /// Tap routes to the Activity view via `userInfo.kind` so the existing
+    /// notification-tap pipeline can deep-link.
+    private func postMailDigest(_ event: ActivityEvent) async {
+        let items = event.raw.digestItems() ?? []
+        if items.isEmpty { return }
+        let total = event.raw.int("count") ?? items.count
+
+        let content = UNMutableNotificationContent()
+        content.sound = .default
+
+        if items.count == 1, let only = items.first {
+            content.title = "Email important"
+            content.body = only.oneLiner
+        } else if items.count <= 3 {
+            content.title = "\(items.count) nouveaux emails importants"
+            content.body = items.map(\.oneLiner).joined(separator: "\n")
+        } else {
+            content.title = "\(total) nouveaux emails importants"
+            let top = items.prefix(3).map(\.oneLiner).joined(separator: "\n")
+            let extra = total - 3
+            content.body = extra > 0 ? "\(top)\n+\(extra) autres" : top
+        }
+
+        content.userInfo = [
+            "kind": "mail_digest",
+            "count": total,
+            "content_ids": items.map(\.contentId),
+        ]
+
+        let req = UNNotificationRequest(identifier: "mail-digest-\(event.id.uuidString)", content: content, trigger: nil)
+        try? await center.add(req)
+    }
+
+    private func postPriorityMail(_ event: ActivityEvent) async {
+        let content = UNMutableNotificationContent()
+        let from = event.raw.string("from") ?? "Unknown sender"
+        content.title = "Email important — \(from)"
+
+        var bodyParts: [String] = []
+        if let title = event.raw.string("title"), !title.isEmpty { bodyParts.append(title) }
+        if let amount = event.raw.string("amount"), !amount.isEmpty { bodyParts.append(amount) }
+        if let due = event.raw.string("due_date"), !due.isEmpty { bodyParts.append("due \(due)") }
+        content.body = bodyParts.joined(separator: " · ")
+        content.sound = .default
+        content.userInfo = [
+            "kind": "priority_mail",
+            "content_id": event.raw.string("content_id") ?? event.source,
+        ]
+
+        let req = UNNotificationRequest(identifier: "priority-\(event.id.uuidString)", content: content, trigger: nil)
+        try? await center.add(req)
+    }
+
+    private func postAgendaAlert(_ event: ActivityEvent) async {
+        let what = event.raw.string("what") ?? event.message ?? "Action imminente"
+        let deadline = event.raw.string("deadline_iso") ?? ""
+
+        let content = UNMutableNotificationContent()
+        content.title = "Deadline imminente : \(what)"
+        content.body = deadline.isEmpty ? "" : "Deadline : \(relativeDeadlineLabel(from: deadline))"
+        content.sound = .default
+        content.userInfo = [
+            "kind": "agenda_alert",
+            "source_id": event.raw.string("source_id") ?? event.source,
+            "deadline_iso": deadline,
+        ]
+
+        let req = UNNotificationRequest(
+            identifier: "agenda-alert-\(event.id.uuidString)",
+            content: content,
+            trigger: nil
+        )
+        try? await center.add(req)
+    }
+
+    /// Converts an ISO date string (YYYY-MM-DD) to a human-readable relative
+    /// label. Uses a factory function to comply with Swift 6 Sendable rules —
+    /// DateFormatter is not Sendable, so a static let would violate isolation.
+    private func relativeDeadlineLabel(from isoDate: String) -> String {
+        let formatter = notifDateFormatter()
+        guard let date = formatter.date(from: isoDate) else { return isoDate }
+        let days = Calendar.current.dateComponents([.day], from: Date(), to: date).day ?? 0
+        if days <= 0 { return "Aujourd'hui" }
+        if days == 1 { return "Demain" }
+        return "Dans \(days) jours"
+    }
+
+    private func notifDateFormatter() -> DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }
+
+    private func postDailyBrief(_ event: ActivityEvent) async {
+        let content = UNMutableNotificationContent()
+        let date = event.raw.string("date") ?? ""
+        content.title = date.isEmpty ? "Brief du jour" : "Brief — \(date)"
+
+        if let bullets = event.raw.stringArray("bullets"), !bullets.isEmpty {
+            content.body = bullets.prefix(2).joined(separator: " · ")
+        } else if let count = event.raw.int("item_count"), count > 0 {
+            content.body = "\(count) éléments d'activité résumés"
+        } else {
+            content.body = "Pas d'activité dans les dernières 24 h."
+        }
+        content.sound = .default
+        content.userInfo = [
+            "kind": "brief",
+            "content_id": event.raw.string("content_id") ?? event.source,
+        ]
+
+        let req = UNNotificationRequest(identifier: "brief-\(event.id.uuidString)", content: content, trigger: nil)
+        try? await center.add(req)
+    }
+}

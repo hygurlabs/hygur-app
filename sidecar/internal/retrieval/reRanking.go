@@ -1,0 +1,182 @@
+package retrieval
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/hygur/sidecar/internal/llm"
+)
+
+// Rerank re-orders unified search results by relevance using an LLM.
+// It groups chunks by document, builds an LLM prompt with all chunks,
+// and returns the document IDs in the LLM-reordered list.
+func (us *UnifiedSearcher) Rerank(ctx context.Context, query string, results []UnifiedResult) ([]string, error) {
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	// Group chunks by ContentID (document)
+	docChunks := make(map[string][]UnifiedResult)
+	keep := make(map[string]bool)
+	for _, r := range results {
+		keep[r.ContentID] = true
+		docChunks[r.ContentID] = append(docChunks[r.ContentID], r)
+	}
+
+	// Limit number of documents for LLM context
+	if len(docChunks) > 20 {
+		// Take top 20 by first occurrence order
+		var ordered []string
+		for cid := range keep {
+			ordered = append(ordered, cid)
+		}
+		// Sort by score to keep the best
+		type cscore struct {
+			id string
+			sc float64
+		}
+		var scores []cscore
+		for cid, chunks := range docChunks {
+			scores = append(scores, cscore{cid, chunks[0].Score})
+		}
+		sort.Slice(scores, func(i, j int) bool {
+			return scores[i].sc > scores[j].sc
+		})
+		for _, s := range scores[:20] {
+			keep[s.id] = true
+		}
+		// Reset docChunks to only keep top 20
+		temp := make(map[string][]UnifiedResult)
+		for cid, chunks := range docChunks {
+			if keep[cid] {
+				temp[cid] = chunks
+			}
+		}
+		docChunks = temp
+	}
+
+	// Build the prompt
+	var sb strings.Builder
+	sb.WriteString("You are a relevance ranking assistant. You will receive a query and several text chunks. Rank them by relevance to the query.\n\n")
+	fmt.Fprintf(&sb, "Query: %s\n\n", query)
+
+	var chunkIDs []string
+	chunkMap := make(map[string]string) // chunkID -> contentID
+	var idx int
+	for cid, chunks := range docChunks {
+		for _, c := range chunks {
+			chunkMap[c.ChunkID] = cid
+			sb.WriteString(fmt.Sprintf("Chunk %d: [%s] %s\n\n", idx+1, c.Title, c.Excerpt))
+			chunkIDs = append(chunkIDs, c.ChunkID)
+			idx++
+		}
+	}
+
+	sb.WriteString("Return a JSON array of chunk IDs in order of relevance (most relevant first). Example: [\"chunk1\", \"chunk2\", \"chunk3\"]")
+
+	// Call LLM
+	resp, err := us.llm.Chat(ctx, llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: sb.String()}},
+		Stream:   false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to call LLM for re-ranking: %w", err)
+	}
+
+	// Parse response
+	order := parseRerankResponse(resp, chunkMap)
+
+	// Convert ordered chunk IDs to content IDs (unique, in order)
+	seen := make(map[string]bool)
+	var orderedContentIDs []string
+	for _, cid := range order {
+		contentID := chunkMap[cid]
+		if !seen[contentID] {
+			seen[contentID] = true
+			orderedContentIDs = append(orderedContentIDs, contentID)
+		}
+	}
+
+	return orderedContentIDs, nil
+}
+
+// parseRerankResponse parses the LLM response for re-ranking.
+// Returns an ordered list of chunk IDs.
+func parseRerankResponse(resp *llm.ChatResponse, chunkMap map[string]string) []string {
+	if resp == nil || len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
+		return nil
+	}
+
+	text := resp.Choices[0].Message.Content
+	text = strings.TrimSpace(text)
+
+	// Try to parse as JSON array
+	if strings.HasPrefix(text, "[") {
+		// Extract the array from text (might have surrounding text)
+		start := strings.Index(text, "[")
+		end := strings.LastIndex(text, "]")
+		if start >= 0 && end > start {
+			jsonStr := text[start : end+1]
+			var ids []string
+			if err := json.Unmarshal([]byte(jsonStr), &ids); err == nil && len(ids) > 0 {
+				return ids
+			}
+		}
+	}
+
+	// Fallback: try comma-separated
+	var prefixes = []string{"[", ""}
+	var suffixes = []string{"]", ""}
+	for _, prefix := range prefixes {
+		for _, suffix := range suffixes {
+			s := strings.TrimPrefix(strings.TrimSuffix(text, suffix), prefix)
+			parts := strings.Split(s, ",")
+			if len(parts) > 0 && len(parts[0]) > 0 && len(parts[0]) < 100 {
+				var ids []string
+				for _, p := range parts {
+					ids = append(ids, strings.TrimSpace(p))
+				}
+				return ids
+			}
+		}
+	}
+
+	return nil
+}
+
+// ReOrderBy re-orders unified search results by the given list of content IDs.
+// It returns a new slice ordered by the provided content ID order, followed by
+// any items not in the order list.
+func ReOrderBy(results []UnifiedResult, orderedContentIDs []string) []UnifiedResult {
+	if len(orderedContentIDs) == 0 {
+		return results
+	}
+
+	// Build a map of contentID -> UnifiedResult
+	itemsByContent := make(map[string]UnifiedResult)
+	for _, r := range results {
+		itemsByContent[r.ContentID] = r
+	}
+
+	// Re-order by content ID order
+	var ordered []UnifiedResult
+	seen := make(map[string]bool)
+	for _, cid := range orderedContentIDs {
+		if r, ok := itemsByContent[cid]; ok {
+			ordered = append(ordered, r)
+			seen[cid] = true
+		}
+	}
+
+	// Append any remaining items not in the order list
+	for _, r := range results {
+		if !seen[r.ContentID] {
+			ordered = append(ordered, r)
+		}
+	}
+
+	return ordered
+}

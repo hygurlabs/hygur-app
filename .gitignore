@@ -60,3 +60,33 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Go — compiled binaries
+sidecar/bin/
+
+# XcodeGen — generated project (regenerate with: cd macos-app && xcodegen generate)
+macos-app/*.xcodeproj/
+macos-app/build/
+
+# Sidecar binary bundled into .app (built at compile time by Xcode pre-build script)
+macos-app/Resources/hygur-sidecar
+
+# Tool-specific directories (not source code)
+.claude/
+.grepai/
+
+# Internal docs / design artifacts (not distributed)
+docs/
+graph.png
+hygur-implementation.md
+
+# Go sidecar — runtime artifacts
+sidecar/coverage.out
+sidecar/data/
+sidecar/hygur
+sidecar/probe-run-*.md
+sidecar/config.yaml

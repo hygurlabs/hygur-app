@@ -1,0 +1,25 @@
+# Sample queries for the relevance probe.
+# One query per line. Lines starting with # are ignored.
+
+# The reported failing case — proper-noun + factual entity question.
+quel est le numéro national d'Jean ?
+
+# Anti-regression: queries that should already work today.
+TVA déclaration trimestrielle
+dernière facture Stripe
+
+# Other factual-entity queries to probe.
+adresse postale d'Jean
+numéro de téléphone d'Jean
+date de naissance d'Jean
+
+# Topical queries.
+emails à propos du paiement de la TVA
+notes sur le projet Hygur
+
+# Temporal queries.
+brief d'hier
+dernière facture reçue
+
+# Conversational follow-up shape (used as standalone here).
+et son IBAN

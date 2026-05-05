@@ -1,0 +1,124 @@
+import SwiftUI
+
+@main
+struct HygurApp: App {
+    @AppStorage("lastSidebarSelection") private var lastSidebarSelectionRaw: String = "chat"
+
+    // Single, app-wide event stream consumer. Connects to /events on the
+    // sidecar at launch and fans events out to the menubar, ActivityView,
+    // and (later) the notifications service.
+    @State private var eventStream = EventStreamService()
+
+    // Sidecar process supervisor — started lazily on first window appearance.
+    // Idempotent; a no-op if the user runs the sidecar manually elsewhere.
+    @State private var supervisor = SidecarSupervisor()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(eventStream)
+                .environment(supervisor)
+                .task {
+                    // Spawn the supervised sidecar child process if the binary
+                    // is installed. Errors are surfaced via `supervisor.lastError`
+                    // in the Settings view; the rest of the app continues to
+                    // work against a remote / manually-launched sidecar.
+                    supervisor.start()
+
+                    // Push Keychain-stored secrets to the sidecar at launch so
+                    // it can re-init enabled connectors with their credentials.
+                    await ConnectorsViewModel().pushAllSecretsToSidecar()
+
+                    // Bridge events → native notifications. The
+                    // NotificationsService consults the user's opt-in
+                    // toggles before actually posting anything.
+                    eventStream.onEvent = { event in
+                        NotificationsService.shared.handle(event)
+                    }
+                    // Start the event consumer once the sidecar URL is known.
+                    eventStream.start(sidecar: SidecarService.fromSettings())
+                }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Note") {
+                    NotificationCenter.default.post(name: .showNewNoteSheet, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+
+            CommandGroup(after: .newItem) {
+                Divider()
+                Button("Command Palette…") {
+                    NotificationCenter.default.post(name: .showCommandPalette, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
+            }
+
+            CommandMenu("Navigate") {
+                Button("Chat") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "chat")
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Knowledge Base") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "knowledgeBase")
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Notes") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "notes")
+                }
+                .keyboardShortcut("3", modifiers: .command)
+
+                Button("Timeline") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "graph")
+                }
+                .keyboardShortcut("4", modifiers: .command)
+
+                Button("Projects") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "projects")
+                }
+                .keyboardShortcut("5", modifiers: .command)
+
+                Button("Connectors") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "connectors")
+                }
+                .keyboardShortcut("6", modifiers: .command)
+
+                Divider()
+
+                Button("Search") {
+                    NotificationCenter.default.post(name: .navigateToSection, object: "search")
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(supervisor)
+        }
+
+        // Menubar status — always visible. Drives a small status dot
+        // (green/orange/red) reflecting sidecar + LM Studio reachability,
+        // with a click-to-reveal panel showing recent events and quick actions.
+        MenuBarExtra {
+            MenubarPanelView()
+                .environment(eventStream)
+        } label: {
+            MenubarStatusIcon()
+                .environment(eventStream)
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let showNewNoteSheet = Notification.Name("showNewNoteSheet")
+    static let navigateToSection = Notification.Name("navigateToSection")
+    static let showCommandPalette = Notification.Name("showCommandPalette")
+}

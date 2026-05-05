@@ -1,0 +1,77 @@
+name: Hygur
+options:
+  bundleIdPrefix: com.hygur
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "26.0"
+
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+targets:
+  Hygur:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - path: Resources/Assets.xcassets
+        buildPhase: resources
+      - path: Resources/hygur-sidecar
+        buildPhase: resources
+        optional: true
+    preBuildScripts:
+      - name: Build Sidecar
+        script: |
+          # Ensure Go is on PATH (homebrew locations for both arm64 and Intel).
+          export PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin"
+          cd "$SRCROOT/../sidecar"
+          make build-for-bundle
+        outputFiles:
+          - $(SRCROOT)/Resources/hygur-sidecar
+        basedOnDependencyAnalysis: false
+    dependencies:
+      - package: MarkdownUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hygur.app
+        INFOPLIST_FILE: Sources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/Hygur.entitlements
+        PRODUCT_NAME: Hygur
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+      configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: NO
+          CODE_SIGNING_REQUIRED: NO
+          CODE_SIGNING_ALLOWED: NO
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleName: Hygur
+        CFBundleDisplayName: Hygur
+        CFBundleIdentifier: com.hygur.app
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "0.1.0"
+        CFBundlePackageType: APPL
+        CFBundleExecutable: Hygur
+        LSMinimumSystemVersion: "26.0"
+        LSApplicationCategoryType: "public.app-category.productivity"
+        NSMainStoryboardFile: ""
+    entitlements:
+      path: Sources/Hygur.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.client: true
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.hygur.app
