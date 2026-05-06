@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import UniformTypeIdentifiers
 
 struct ChatView: View {
@@ -235,7 +236,7 @@ struct ChatView: View {
 
             HStack(spacing: HygurSpacing.md) {
                 Button {
-                    presentImagePicker()
+                    presentAttachmentPicker()
                 } label: {
                     Image(systemName: "paperclip")
                         .font(.title3)
@@ -243,7 +244,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.isStreaming)
-                .help("Attach an image")
+                .help("Attach an image or audio file")
 
                 micButton
 
@@ -280,12 +281,12 @@ struct ChatView: View {
             }
         }
         .padding(HygurSpacing.lg)
-        .onDrop(of: [.image], isTargeted: nil) { providers in
-            ingestImageProviders(providers)
+        .onDrop(of: [.image, .audio, .fileURL], isTargeted: nil) { providers in
+            ingestProviders(providers)
             return true
         }
         .onPasteCommand(of: [UTType.image.identifier]) { providers in
-            ingestImageProviders(providers)
+            ingestProviders(providers)
         }
     }
 
@@ -396,45 +397,88 @@ struct ChatView: View {
             )
     }
 
-    /// Open NSOpenPanel filtered to common image types and queue the chosen
-    /// file as a pending attachment. Errors from disk read are surfaced via
-    /// the chat error banner so the user is never silently stuck.
-    private func presentImagePicker() {
+    /// Open NSOpenPanel filtered to images and audio, then queue each file
+    /// as the appropriate Attachment kind. Errors from disk read are
+    /// surfaced via the chat error banner so the user is never silently
+    /// stuck.
+    private func presentAttachmentPicker() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .audio]
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
-            do {
-                let data = try Data(contentsOf: url)
-                let mime = mimeType(for: url, fallback: "image/png")
-                viewModel.addImage(data: data, mimeType: mime)
-            } catch {
-                viewModel.error = "Could not read \(url.lastPathComponent): \(error.localizedDescription)"
-            }
+            ingestFileURL(url)
         }
     }
 
-    /// Drain a list of NSItemProviders (from drop or paste) and turn each
-    /// image into a queued PNG attachment. Non-PNG sources are re-encoded
-    /// via NSBitmapImageRep so the wire format is predictable.
-    private func ingestImageProviders(_ providers: [NSItemProvider]) {
+    /// Drain NSItemProviders from drop/paste. Image providers re-encode to
+    /// PNG via NSBitmapImageRep for predictable wire format; audio (and
+    /// generic file URLs) are routed through `ingestFileURL` which reads
+    /// raw bytes off disk.
+    private func ingestProviders(_ providers: [NSItemProvider]) {
         for provider in providers {
-            guard provider.canLoadObject(ofClass: NSImage.self) else { continue }
-            provider.loadObject(ofClass: NSImage.self) { object, _ in
-                guard let nsImage = object as? NSImage,
-                      let png = pngData(from: nsImage) else { return }
+            // Try in-memory image first (catches pasted screenshots that
+            // never had a file URL).
+            if provider.canLoadObject(ofClass: NSImage.self),
+               !provider.hasItemConformingToTypeIdentifier(UTType.audio.identifier),
+               !provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadObject(ofClass: NSImage.self) { object, _ in
+                    guard let nsImage = object as? NSImage,
+                          let png = pngData(from: nsImage) else { return }
+                    Task { @MainActor in
+                        viewModel.addImage(data: png, mimeType: "image/png")
+                    }
+                }
+                continue
+            }
+            // Fall back to file URL — works for both image and audio drops.
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                let url: URL?
+                if let direct = item as? URL { url = direct }
+                else if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) }
+                else { url = nil }
+                guard let url else { return }
                 Task { @MainActor in
-                    viewModel.addImage(data: png, mimeType: "image/png")
+                    ingestFileURL(url)
                 }
             }
         }
     }
 
-    private func mimeType(for url: URL, fallback: String) -> String {
-        guard let type = UTType(filenameExtension: url.pathExtension) else { return fallback }
+    /// Resolve a file URL to either an image or audio attachment based on
+    /// its declared UTType. Unknown types are reported as an error. Audio
+    /// duration is loaded asynchronously and folded into the attachment
+    /// once known — the file is queued immediately so the UI stays
+    /// responsive, then updated when duration resolves.
+    private func ingestFileURL(_ url: URL) {
+        guard let type = UTType(filenameExtension: url.pathExtension) else {
+            viewModel.error = "Unsupported file type: \(url.lastPathComponent)"
+            return
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            if type.conforms(to: .image) {
+                viewModel.addImage(data: data, mimeType: imageMime(for: type))
+            } else if type.conforms(to: .audio) {
+                let format = audioFormat(for: type, fileExtension: url.pathExtension)
+                viewModel.addAudio(data: data, format: format, duration: nil)
+                let queuedIndex = viewModel.pendingAttachments.count - 1
+                Task {
+                    if let duration = await audioDuration(for: url) {
+                        viewModel.updatePendingAttachmentDuration(at: queuedIndex, to: duration)
+                    }
+                }
+            } else {
+                viewModel.error = "\(url.lastPathComponent) isn't an image or audio file."
+            }
+        } catch {
+            viewModel.error = "Could not read \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    private func imageMime(for type: UTType) -> String {
         switch type {
         case .png: return "image/png"
         case .jpeg: return "image/jpeg"
@@ -442,8 +486,29 @@ struct ChatView: View {
         case .webP: return "image/webp"
         case .heic: return "image/heic"
         case .tiff: return "image/tiff"
-        default: return type.preferredMIMEType ?? fallback
+        default: return type.preferredMIMEType ?? "image/png"
         }
+    }
+
+    /// Map an audio UTType to the short tag the OpenAI multimodal spec
+    /// expects ("wav", "mp3", "m4a", …). Falls back to the file extension
+    /// when the UTType match is too generic.
+    private func audioFormat(for type: UTType, fileExtension: String) -> String {
+        if type == .wav { return "wav" }
+        if type == .mp3 { return "mp3" }
+        if type == .mpeg4Audio { return "m4a" }
+        if type == .aiff { return "aiff" }
+        let ext = fileExtension.lowercased()
+        if !ext.isEmpty { return ext }
+        return "wav"
+    }
+
+    private func audioDuration(for url: URL) async -> TimeInterval? {
+        let asset = AVURLAsset(url: url)
+        guard let cm = try? await asset.load(.duration),
+              cm.isValid, !cm.isIndefinite, cm.timescale != 0 else { return nil }
+        let seconds = CMTimeGetSeconds(cm)
+        return seconds.isFinite && seconds > 0 ? seconds : nil
     }
 
     // MARK: - Helpers

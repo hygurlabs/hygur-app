@@ -143,11 +143,29 @@ final class ChatViewModel {
         pendingAttachments.append(.image(data: data, mimeType: mimeType))
     }
 
+    /// Queue an audio clip to be sent with the next outgoing message. The
+    /// `format` is the OpenAI-spec short tag ("wav", "mp3"…) the runtime
+    /// expects, not a MIME type. `duration` is metadata for the UI only.
+    func addAudio(data: Data, format: String, duration: TimeInterval?) {
+        pendingAttachments.append(.audio(data: data, format: format, duration: duration))
+    }
+
     /// Drop a queued attachment by index, ignoring out-of-range requests so
     /// the UI doesn't have to guard against stale indices after rapid edits.
     func removePendingAttachment(at index: Int) {
         guard pendingAttachments.indices.contains(index) else { return }
         pendingAttachments.remove(at: index)
+    }
+
+    /// Backfill the duration on a queued audio attachment once it has been
+    /// loaded asynchronously. Silently no-ops if the index is out of range
+    /// or no longer points to an audio attachment (the user may have
+    /// removed it before the duration resolved).
+    func updatePendingAttachmentDuration(at index: Int, to duration: TimeInterval) {
+        guard pendingAttachments.indices.contains(index) else { return }
+        if case let .audio(data, format, _) = pendingAttachments[index] {
+            pendingAttachments[index] = .audio(data: data, format: format, duration: duration)
+        }
     }
 
     // MARK: - Message Actions
