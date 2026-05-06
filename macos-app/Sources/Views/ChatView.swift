@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
@@ -191,39 +192,181 @@ struct ChatView: View {
     // MARK: - Input Area
 
     private var inputArea: some View {
-        HStack(spacing: HygurSpacing.md) {
-            TextField("Message...", text: $viewModel.inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .padding(HygurSpacing.md)
-                .background(HygurColors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: HygurRadius.md))
-                .focused($isInputFocused)
-                .onSubmit {
-                    Task { await viewModel.send() }
-                }
-                .disabled(viewModel.isStreaming)
+        VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+            if !viewModel.pendingAttachments.isEmpty {
+                pendingAttachmentsStrip
+            }
 
-            if viewModel.isStreaming {
-                LoadingIndicator(style: viewModel.isThinking ? .thinking : .streaming)
-                    .id(viewModel.isThinking)
-                Button("Stop") {
-                    viewModel.cancel()
-                }
-                .buttonStyle(.bordered)
-            } else {
+            HStack(spacing: HygurSpacing.md) {
                 Button {
-                    Task { await viewModel.send() }
+                    presentImagePicker()
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(HygurColors.accent)
+                    Image(systemName: "paperclip")
+                        .font(.title3)
+                        .foregroundStyle(HygurColors.textSecondary)
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(viewModel.isStreaming)
+                .help("Attach an image")
+
+                TextField("Message...", text: $viewModel.inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .padding(HygurSpacing.md)
+                    .background(HygurColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: HygurRadius.md))
+                    .focused($isInputFocused)
+                    .onSubmit {
+                        Task { await viewModel.send() }
+                    }
+                    .disabled(viewModel.isStreaming)
+
+                if viewModel.isStreaming {
+                    LoadingIndicator(style: viewModel.isThinking ? .thinking : .streaming)
+                        .id(viewModel.isThinking)
+                    Button("Stop") {
+                        viewModel.cancel()
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        Task { await viewModel.send() }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(HygurColors.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(canSend == false)
+                }
             }
         }
         .padding(HygurSpacing.lg)
+        .onDrop(of: [.image], isTargeted: nil) { providers in
+            ingestImageProviders(providers)
+            return true
+        }
+        .onPasteCommand(of: [UTType.image.identifier]) { providers in
+            ingestImageProviders(providers)
+        }
+    }
+
+    /// Send is enabled when either typed text or a queued attachment is
+    /// present; an image-only message is a valid turn (the model can still
+    /// reason from "what is this?" with empty text).
+    private var canSend: Bool {
+        !viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty
+            || !viewModel.pendingAttachments.isEmpty
+    }
+
+    /// Horizontal strip of thumbnails for queued attachments. Each thumb has a
+    /// remove "×" overlay so the user can drop a wrong image without resending.
+    private var pendingAttachmentsStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: HygurSpacing.sm) {
+                ForEach(Array(viewModel.pendingAttachments.enumerated()), id: \.offset) { index, attachment in
+                    pendingAttachmentThumb(attachment, index: index)
+                }
+            }
+            .padding(.horizontal, HygurSpacing.xs)
+        }
+    }
+
+    @ViewBuilder
+    private func pendingAttachmentThumb(_ attachment: Attachment, index: Int) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                switch attachment {
+                case .image(let data, _):
+                    if let nsImage = NSImage(data: data) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: HygurRadius.sm))
+                    } else {
+                        pendingPlaceholder(icon: "photo")
+                    }
+                case .audio:
+                    pendingPlaceholder(icon: "waveform")
+                case .document:
+                    pendingPlaceholder(icon: "doc.text")
+                }
+            }
+
+            Button {
+                viewModel.removePendingAttachment(at: index)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .background(Circle().fill(Color.black.opacity(0.6)))
+            }
+            .buttonStyle(.plain)
+            .padding(2)
+            .help("Remove")
+        }
+    }
+
+    private func pendingPlaceholder(icon: String) -> some View {
+        RoundedRectangle(cornerRadius: HygurRadius.sm)
+            .fill(HygurColors.surface)
+            .frame(width: 64, height: 64)
+            .overlay(
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(HygurColors.textSecondary)
+            )
+    }
+
+    /// Open NSOpenPanel filtered to common image types and queue the chosen
+    /// file as a pending attachment. Errors from disk read are surfaced via
+    /// the chat error banner so the user is never silently stuck.
+    private func presentImagePicker() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            do {
+                let data = try Data(contentsOf: url)
+                let mime = mimeType(for: url, fallback: "image/png")
+                viewModel.addImage(data: data, mimeType: mime)
+            } catch {
+                viewModel.error = "Could not read \(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Drain a list of NSItemProviders (from drop or paste) and turn each
+    /// image into a queued PNG attachment. Non-PNG sources are re-encoded
+    /// via NSBitmapImageRep so the wire format is predictable.
+    private func ingestImageProviders(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            guard provider.canLoadObject(ofClass: NSImage.self) else { continue }
+            provider.loadObject(ofClass: NSImage.self) { object, _ in
+                guard let nsImage = object as? NSImage,
+                      let png = pngData(from: nsImage) else { return }
+                Task { @MainActor in
+                    viewModel.addImage(data: png, mimeType: "image/png")
+                }
+            }
+        }
+    }
+
+    private func mimeType(for url: URL, fallback: String) -> String {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return fallback }
+        switch type {
+        case .png: return "image/png"
+        case .jpeg: return "image/jpeg"
+        case .gif: return "image/gif"
+        case .webP: return "image/webp"
+        case .heic: return "image/heic"
+        case .tiff: return "image/tiff"
+        default: return type.preferredMIMEType ?? fallback
+        }
     }
 
     // MARK: - Helpers
@@ -502,6 +645,15 @@ struct MessageBubble: View {
             return HygurColors.textSecondary.opacity(0.15)
         }
     }
+}
+
+/// Re-encode an NSImage as PNG for transport. Returns nil when the image
+/// has no bitmap representation we can write — caller should treat that as
+/// "skip this drop", not as an error worth surfacing.
+private func pngData(from image: NSImage) -> Data? {
+    guard let tiff = image.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff) else { return nil }
+    return rep.representation(using: .png, properties: [:])
 }
 
 #Preview {

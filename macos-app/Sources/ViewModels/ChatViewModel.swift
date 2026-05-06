@@ -12,6 +12,11 @@ final class ChatViewModel {
     var error: String?
     var streamStartTime: Date? = nil
 
+    /// Attachments queued for the next outgoing message. Populated by the
+    /// paperclip picker, drag-drop, and clipboard paste, then drained when
+    /// `send()` flushes them onto the user's `Message`.
+    var pendingAttachments: [Attachment] = []
+
     /// Current RAG context for the active message (set before streaming)
     var currentRAGContext: RAGContext?
 
@@ -55,6 +60,7 @@ final class ChatViewModel {
 
         // Reset state
         self.inputText = ""
+        self.pendingAttachments = []
         self.error = nil
         self.currentRAGContext = nil
         self.highlightedSourceIndex = nil
@@ -71,6 +77,7 @@ final class ChatViewModel {
         self.sessionId = nil
         self.messages = []
         self.inputText = ""
+        self.pendingAttachments = []
         self.error = nil
         self.currentRAGContext = nil
         self.isContextPanelVisible = false
@@ -125,6 +132,22 @@ final class ChatViewModel {
         }
 
         focusLabel = nil
+    }
+
+    // MARK: - Attachments
+
+    /// Queue an image to be sent with the next outgoing message. The data
+    /// is taken as-is — callers are responsible for transcoding if the
+    /// source format isn't already one the runtime accepts (PNG/JPEG today).
+    func addImage(data: Data, mimeType: String) {
+        pendingAttachments.append(.image(data: data, mimeType: mimeType))
+    }
+
+    /// Drop a queued attachment by index, ignoring out-of-range requests so
+    /// the UI doesn't have to guard against stale indices after rapid edits.
+    func removePendingAttachment(at index: Int) {
+        guard pendingAttachments.indices.contains(index) else { return }
+        pendingAttachments.remove(at: index)
     }
 
     // MARK: - Message Actions
@@ -284,7 +307,8 @@ final class ChatViewModel {
     }
 
     func send() async {
-        guard !inputText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        let trimmed = inputText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
 
         // Cancel any ongoing stream
         streamTask?.cancel()
@@ -293,7 +317,12 @@ final class ChatViewModel {
             isStreaming = false
         }
 
-        let userMessage = Message(role: .user, content: inputText)
+        let attachmentsToSend = pendingAttachments
+        let userMessage = Message(
+            role: .user,
+            content: inputText,
+            attachments: attachmentsToSend.isEmpty ? nil : attachmentsToSend
+        )
         messages.append(userMessage)
 
         // Sync to session
@@ -302,6 +331,7 @@ final class ChatViewModel {
         }
 
         inputText = ""
+        pendingAttachments = []
         isStreaming = true
         isThinking = true
         streamStartTime = Date()
@@ -469,6 +499,7 @@ final class ChatViewModel {
 
     func clearMessages() {
         messages.removeAll()
+        pendingAttachments = []
         error = nil
     }
 }
