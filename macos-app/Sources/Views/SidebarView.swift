@@ -350,6 +350,13 @@ struct ChatSessionRow: View {
             }
             .disabled(!session.hasMessages)
 
+            Button {
+                exportSessionAsPDF()
+            } label: {
+                Label("Export to PDF…", systemImage: "doc.richtext")
+            }
+            .disabled(!session.hasMessages)
+
             Divider()
 
             Button(role: .destructive) {
@@ -402,6 +409,16 @@ struct ChatSessionRow: View {
         do {
             try MarkdownExportService.exportChatSession(session)
         } catch MarkdownExportService.ExportError.userCancelled {
+            // Silent — the user dismissed the save panel intentionally.
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+
+    private func exportSessionAsPDF() {
+        do {
+            try PDFExportService.exportChatSession(session)
+        } catch PDFExportService.ExportError.userCancelled {
             // Silent — the user dismissed the save panel intentionally.
         } catch {
             exportError = error.localizedDescription

@@ -184,6 +184,12 @@ struct NoteRow: View {
             Label("Export to Markdown…", systemImage: "square.and.arrow.up")
         }
 
+        Button {
+            exportNoteAsPDF()
+        } label: {
+            Label("Export to PDF…", systemImage: "doc.richtext")
+        }
+
         Divider()
 
         Button(role: .destructive) {
@@ -197,6 +203,16 @@ struct NoteRow: View {
         do {
             try MarkdownExportService.exportNote(note)
         } catch MarkdownExportService.ExportError.userCancelled {
+            // Silent — the user dismissed the save panel intentionally.
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+
+    private func exportNoteAsPDF() {
+        do {
+            try PDFExportService.exportNote(note)
+        } catch PDFExportService.ExportError.userCancelled {
             // Silent — the user dismissed the save panel intentionally.
         } catch {
             exportError = error.localizedDescription
