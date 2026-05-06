@@ -7,6 +7,8 @@ struct MessageActionsView: View {
     let isLastAssistantMessage: Bool
     let onCopy: () -> Void
     let onRegenerate: (() -> Void)?
+    var isSpeaking: Bool = false
+    var onSpeak: (() -> Void)? = nil
 
     @State private var showCopiedFeedback: Bool = false
 
@@ -19,6 +21,15 @@ struct MessageActionsView: View {
                 action: copyToClipboard,
                 foregroundColor: showCopiedFeedback ? HygurColors.success : HygurColors.textSecondary
             )
+
+            // Speak button (assistant messages only)
+            if message.role == .assistant, let onSpeak {
+                IconButton(
+                    systemImage: isSpeaking ? "stop.circle" : "speaker.wave.2",
+                    label: isSpeaking ? "Stop reading" : "Read aloud",
+                    action: onSpeak
+                )
+            }
 
             // Regenerate button (only for assistant messages)
             if message.role == .assistant, isLastAssistantMessage, let onRegenerate {

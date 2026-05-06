@@ -13,6 +13,15 @@ struct ChatView: View {
     /// live transcript appends rather than wiping anything the user already
     /// typed. Reset on stop.
     @State private var voiceBaseline: String = ""
+    @State private var speechService = SpeechService()
+    @AppStorage("voice.autoSpeak") private var autoSpeakResponses: Bool = false
+    /// How many characters of the streaming assistant message we've already
+    /// fed to the synthesizer, keyed by message id. Lets `feed(_:)` receive
+    /// only the new tail on each content update.
+    @State private var spokenLengths: [UUID: Int] = [:]
+    /// Message currently being read aloud by a manual click. Cleared when
+    /// the synthesizer goes idle or the user clicks again to stop.
+    @State private var manuallySpokenMessageId: UUID?
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -45,6 +54,15 @@ struct ChatView: View {
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .help("Copy last response (Cmd+Shift+C)")
                 .disabled(viewModel.messages.last(where: { $0.role == .assistant }) == nil)
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    autoSpeakResponses.toggle()
+                    if !autoSpeakResponses { speechService.stop() }
+                } label: {
+                    Image(systemName: autoSpeakResponses ? "speaker.wave.2.fill" : "speaker.slash")
+                }
+                .help(autoSpeakResponses ? "Auto-read replies (on)" : "Auto-read replies (off)")
             }
             ToolbarItem(placement: .automatic) {
                 if hasAnyRAGContext {
@@ -92,7 +110,11 @@ struct ChatView: View {
                                 },
                                 onRegenerate: {
                                     Task { await viewModel.regenerateLastResponse() }
-                                }
+                                },
+                                isSpeaking: manuallySpokenMessageId == message.id,
+                                onSpeak: message.role == .assistant ? {
+                                    toggleSpeak(message)
+                                } : nil
                             )
                             .id(message.id)
                         }
@@ -109,6 +131,15 @@ struct ChatView: View {
             }
             .onChange(of: viewModel.messages.last?.content) { _, _ in
                 scrolledID = viewModel.messages.last?.id
+                feedAutoSpeakIfNeeded()
+            }
+            .onChange(of: viewModel.isStreaming) { wasStreaming, nowStreaming in
+                if wasStreaming && !nowStreaming && autoSpeakResponses {
+                    speechService.finish()
+                }
+            }
+            .onChange(of: speechService.isSpeaking) { _, nowSpeaking in
+                if !nowSpeaking { manuallySpokenMessageId = nil }
             }
 
             Divider()
@@ -432,6 +463,51 @@ struct ChatView: View {
         viewModel.currentRAGContext != nil ||
         viewModel.messages.contains(where: { $0.hasRAGContext })
     }
+
+    // MARK: - TTS
+
+    /// Toggle reading a finished assistant message aloud. A second click on
+    /// the same message stops playback; clicking a different message
+    /// interrupts the current one and starts the new one.
+    private func toggleSpeak(_ message: Message) {
+        if manuallySpokenMessageId == message.id {
+            speechService.stop()
+            manuallySpokenMessageId = nil
+        } else {
+            speechService.speak(stripMarkdown(message.content))
+            manuallySpokenMessageId = message.id
+        }
+    }
+
+    /// During streaming, send only the new tail of the active assistant
+    /// message to the synthesizer so playback starts mid-answer. Markdown
+    /// stripping happens lazily on each delta — fine for typical answers
+    /// because the deltas are small.
+    private func feedAutoSpeakIfNeeded() {
+        guard autoSpeakResponses,
+              viewModel.isStreaming,
+              let last = viewModel.messages.last,
+              last.role == .assistant else { return }
+        let consumed = spokenLengths[last.id] ?? 0
+        let total = last.content.count
+        guard total > consumed else { return }
+        let startIdx = last.content.index(last.content.startIndex, offsetBy: consumed)
+        let delta = String(last.content[startIdx...])
+        speechService.feed(stripMarkdown(delta))
+        spokenLengths[last.id] = total
+    }
+
+    /// Lightly strip markdown so the synthesizer doesn't pronounce
+    /// asterisks, backticks, or pipe-table noise. Cheap regex-style replace
+    /// — full markdown parsing would be overkill for TTS.
+    private func stripMarkdown(_ text: String) -> String {
+        var s = text
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "__", with: "")
+        s = s.replacingOccurrences(of: "`", with: "")
+        s = s.replacingOccurrences(of: "#", with: "")
+        return s
+    }
 }
 
 struct MessageBubble: View {
@@ -443,6 +519,8 @@ struct MessageBubble: View {
     var onCitationTap: ((Int) -> Void)?
     var onCopy: (() -> Void)?
     var onRegenerate: (() -> Void)?
+    var isSpeaking: Bool = false
+    var onSpeak: (() -> Void)? = nil
 
     @State private var isHovered: Bool = false
 
@@ -467,7 +545,9 @@ struct MessageBubble: View {
                             message: message,
                             isLastAssistantMessage: isLastAssistantMessage,
                             onCopy: { onCopy?() },
-                            onRegenerate: onRegenerate
+                            onRegenerate: onRegenerate,
+                            isSpeaking: isSpeaking,
+                            onSpeak: onSpeak
                         )
                         .offset(x: message.role == .user ? -8 : 8, y: -28)
                         .transition(AnyTransition.opacity.combined(with: AnyTransition.scale(scale: 0.9)))
