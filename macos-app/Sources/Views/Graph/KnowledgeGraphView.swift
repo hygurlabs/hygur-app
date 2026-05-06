@@ -700,25 +700,22 @@ final class KnowledgeGraphViewModel {
             // This gets nodes to a rough stable layout before showing any animation,
             // eliminating the initial flickering phase.
             let (preConverged, initialSnaps) = await sim.batchTick(count: 150)
-            await MainActor.run {
-                guard let self else { return }
-                self.positions = initialSnaps
-                if preConverged { self.isSimulating = false }
-            }
+            await self?.applySimulationSnapshots(initialSnaps, converged: preConverged)
             guard !preConverged && !Task.isCancelled else { return }
 
             // Animate remaining convergence at ~60fps
             while !Task.isCancelled {
                 let (done, snaps) = await sim.tickAndSnapshot()
-                await MainActor.run {
-                    guard let self else { return }
-                    self.positions = snaps
-                    if done { self.isSimulating = false }
-                }
+                await self?.applySimulationSnapshots(snaps, converged: done)
                 if done { break }
                 try? await Task.sleep(nanoseconds: 16_000_000)
             }
         }
+    }
+
+    private func applySimulationSnapshots(_ snaps: [String: CGPoint], converged: Bool) {
+        positions = snaps
+        if converged { isSimulating = false }
     }
 
     func stopSimulation() {
