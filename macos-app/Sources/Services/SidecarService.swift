@@ -331,6 +331,13 @@ actor SidecarService {
                                         let context = RAGContext(sources: sources, intent: event.intent)
                                         continuation.yield(.ragContext(context))
                                     }
+                                    // Check for tool-call event — parse extra fields directly
+                                    // since arguments/result are heterogeneous JSON.
+                                    else if event.type == "tool_call" {
+                                        if let toolCall = decodeToolCallSSE(data) {
+                                            continuation.yield(.toolCall(toolCall))
+                                        }
+                                    }
                                     // Check for done
                                     else if event.done == true {
                                         continuation.yield(.done(event.usage))
@@ -1760,8 +1767,49 @@ struct RAGStreamEvent: Codable, Sendable {
 enum ChatStreamEvent: Sendable {
     case ragContext(RAGContext)
     case delta(String)
+    case toolCall(ToolCall)
     case done(StreamUsage?)
     case error(String)
+}
+
+/// Decode a `tool_call` SSE payload into the domain model. The sidecar
+/// emits arguments and result as raw JSON values; we re-serialise them to
+/// compact JSON strings so the UI can persist them through Codable without
+/// a heterogeneous-JSON decoder. Returns nil when the payload is missing
+/// the required identifying fields — the stream handler skips it then.
+func decodeToolCallSSE(_ data: Data) -> ToolCall? {
+    guard
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let id = object["id"] as? String,
+        let name = object["name"] as? String
+    else {
+        return nil
+    }
+    let arguments = serializeJSONValue(object["arguments"]) ?? "{}"
+    let result = serializeJSONValue(object["result"])
+    let errorMessage = object["error"] as? String
+    return ToolCall(id: id, name: name, arguments: arguments, result: result, errorMessage: errorMessage)
+}
+
+private func serializeJSONValue(_ value: Any?) -> String? {
+    guard let value, !(value is NSNull) else { return nil }
+    if let str = value as? String { return str }
+    if JSONSerialization.isValidJSONObject(value) {
+        if let bytes = try? JSONSerialization.data(withJSONObject: value, options: []),
+           let s = String(data: bytes, encoding: .utf8) {
+            return s
+        }
+        return nil
+    }
+    // Wrap scalar numbers/bools so JSONSerialization will encode them.
+    let wrapped = ["v": value]
+    if let bytes = try? JSONSerialization.data(withJSONObject: wrapped, options: []),
+       let s = String(data: bytes, encoding: .utf8),
+       let start = s.range(of: ":")?.upperBound,
+       let end = s.range(of: "}", options: .backwards)?.lowerBound {
+        return String(s[start..<end])
+    }
+    return nil
 }
 
 // MARK: - Errors

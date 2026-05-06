@@ -68,7 +68,7 @@ struct ChatSession: Identifiable, Codable, Equatable {
 
 extension Message: Codable {
     enum CodingKeys: String, CodingKey {
-        case id, role, content, timestamp, ragContext
+        case id, role, content, timestamp, ragContext, toolCalls
     }
 
     init(from decoder: Decoder) throws {
@@ -78,6 +78,7 @@ extension Message: Codable {
         content = try container.decode(String.self, forKey: .content)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         ragContext = try container.decodeIfPresent(RAGContext.self, forKey: .ragContext)
+        toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -87,6 +88,7 @@ extension Message: Codable {
         try container.encode(content, forKey: .content)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(ragContext, forKey: .ragContext)
+        try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
     }
 }
 

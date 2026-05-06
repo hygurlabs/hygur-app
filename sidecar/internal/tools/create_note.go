@@ -171,35 +171,17 @@ func (t *CreateNoteTool) Run(ctx context.Context, req CreateNoteRequest) (*Creat
 }
 
 // ToolDefinition returns the tool definition for LLM function calling.
+//
+// Deprecated: prefer registering CreateNoteTool with a *Registry and reading
+// the OpenAI payload through Registry.OpenAIDefinitions(); this method is
+// kept for callers that still consume the legacy shape directly.
 func (t *CreateNoteTool) ToolDefinition() map[string]any {
 	return map[string]any{
 		"type": "function",
 		"function": map[string]any{
-			"name":        "create_note",
-			"description": "Create a note to save important information from the conversation",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"title": map[string]any{
-						"type":        "string",
-						"description": "Title of the note",
-					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "Content of the note",
-					},
-					"project_id": map[string]any{
-						"type":        "string",
-						"description": "Optional project ID to link the note to",
-					},
-					"tags": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"description": "Optional tags for categorization",
-					},
-				},
-				"required": []string{"title", "content"},
-			},
+			"name":        t.Name(),
+			"description": t.Description(),
+			"parameters":  t.ParameterSchema(),
 		},
 	}
 }
@@ -211,4 +193,60 @@ func (t *CreateNoteTool) ParseRequest(jsonStr string) (*CreateNoteRequest, error
 		return nil, fmt.Errorf("failed to parse request: %w", err)
 	}
 	return &req, nil
+}
+
+// MARK: - Tool interface conformance
+
+// Name implements Tool.
+func (t *CreateNoteTool) Name() string { return "create_note" }
+
+// Description implements Tool.
+func (t *CreateNoteTool) Description() string {
+	return "Create a note to save important information from the conversation"
+}
+
+// ParameterSchema implements Tool.
+func (t *CreateNoteTool) ParameterSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title": map[string]any{
+				"type":        "string",
+				"description": "Title of the note",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Content of the note",
+			},
+			"project_id": map[string]any{
+				"type":        "string",
+				"description": "Optional project ID to link the note to",
+			},
+			"tags": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Optional tags for categorization",
+			},
+		},
+		"required": []string{"title", "content"},
+	}
+}
+
+// Execute implements Tool. The args payload is the raw arguments object the
+// LLM emitted; we delegate to Run() and re-marshal the response so the chat
+// path can plug it back into a `role:"tool"` message verbatim.
+func (t *CreateNoteTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+	var req CreateNoteRequest
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("create_note: invalid arguments: %w", err)
+	}
+	resp, err := t.Run(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("create_note: marshal response: %w", err)
+	}
+	return out, nil
 }

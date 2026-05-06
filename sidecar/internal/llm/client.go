@@ -65,6 +65,53 @@ type Message struct {
 	// (`content` empty + `reasoning` long => budget exhausted) and surface a
 	// useful error rather than persisting an empty body.
 	Reasoning string `json:"reasoning,omitempty"`
+	// ToolCalls is populated on assistant messages when the model decides to
+	// invoke one or more tools. Per the OpenAI spec this is the canonical way
+	// to round-trip tool execution: assistant emits tool_calls, the caller
+	// runs each call, then echoes back one role="tool" message per call with
+	// the matching tool_call_id.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID is set on role="tool" messages and must match the id of the
+	// corresponding entry in the assistant's preceding ToolCalls list. The
+	// LLM uses this to associate the tool result with its earlier request.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	// Name is optional metadata; some providers expect it on tool messages
+	// to mirror the function name. Kept for forward compatibility.
+	Name string `json:"name,omitempty"`
+}
+
+// ToolCall represents a single tool invocation emitted by the model. OpenAI
+// only defines `function` as a Type today but the field is wire-mandatory.
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"` // always "function" today
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction is the function-call payload inside a ToolCall. Arguments
+// is a JSON-encoded string (per OpenAI spec) — callers unmarshal it
+// themselves before dispatching to a tool.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolCallDelta is the streaming counterpart of ToolCall: a single chunk may
+// carry only the id+name on its first appearance and a fragment of arguments
+// on subsequent ones. Index correlates fragments across chunks when the model
+// emits multiple parallel tool calls.
+type ToolCallDelta struct {
+	Index    int                    `json:"index"`
+	ID       string                 `json:"id,omitempty"`
+	Type     string                 `json:"type,omitempty"`
+	Function *ToolCallFunctionDelta `json:"function,omitempty"`
+}
+
+// ToolCallFunctionDelta carries partial function-call data inside a streaming
+// tool_calls fragment. Arguments is concatenated across chunks.
+type ToolCallFunctionDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // ChatRequest represents a request to the chat completions endpoint.
@@ -74,6 +121,15 @@ type ChatRequest struct {
 	Stream      bool      `json:"stream"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	// Tools is the list of tools the LLM may call, shaped as the OpenAI
+	// `tools[]` array (`{type: "function", function: {name, description,
+	// parameters}}`). Pass nil to disable tool calling — the field is
+	// `omitempty` because some servers reject empty arrays.
+	Tools []map[string]any `json:"tools,omitempty"`
+	// ToolChoice controls invocation behavior: "none", "auto" (default),
+	// "required", or `{type:"function", function:{name:"..."}}` to force a
+	// specific tool. `any` keeps both string and object forms valid.
+	ToolChoice any `json:"tool_choice,omitempty"`
 }
 
 // ChatResponse represents a response from the chat completions endpoint.
@@ -96,8 +152,9 @@ type Choice struct {
 
 // Delta represents incremental content in a streaming response.
 type Delta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string          `json:"role,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	ToolCalls []ToolCallDelta `json:"tool_calls,omitempty"`
 }
 
 // Usage represents token usage statistics.
@@ -188,6 +245,25 @@ type StreamHandler func(delta string, done bool, usage *Usage) error
 
 // StreamChat sends a streaming chat request and calls the handler for each chunk.
 func (c *Client) StreamChat(ctx context.Context, req ChatRequest, handler StreamHandler) error {
+	return c.streamWith(ctx, req, func(body io.Reader) error {
+		return processSSEStream(body, handler)
+	})
+}
+
+// StreamChatRich is the tool-aware variant of StreamChat. The handler
+// receives StreamEvent payloads exposing tool_calls and finish_reason in
+// addition to text deltas. The plain StreamChat method is preserved for
+// callers that don't need tool-call observability.
+func (c *Client) StreamChatRich(ctx context.Context, req ChatRequest, handler StreamRichHandler) error {
+	return c.streamWith(ctx, req, func(body io.Reader) error {
+		return processSSEStreamRich(body, handler)
+	})
+}
+
+// streamWith handles the common request lifecycle (marshal, send, retry,
+// dispatch to a stream parser). The supplied parser owns reading the response
+// body; this function closes it after the parser returns.
+func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.Reader) error) error {
 	req.Stream = true
 
 	body, err := json.Marshal(req)
@@ -195,32 +271,34 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, handler Stream
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+	newRequest := func() (*http.Request, error) {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		return httpReq, nil
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq, err := newRequest()
+	if err != nil {
+		return err
+	}
 
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: 100ms, 200ms, 400ms, ...
 			backoff := time.Duration(100<<(attempt-1)) * time.Millisecond
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(backoff):
 			}
-
-			// Recreate request body for retry
-			httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+			httpReq, err = newRequest()
 			if err != nil {
-				return fmt.Errorf("failed to create request: %w", err)
+				return err
 			}
-			httpReq.Header.Set("Content-Type", "application/json")
-			httpReq.Header.Set("Accept", "text/event-stream")
 		}
 
 		streamClient := c.streamHTTPClient
@@ -246,8 +324,7 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, handler Stream
 			return apiErr
 		}
 
-		// Process the stream
-		err = processSSEStream(resp.Body, handler)
+		err = parse(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			// Stream errors are not retried since we may have already sent partial data

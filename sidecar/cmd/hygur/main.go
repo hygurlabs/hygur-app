@@ -323,6 +323,28 @@ func main() {
 	// end of every turn.
 	ragChatHandler.SetMemoryTools(memoryStoreTool, memorySearchTool)
 
+	// Tool registry: the canonical surface through which the LLM invokes
+	// side-effecting actions (create note, …). Add new tools here as they
+	// graduate from internal handlers to LLM-callable operations.
+	// MustRegister panics on collision because registration is a startup
+	// invariant — a duplicate name is a developer bug, not a runtime
+	// condition we want to swallow.
+	toolRegistry := tools.NewRegistry()
+	toolRegistry.MustRegister(createNoteTool)
+
+	// search_knowledge_base lets the LLM trigger RAG on demand instead of
+	// running it inconditionally on every turn. This kills the classify +
+	// expand + judge LLM round-trips for command-style requests (create
+	// note, generate, etc.) where retrieval adds nothing.
+	searchKBTool := tools.NewSearchKnowledgeBaseTool(
+		unifiedSearcher,
+		ragConfig.TopK,
+		ragConfig.MinConfidence,
+		ragConfig.MaxContextTokens,
+	)
+	toolRegistry.MustRegister(searchKBTool)
+	ragChatHandler.SetToolRegistry(toolRegistry)
+
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)

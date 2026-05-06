@@ -408,6 +408,7 @@ func TestRAGChatHandler_WithOptionalParams(t *testing.T) {
 	}
 }
 
+
 func TestRAGConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -6,9 +6,17 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hygur/sidecar/internal/llm"
 )
+
+// rerankTimeout caps the LLM rerank call. Reasoning-capable backends (Nemotron,
+// Qwen-think) can stream hundreds of `reasoning_content` tokens before the
+// answer arrives — without a timeout the chat hangs indefinitely waiting on a
+// post-retrieval refinement that the user hasn't even seen UI for. Matches
+// judgeTimeout so the two LLM filters share the same worst-case budget.
+const rerankTimeout = 30 * time.Second
 
 // Rerank re-orders unified search results by relevance using an LLM.
 // It groups chunks by document, builds an LLM prompt with all chunks,
@@ -58,7 +66,6 @@ func (us *UnifiedSearcher) Rerank(ctx context.Context, query string, results []U
 		docChunks = temp
 	}
 
-	// Build the prompt
 	var sb strings.Builder
 	sb.WriteString("You are a relevance ranking assistant. You will receive a query and several text chunks. Rank them by relevance to the query.\n\n")
 	fmt.Fprintf(&sb, "Query: %s\n\n", query)
@@ -77,8 +84,12 @@ func (us *UnifiedSearcher) Rerank(ctx context.Context, query string, results []U
 
 	sb.WriteString("Return a JSON array of chunk IDs in order of relevance (most relevant first). Example: [\"chunk1\", \"chunk2\", \"chunk3\"]")
 
-	// Call LLM
-	resp, err := us.llm.Chat(ctx, llm.ChatRequest{
+	// Bound the rerank call so a slow reasoning model can't hold the chat
+	// pipeline open. On timeout the caller falls back to the original order.
+	rctx, cancel := context.WithTimeout(ctx, rerankTimeout)
+	defer cancel()
+
+	resp, err := us.llm.Chat(rctx, llm.ChatRequest{
 		Messages: []llm.Message{{Role: "user", Content: sb.String()}},
 		Stream:   false,
 	})
@@ -110,8 +121,12 @@ func parseRerankResponse(resp *llm.ChatResponse, chunkMap map[string]string) []s
 		return nil
 	}
 
-	text := resp.Choices[0].Message.Content
-	text = strings.TrimSpace(text)
+	text := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if text == "" {
+		// Reasoning-capable backends may route the answer to the reasoning
+		// field instead of content. Fall back so the rerank still works.
+		text = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
+	}
 
 	// Try to parse as JSON array
 	if strings.HasPrefix(text, "[") {

@@ -14,6 +14,17 @@ func (s *Server) setupRoutes() {
 	// Health endpoint uses a handler that's updated when SetLLMClient is called
 	s.router.Get("/health", s.handleHealth)
 
+	// Streaming routes (auth, no timeout) — SSE can take minutes for chat
+	// with multiple LLM round-trips (tool calls + synthesis). Declared as a
+	// separate group BEFORE the timeout-bearing group because chi's Group
+	// inherits all parent middleware: once Timeout is applied, sub-Groups
+	// cannot opt out.
+	s.router.Group(func(r chi.Router) {
+		r.Use(s.authMiddleware)
+		r.Post("/chat", s.handleChat)
+		r.Get("/events", s.handleEvents)
+	})
+
 	// Protected routes (authentication required) with standard timeout
 	s.router.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
@@ -127,13 +138,6 @@ func (s *Server) setupRoutes() {
 		// Changes are persisted to config.yaml and take effect on next restart.
 		r.Get("/config", s.handleGetConfig)
 		r.Patch("/config", s.handlePatchConfig)
-
-		// Streaming routes (no timeout — SSE can take minutes)
-		// Use r.Group to inherit the parent auth middleware; only bypass the timeout.
-		r.Group(func(r chi.Router) {
-			r.Post("/chat", s.handleChat)
-			r.Get("/events", s.handleEvents)
-		})
 
 		// Marketplace endpoints
 		r.Route("/marketplace", func(r chi.Router) {

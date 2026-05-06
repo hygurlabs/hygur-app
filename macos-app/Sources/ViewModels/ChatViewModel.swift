@@ -218,6 +218,9 @@ final class ChatViewModel {
                         )
                     }
 
+                case .toolCall(let call):
+                    appendToolCall(call, to: assistantIndex, sessionId: sessionId)
+
                 case .done(let usage):
                     if let start = streamStartTime {
                         messages[assistantIndex].generationStats = GenerationStats(
@@ -229,7 +232,7 @@ final class ChatViewModel {
 
                 case .error(let errorMessage):
                     self.error = errorMessage
-                    if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty {
+                    if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty && !messages[assistantIndex].hasToolCalls {
                         messages.remove(at: assistantIndex)
                         if let sessionId = sessionId {
                             sessionManager?.removeLastMessage(from: sessionId)
@@ -361,12 +364,16 @@ final class ChatViewModel {
                             )
                         }
 
+                    case .toolCall(let call):
+                        isThinking = false
+                        appendToolCall(call, to: assistantIndex, sessionId: sessionId)
+
                     case .done:
                         break
 
                     case .error(let errorMessage):
                         self.error = errorMessage
-                        if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty {
+                        if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty && !messages[assistantIndex].hasToolCalls {
                             messages.remove(at: assistantIndex)
                             if let sessionId = sessionId {
                                 sessionManager?.removeLastMessage(from: sessionId)
@@ -427,6 +434,28 @@ final class ChatViewModel {
             return ChatMessage(
                 role: msg.role.rawValue,
                 content: msg.content + "\n[Documents used: \(titles)]"
+            )
+        }
+    }
+
+    /// Attach a streamed tool-call event to the in-flight assistant message.
+    /// New ids are appended; an existing entry with the same id is updated in
+    /// place — the sidecar is allowed to emit a tool_call event multiple
+    /// times (e.g. once at request, once at result).
+    private func appendToolCall(_ call: ToolCall, to assistantIndex: Int, sessionId: UUID?) {
+        guard assistantIndex < messages.count else { return }
+        var existing = messages[assistantIndex].toolCalls ?? []
+        if let idx = existing.firstIndex(where: { $0.id == call.id }) {
+            existing[idx] = call
+        } else {
+            existing.append(call)
+        }
+        messages[assistantIndex].toolCalls = existing
+        if let sessionId = sessionId {
+            sessionManager?.updateLastMessage(
+                in: sessionId,
+                content: messages[assistantIndex].content,
+                ragContext: messages[assistantIndex].ragContext
             )
         }
     }

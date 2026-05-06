@@ -74,6 +74,30 @@ func TestLLMFallbackWhenNoDueDates(t *testing.T) {
 	_ = actions // 0 actions is valid when LLM not available
 }
 
+func TestSkipsPastDeadlines(t *testing.T) {
+	// Today the deadline 2024-01-01 has already passed — even though the item
+	// was just (re)indexed and so shows up in ListRecentItems, the action
+	// must not surface as "upcoming".
+	pastItem := makeItem("doc-old", "Vieille facture", map[string]any{
+		"extracted_due_dates": []interface{}{"2024-01-01"},
+	})
+	futureItem := makeItem("doc-future", "Bilan annuel", map[string]any{
+		"extracted_due_dates": []interface{}{"2099-12-31"},
+	})
+
+	ext := NewExtractor(nil)
+	actions, err := ext.ExtractActions(context.Background(), []store.KnowledgeItem{pastItem, futureItem})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action (future only), got %d: %+v", len(actions), actions)
+	}
+	if actions[0].SourceID != "doc-future" {
+		t.Errorf("expected future item to survive, got source_id=%s", actions[0].SourceID)
+	}
+}
+
 func TestFailSoftWhenLLMErrors(t *testing.T) {
 	// Item with a templated due date plus an item without one.
 	// If LLM fails, we should still get the templated action and no panic.

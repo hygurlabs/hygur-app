@@ -83,7 +83,14 @@ func Judge(ctx context.Context, client *llm.Client, query string, results []Unif
 		return nil, fmt.Errorf("judge: empty response")
 	}
 
-	scores, err := parseJudgeResponse(resp.Choices[0].Message.Content)
+	// Reasoning-capable backends route the answer to `reasoning` when the
+	// whole turn is treated as a thinking block. Fall back to it so the judge
+	// still works on those models even if /no_think isn't honored.
+	rawAnswer := resp.Choices[0].Message.Content
+	if strings.TrimSpace(rawAnswer) == "" {
+		rawAnswer = resp.Choices[0].Message.Reasoning
+	}
+	scores, err := parseJudgeResponse(rawAnswer)
 	if err != nil {
 		return nil, fmt.Errorf("judge: parse: %w", err)
 	}

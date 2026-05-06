@@ -891,6 +891,11 @@ Requête : ` + query
 
 	expanded := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if expanded == "" {
+		// Reasoning-capable backends route the answer to `reasoning` when the
+		// whole turn is treated as a thinking block. Fall back to it.
+		expanded = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
+	}
+	if expanded == "" {
 		return query
 	}
 	log.Printf("[UnifiedSearch] query expanded: %q → %q", query, expanded)

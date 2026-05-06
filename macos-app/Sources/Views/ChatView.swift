@@ -294,6 +294,13 @@ struct MessageBubble: View {
                     }
                 }
 
+                // Tool-call badges (inline) — surfaced before the RAG indicator
+                // because they describe an action the assistant just took, which
+                // is generally what the user wants to verify first.
+                if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                    toolCallsView(toolCalls)
+                }
+
                 // RAG context indicator (inline)
                 if message.hasRAGContext, let context = message.ragContext {
                     contextIndicator(sourceCount: context.sources.count)
@@ -381,6 +388,52 @@ struct MessageBubble: View {
             style: .capsule,
             icon: "doc.text.magnifyingglass"
         )
+    }
+
+    // MARK: - Tool Calls
+
+    @ViewBuilder
+    private func toolCallsView(_ calls: [ToolCall]) -> some View {
+        let visible = calls.filter { !isToolCallSurfacedElsewhere($0) }
+        if !visible.isEmpty {
+            VStack(alignment: .leading, spacing: HygurSpacing.xs) {
+                ForEach(visible) { call in
+                    HStack(spacing: HygurSpacing.xs) {
+                        Image(systemName: call.errorMessage == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(call.errorMessage == nil ? Color.green : Color.orange)
+                            .accessibilityHidden(true)
+                        Text(toolCallLabel(for: call))
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.textSecondary)
+                    }
+                    .help(toolCallTooltip(for: call))
+                }
+            }
+            .padding(.horizontal, HygurSpacing.md)
+        }
+    }
+
+    private func isToolCallSurfacedElsewhere(_ call: ToolCall) -> Bool {
+        // search_knowledge_base results are already shown via the RAG sources
+        // panel (ragContext), so a duplicate chip just adds noise.
+        call.name == "search_knowledge_base"
+    }
+
+    private func toolCallLabel(for call: ToolCall) -> String {
+        switch call.name {
+        case "create_note":
+            return "Created a note"
+        default:
+            return "Used tool: \(call.name)"
+        }
+    }
+
+    private func toolCallTooltip(for call: ToolCall) -> String {
+        if let error = call.errorMessage {
+            return "Error: \(error)"
+        }
+        return call.arguments
     }
 
     // MARK: - Bubble Background

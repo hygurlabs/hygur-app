@@ -89,6 +89,13 @@ type RAGContextEvent struct {
 	Intent  *IntentDTO  `json:"intent,omitempty"`
 }
 
+// maxToolRounds caps how many consecutive tool-call rounds the chat loop
+// will service before forcing the conversation to a final assistant turn.
+// Five is comfortably above any plausible legitimate need (multi-step plans
+// rarely chain past 2-3) while preventing a runaway model from looping
+// indefinitely against a misbehaving tool.
+const maxToolRounds = 5
+
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
 	llmClient       *llm.Client
@@ -98,6 +105,7 @@ type RAGChatHandler struct {
 	memorySearch    *tools.MemorySearchTool
 	agendaExtractor *agenda.Extractor
 	agendaStore     *store.DB
+	toolRegistry    *tools.Registry
 	config          RAGConfig
 	logger          zerolog.Logger
 }
@@ -134,6 +142,17 @@ func (h *RAGChatHandler) SetMemoryTools(storeTool *tools.MemoryStoreTool, search
 func (h *RAGChatHandler) SetAgendaExtractor(ext *agenda.Extractor, db *store.DB) {
 	h.agendaExtractor = ext
 	h.agendaStore = db
+}
+
+// SetToolRegistry wires the callable-tool registry into the handler. When
+// the registry holds at least one tool, the handler advertises them to the
+// LLM via the `tools` field of each request and will execute any tool_calls
+// the model emits, looping back to the LLM with the results until the model
+// produces a final text answer (capped at maxToolRounds rounds). Passing
+// nil — or a registry that ends up empty — disables tool calling and the
+// handler behaves exactly as it did before this method existed.
+func (h *RAGChatHandler) SetToolRegistry(registry *tools.Registry) {
+	h.toolRegistry = registry
 }
 
 // injectAgendaIntoSystemPrompt prepends an urgency block to the system prompt
@@ -262,68 +281,37 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Prepare messages for LLM
+	// Prepare messages for LLM.
 	messages := req.Messages
 
-	// If RAG is enabled, retrieve context and augment messages.
-	if ragEnabled && h.unifiedSearcher != nil {
-		var ragContext *RAGContext
-		var retrieveErr error
-		if directRetrievalUsed {
-			ragContext = prefetchedContext
-		} else {
-			ragContext, retrieveErr = h.retrieveContext(r, req)
+	// Direct-retrieval fast-path: when the latest user query is an entity
+	// follow-up ("et son IBAN ?") and we already know the relevant sources
+	// from the session, pre-inject them so the LLM doesn't need to call
+	// search_knowledge_base. The full RAG pipeline (classify/expand/judge)
+	// is now driven by the LLM itself via the search_knowledge_base tool —
+	// see internal/tools/search_knowledge_base.go.
+	if ragEnabled && directRetrievalUsed && prefetchedContext != nil && len(prefetchedContext.Sources) > 0 {
+		mergeSourcesIntoSession(sessionCtx, prefetchedContext.Sources)
+
+		debugRequested := r.URL.Query().Get("debug") == "1" || r.Header.Get("X-Hygur-Debug") == "1"
+		if debugRequested {
+			dbg := buildDebugEvent(prefetchedContext, "direct_retrieval")
+			if err := h.writeSSEEvent(w, flusher, dbg); err != nil {
+				h.logger.Debug().Err(err).Msg("failed to write debug event")
+			}
 		}
-		switch {
-		case retrieveErr != nil:
-			h.logger.Warn().Err(retrieveErr).Msg("failed to retrieve RAG context, continuing without")
-		case ragContext != nil && len(ragContext.Sources) > 0:
-			// Merge entities extracted from retrieved sources into the session
-			// so that subsequent direct-source attempts have something to work with.
-			mergeSourcesIntoSession(sessionCtx, ragContext.Sources)
 
-			// Debug SSE event when requested via ?debug=1 or X-Hygur-Debug.
-			debugRequested := r.URL.Query().Get("debug") == "1" || r.Header.Get("X-Hygur-Debug") == "1"
-			if debugRequested {
-				sessionMode := "context_injected"
-				if directRetrievalUsed {
-					sessionMode = "direct_retrieval"
-				}
-				dbg := buildDebugEvent(ragContext, sessionMode)
-				if err := h.writeSSEEvent(w, flusher, dbg); err != nil {
-					h.logger.Debug().Err(err).Msg("failed to write debug event")
-				}
-			}
-
-			contextEvent := RAGContextEvent{
-				Type:    "rag_context",
-				Sources: ragContext.Sources,
-				Intent:  ragContext.Intent,
-			}
-			if err := h.writeSSEEvent(w, flusher, contextEvent); err != nil {
-				h.logger.Debug().Err(err).Msg("failed to write rag_context event")
-				return
-			}
-
-			messages = h.buildMessagesWithContext(req.Messages, ragContext)
-		case ragContext != nil && ragContext.Intent != nil:
-			// Search was attempted but found no results - inform the LLM.
-			h.logger.Debug().
-				Str("query", ragContext.Query).
-				Float64("confidence", ragContext.Intent.Confidence).
-				Msg("RAG search returned no results")
-
-			contextEvent := RAGContextEvent{
-				Type:    "rag_context",
-				Sources: []RAGSource{},
-				Intent:  ragContext.Intent,
-			}
-			if err := h.writeSSEEvent(w, flusher, contextEvent); err != nil {
-				h.logger.Debug().Err(err).Msg("failed to write empty rag_context event")
-			}
-
-			messages = h.buildNoResultsMessage(req.Messages, ragContext)
+		contextEvent := RAGContextEvent{
+			Type:    "rag_context",
+			Sources: prefetchedContext.Sources,
+			Intent:  prefetchedContext.Intent,
 		}
+		if err := h.writeSSEEvent(w, flusher, contextEvent); err != nil {
+			h.logger.Debug().Err(err).Msg("failed to write rag_context event")
+			return
+		}
+
+		messages = h.buildMessagesWithContext(req.Messages, prefetchedContext)
 	}
 
 	// Agenda injection: prepend upcoming deadlines to the system prompt so the
@@ -356,13 +344,32 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		MaxTokens:   req.MaxTokens,
 	}
 
+	// Wire registered tools into the request so the model can decide to call
+	// them. We rebuild the definitions on each request — the registry is
+	// safe for concurrent reads, and the cost is negligible compared to the
+	// LLM round-trip. Empty registry → Tools stays nil so the field is
+	// omitted (some servers reject `tools: []`).
+	//
+	// When ragEnabled=false (per-request override), drop search_knowledge_base
+	// so the LLM can't trigger retrieval the user explicitly disabled.
+	if h.toolRegistry != nil {
+		defs := h.toolRegistry.OpenAIDefinitions()
+		if !ragEnabled {
+			defs = filterToolDef(defs, "search_knowledge_base")
+		}
+		if len(defs) > 0 {
+			llmReq.Tools = defs
+			llmReq.ToolChoice = "auto"
+		}
+	}
+
 	// During the LLM's prefill phase (loading the full context into KV cache)
 	// no tokens are sent, leaving the SSE connection silent for potentially
 	// tens of seconds. URLSession and browser EventSource implementations
 	// time out on idle connections. Send an SSE comment every 20 s to keep
 	// the connection alive; comments are ignored by clients but reset their
 	// idle timers. A mutex serialises writes between this goroutine and the
-	// StreamChat callback below.
+	// stream callback below.
 	var writeMu sync.Mutex
 	stopKeepalive := make(chan struct{})
 	var stopOnce sync.Once
@@ -385,81 +392,182 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Accumulate assistant deltas so we can extract entities from the full
-	// answer once streaming completes. Bounded by Go's slice growth — a
-	// typical assistant turn is < 4 KB, well under any worry threshold.
-	var assistantBuf strings.Builder
-
-	// Stream from LLM
-	err := h.llmClient.StreamChat(r.Context(), llmReq, func(delta string, done bool, usage *llm.Usage) error {
-		// Stop keepalive as soon as the first token arrives.
-		stopOnce.Do(func() { close(stopKeepalive) })
-
-		// Check if client disconnected
-		select {
-		case <-r.Context().Done():
-			h.logger.Debug().Msg("client disconnected during stream")
-			return r.Context().Err()
-		default:
-		}
-
-		if !done {
-			assistantBuf.WriteString(delta)
-		}
-
-		var event map[string]any
-		if done {
-			event = map[string]any{
-				"done": true,
-			}
-			if usage != nil {
-				event["usage"] = map[string]int{
-					"prompt_tokens":     usage.PromptTokens,
-					"completion_tokens": usage.CompletionTokens,
-					"total_tokens":      usage.TotalTokens,
-				}
-			}
-		} else {
-			event = map[string]any{
-				"delta": delta,
-				"done":  false,
-			}
-		}
-
-		data, err := json.Marshal(event)
+	// writeSSE serialises one event onto the response under the shared lock.
+	// Callers pass a JSON-marshalable payload; the wire format mirrors the
+	// existing convention (`data: {…}\n\n`) so clients don't need to change.
+	writeSSE := func(payload any) error {
+		data, err := json.Marshal(payload)
 		if err != nil {
-			h.logger.Error().Err(err).Msg("failed to marshal SSE event")
-			return err
+			return fmt.Errorf("marshal SSE event: %w", err)
 		}
-
 		writeMu.Lock()
-		_, writeErr := fmt.Fprintf(w, "data: %s\n\n", data)
+		_, werr := fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 		writeMu.Unlock()
-		if writeErr != nil {
-			h.logger.Debug().Err(writeErr).Msg("failed to write SSE event")
-			return writeErr
-		}
-		return nil
-	})
+		return werr
+	}
 
-	// Ensure the keepalive goroutine exits even if StreamChat returned an error
-	// before any token was received.
+	// Accumulate assistant deltas across all tool rounds so the post-stream
+	// memory-extraction and session-update steps see the user-visible
+	// answer in full. Bounded by Go's slice growth — a typical turn is
+	// < 4 KB, well below any worry threshold.
+	var assistantBuf strings.Builder
+
+	// Tool-call loop. Each iteration runs one streaming completion. When
+	// the model finishes with `finish_reason: "tool_calls"` we execute the
+	// requested tools, append the assistant + tool messages to the request,
+	// and loop. Otherwise the iteration is final and we emit the `done`
+	// SSE event below.
+	var streamErr error
+	var lastUsage *llm.Usage
+	finalRound := false
+
+	for round := 0; round < maxToolRounds && !finalRound; round++ {
+		var roundContent strings.Builder
+		var roundFinishReason string
+		assembler := llm.NewToolCallAssembler()
+
+		err := h.llmClient.StreamChatRich(r.Context(), llmReq, func(evt llm.StreamEvent) error {
+			stopOnce.Do(func() { close(stopKeepalive) })
+
+			select {
+			case <-r.Context().Done():
+				return r.Context().Err()
+			default:
+			}
+
+			if evt.Done {
+				if evt.Usage != nil {
+					lastUsage = evt.Usage
+				}
+				return nil
+			}
+
+			if evt.FinishReason != "" {
+				roundFinishReason = evt.FinishReason
+			}
+
+			for _, d := range evt.ToolCallDeltas {
+				assembler.Add(d)
+			}
+
+			if evt.Delta != "" {
+				roundContent.WriteString(evt.Delta)
+				assistantBuf.WriteString(evt.Delta)
+				if err := writeSSE(map[string]any{"delta": evt.Delta, "done": false}); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			streamErr = err
+			break
+		}
+
+		// No tool invocation requested — this round produced the final
+		// assistant turn. Exit the loop and let the post-loop block emit
+		// the terminal `done` event.
+		if roundFinishReason != "tool_calls" || assembler.Len() == 0 {
+			finalRound = true
+			break
+		}
+
+		// Otherwise: execute every requested tool, fan results back into
+		// the message history, and let the loop run another round.
+		toolCalls := assembler.Finalize()
+		llmReq.Messages = append(llmReq.Messages, llm.Message{
+			Role:      "assistant",
+			Content:   roundContent.String(),
+			ToolCalls: toolCalls,
+		})
+
+		toolErrAbort := false
+		for _, tc := range toolCalls {
+			argsRaw := json.RawMessage(tc.Function.Arguments)
+			h.logger.Info().Str("tool", tc.Function.Name).Str("call_id", tc.ID).RawJSON("args", argsRaw).Msg("executing tool")
+			result, execErr := h.toolRegistry.Execute(r.Context(), tc.Function.Name, argsRaw)
+
+			evt := map[string]any{
+				"type":      "tool_call",
+				"id":        tc.ID,
+				"name":      tc.Function.Name,
+				"arguments": argsRaw,
+			}
+			var toolMsg llm.Message
+			if execErr != nil {
+				h.logger.Warn().Err(execErr).Str("tool", tc.Function.Name).Msg("tool execution failed")
+				evt["error"] = execErr.Error()
+				// Feed the error back to the LLM so it can recover (apologise,
+				// retry with different args, etc.) rather than hanging.
+				errPayload, _ := json.Marshal(map[string]string{"error": execErr.Error()})
+				toolMsg = llm.Message{
+					Role:       "tool",
+					Content:    string(errPayload),
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+				}
+			} else {
+				h.logger.Info().Str("tool", tc.Function.Name).Str("call_id", tc.ID).Int("result_bytes", len(result)).Msg("tool execution succeeded")
+				evt["result"] = result
+				toolMsg = llm.Message{
+					Role:       "tool",
+					Content:    string(result),
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+				}
+				// search_knowledge_base also doubles as a `rag_context` event so
+				// the existing UI keeps rendering the sources panel without
+				// needing to know about the tool-call shape.
+				if tc.Function.Name == "search_knowledge_base" {
+					if ragSources := decodeSearchSources(result); ragSources != nil {
+						mergeSourcesIntoSession(sessionCtx, ragSources)
+						_ = writeSSE(RAGContextEvent{
+							Type:    "rag_context",
+							Sources: ragSources,
+						})
+					}
+				}
+			}
+
+			if err := writeSSE(evt); err != nil {
+				streamErr = err
+				toolErrAbort = true
+				break
+			}
+			llmReq.Messages = append(llmReq.Messages, toolMsg)
+		}
+
+		if toolErrAbort {
+			break
+		}
+	}
+
+	// Ensure the keepalive goroutine exits even if no token was received.
 	stopOnce.Do(func() { close(stopKeepalive) })
 
-	if err != nil {
-		// Check if it's a client disconnect - don't log as error
+	if streamErr != nil {
+		// Client disconnect — don't log as error.
 		if r.Context().Err() != nil {
 			h.logger.Debug().Msg("stream ended due to client disconnect")
 			return
 		}
 
-		// Log the error
-		h.logger.Error().Err(err).Msg("chat stream error")
-
-		// Send error as SSE event (mid-stream error)
-		writeSSEError(w, "LLM_STUDIO_ERROR", err.Error())
+		h.logger.Error().Err(streamErr).Msg("chat stream error")
+		writeSSEError(w, "LLM_STUDIO_ERROR", streamErr.Error())
 		flusher.Flush()
+	} else {
+		// Final `done` event with usage, mirroring the pre-tool-loop wire format.
+		doneEvent := map[string]any{"done": true}
+		if lastUsage != nil {
+			doneEvent["usage"] = map[string]int{
+				"prompt_tokens":     lastUsage.PromptTokens,
+				"completion_tokens": lastUsage.CompletionTokens,
+				"total_tokens":      lastUsage.TotalTokens,
+			}
+		}
+		_ = writeSSE(doneEvent)
 	}
 
 	// Post-stream: extract entities from the assistant answer and append a
@@ -788,6 +896,56 @@ func (h *RAGChatHandler) buildNoResultsMessage(messages []llm.Message, ragContex
 	}
 
 	return result
+}
+
+// filterToolDef removes the entry whose function.name matches `name` from the
+// list of OpenAI tool definitions. Used to drop the search_knowledge_base tool
+// when RAG is disabled per-request.
+func filterToolDef(defs []map[string]any, name string) []map[string]any {
+	out := make([]map[string]any, 0, len(defs))
+	for _, d := range defs {
+		fn, _ := d["function"].(map[string]any)
+		if fn == nil {
+			out = append(out, d)
+			continue
+		}
+		if n, _ := fn["name"].(string); n == name {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// decodeSearchSources parses the JSON returned by SearchKnowledgeBaseTool back
+// into the wire-shaped RAGSource list the SSE clients already understand.
+// Returns nil when the payload doesn't match — callers must tolerate that
+// (the chat keeps working, only the sources panel goes dark for the turn).
+func decodeSearchSources(raw json.RawMessage) []RAGSource {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload tools.SearchKnowledgeBaseResult
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if len(payload.Sources) == 0 {
+		return nil
+	}
+	out := make([]RAGSource, 0, len(payload.Sources))
+	for _, s := range payload.Sources {
+		out = append(out, RAGSource{
+			ContentID:   s.ContentID,
+			SourceType:  s.SourceType,
+			Title:       s.Title,
+			Excerpt:     s.Excerpt,
+			Score:       s.Score,
+			MailFrom:    s.MailFrom,
+			MailDate:    s.MailDate,
+			MailSubject: s.MailSubject,
+		})
+	}
+	return out
 }
 
 // writeSSEEvent writes a single SSE event to the response writer.

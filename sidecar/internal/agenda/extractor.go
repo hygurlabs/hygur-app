@@ -93,6 +93,20 @@ func (e *Extractor) ExtractActions(ctx context.Context, items []store.KnowledgeI
 		templated = append(templated, llmActions...)
 	}
 
+	// Drop deadlines that have already passed. ListRecentItems returns items
+	// based on DB activity (recent updates, re-indexing) which has nothing to
+	// do with how far in the future the deadline lies — without this filter,
+	// a freshly re-indexed email referencing a year-old date still surfaces
+	// as an "upcoming" action.
+	todayISO := time.Now().Format("2006-01-02")
+	upcoming := templated[:0]
+	for _, a := range templated {
+		if a.DeadlineISO >= todayISO {
+			upcoming = append(upcoming, a)
+		}
+	}
+	templated = upcoming
+
 	// Sort by deadline ascending.
 	sort.Slice(templated, func(i, j int) bool {
 		return templated[i].DeadlineISO < templated[j].DeadlineISO

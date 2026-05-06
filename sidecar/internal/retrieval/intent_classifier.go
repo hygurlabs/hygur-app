@@ -116,7 +116,11 @@ func ClassifyQuery(ctx context.Context, client *llm.Client, query string) (*Quer
 		return nil, fmt.Errorf("classify: empty response")
 	}
 
-	intent, err := parseIntentResponse(resp.Choices[0].Message.Content)
+	rawAnswer := resp.Choices[0].Message.Content
+	if strings.TrimSpace(rawAnswer) == "" {
+		rawAnswer = resp.Choices[0].Message.Reasoning
+	}
+	intent, err := parseIntentResponse(rawAnswer)
 	if err != nil {
 		return nil, fmt.Errorf("classify: parse: %w", err)
 	}
