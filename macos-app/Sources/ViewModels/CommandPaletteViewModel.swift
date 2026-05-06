@@ -28,16 +28,16 @@ final class CommandPaletteViewModel {
         var cmds: [PaletteCommand] = [
             PaletteCommand(
                 id: "new-chat",
-                title: "Nouveau chat",
-                subtitle: "Démarrer une nouvelle conversation",
+                title: "New chat",
+                subtitle: "Start a new conversation",
                 icon: "plus.bubble",
                 keywords: ["new", "chat", "conversation"],
                 action: .createNewChat
             ),
             PaletteCommand(
                 id: "new-note",
-                title: "Nouvelle note",
-                subtitle: "Créer une note dans la base",
+                title: "New note",
+                subtitle: "Create a note in the knowledge base",
                 icon: "square.and.pencil",
                 keywords: ["new", "note", "create"],
                 action: .createNote
@@ -45,7 +45,7 @@ final class CommandPaletteViewModel {
             PaletteCommand(
                 id: "nav-chat",
                 title: "Chat",
-                subtitle: "Aller à la zone de conversation",
+                subtitle: "Go to the conversation area",
                 icon: "bubble.left.and.bubble.right",
                 keywords: ["chat", "discussion"],
                 action: .navigate(.newChat)
@@ -53,15 +53,15 @@ final class CommandPaletteViewModel {
             PaletteCommand(
                 id: "nav-knowledge",
                 title: "Knowledge Base",
-                subtitle: "Parcourir les documents indexés",
+                subtitle: "Browse indexed documents",
                 icon: "books.vertical",
                 keywords: ["kb", "knowledge", "base", "documents"],
                 action: .navigate(.knowledgeBase)
             ),
             PaletteCommand(
                 id: "nav-search",
-                title: "Recherche",
-                subtitle: "Recherche sémantique brute",
+                title: "Search",
+                subtitle: "Raw semantic search",
                 icon: "magnifyingglass",
                 keywords: ["search", "query"],
                 action: .navigate(.search)
@@ -69,15 +69,15 @@ final class CommandPaletteViewModel {
             PaletteCommand(
                 id: "nav-notes",
                 title: "Notes",
-                subtitle: "Liste des notes",
+                subtitle: "List of notes",
                 icon: "note.text",
                 keywords: ["notes"],
                 action: .navigate(.notes)
             ),
             PaletteCommand(
                 id: "nav-projects",
-                title: "Projets",
-                subtitle: "Gérer les projets",
+                title: "Projects",
+                subtitle: "Manage projects",
                 icon: "folder",
                 keywords: ["projects", "project"],
                 action: .navigate(.projects)
@@ -85,7 +85,7 @@ final class CommandPaletteViewModel {
             PaletteCommand(
                 id: "nav-tags",
                 title: "Tags",
-                subtitle: "Gérer les tags",
+                subtitle: "Manage tags",
                 icon: "tag",
                 keywords: ["tags"],
                 action: .navigate(.tags)
@@ -93,7 +93,7 @@ final class CommandPaletteViewModel {
             PaletteCommand(
                 id: "nav-email",
                 title: "Email",
-                subtitle: "Boîte mail indexée",
+                subtitle: "Indexed mailbox",
                 icon: "envelope",
                 keywords: ["mail", "email", "gmail", "proton"],
                 action: .navigate(.email)
@@ -101,39 +101,39 @@ final class CommandPaletteViewModel {
             PaletteCommand(
                 id: "nav-timeline",
                 title: "Timeline",
-                subtitle: "Frise chronologique des événements",
+                subtitle: "Chronological view of events",
                 icon: "clock.arrow.circlepath",
-                keywords: ["timeline", "frise", "chronologie", "graph", "history", "histoire"],
+                keywords: ["timeline", "chronology", "graph", "history"],
                 action: .navigate(.graph)
             ),
             PaletteCommand(
                 id: "nav-connectors",
-                title: "Connecteurs",
-                subtitle: "État des connecteurs",
+                title: "Connectors",
+                subtitle: "Connector status",
                 icon: "personalhotspot",
-                keywords: ["connectors", "connecteurs", "sync"],
+                keywords: ["connectors", "sync"],
                 action: .navigate(.connectors)
             ),
             PaletteCommand(
                 id: "nav-activity",
-                title: "Activité",
-                subtitle: "Flux d'événements en temps réel",
+                title: "Activity",
+                subtitle: "Real-time event feed",
                 icon: "waveform.path.ecg",
                 keywords: ["activity", "events", "logs"],
                 action: .navigate(.activity)
             ),
             PaletteCommand(
                 id: "sync-mail",
-                title: "Synchroniser tous les comptes mail",
-                subtitle: "Déclenche un sync immédiat",
+                title: "Sync all mail accounts",
+                subtitle: "Triggers an immediate sync",
                 icon: "arrow.triangle.2.circlepath",
                 keywords: ["sync", "mail", "email", "gmail", "proton", "fetch"],
                 action: .syncAllMail
             ),
             PaletteCommand(
                 id: "ingest-file",
-                title: "Indexer un fichier…",
-                subtitle: "Ajoute un document à la base",
+                title: "Index a file…",
+                subtitle: "Add a document to the knowledge base",
                 icon: "tray.and.arrow.down",
                 keywords: ["ingest", "import", "file", "add", "upload"],
                 action: .indexFile
@@ -153,7 +153,7 @@ final class CommandPaletteViewModel {
                         title: session.displayTitle,
                         subtitle: session.lastMessagePreview,
                         icon: "clock.arrow.circlepath",
-                        keywords: ["session", "chat", "history", "récent"],
+                        keywords: ["session", "chat", "history", "recent"],
                         action: .openChatSession(session.id)
                     )
                 )

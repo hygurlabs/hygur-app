@@ -14,13 +14,13 @@ actor GitHubReleasesClient {
         var errorDescription: String? {
             switch self {
             case .noStableRelease:
-                return "Aucune version stable n'est encore publiée."
+                return "No stable release has been published yet."
             case .rateLimited:
-                return "Trop de requêtes vers GitHub. Réessayez dans une heure."
+                return "Too many requests to GitHub. Try again in an hour."
             case .http(let code):
-                return "GitHub a répondu avec un code \(code)."
+                return "GitHub responded with status \(code)."
             case .decoding:
-                return "Réponse GitHub invalide."
+                return "Invalid GitHub response."
             case .network(let message):
                 return message
             }
@@ -62,7 +62,7 @@ actor GitHubReleasesClient {
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw ClientError.network("Réponse réseau invalide.")
+            throw ClientError.network("Invalid network response.")
         }
 
         switch http.statusCode {

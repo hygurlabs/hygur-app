@@ -121,14 +121,14 @@ struct SearchView: View {
 
     /// Inline menu that lets the user restrict raw search to a single project,
     /// the SearchView equivalent of the Mode Focus pill in ChatView. Picking
-    /// "Tous les projets" clears the filter.
+    /// "All projects" clears the filter.
     private var projectFilterMenu: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Projet")
+            Text("Project")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("Tous les projets") { viewModel.projectFilterId = nil }
+                Button("All projects") { viewModel.projectFilterId = nil }
                 if !viewModel.availableProjects.isEmpty {
                     Divider()
                     ForEach(viewModel.availableProjects) { project in
@@ -151,7 +151,7 @@ struct SearchView: View {
     private var activeProjectLabel: String {
         guard let id = viewModel.projectFilterId,
               let project = viewModel.availableProjects.first(where: { $0.id == id }) else {
-            return "Tous"
+            return "All"
         }
         return project.name
     }

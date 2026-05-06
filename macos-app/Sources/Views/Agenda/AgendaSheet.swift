@@ -23,10 +23,10 @@ struct AgendaSheet: View {
     private var header: some View {
         HStack(spacing: HygurSpacing.md) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Actions urgentes")
+                Text("Urgent actions")
                     .font(.title3)
                     .fontWeight(.semibold)
-                Text("\(actions.count) action\(actions.count > 1 ? "s" : "") dans les 48 prochaines heures")
+                Text("\(actions.count) action\(actions.count > 1 ? "s" : "") in the next 48 hours")
                     .font(.caption)
                     .foregroundStyle(HygurColors.textSecondary)
             }
@@ -40,7 +40,7 @@ struct AgendaSheet: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.escape, modifiers: [])
-            .help("Fermer (Esc)")
+            .help("Close (Esc)")
         }
         .padding(HygurSpacing.lg)
     }
@@ -51,9 +51,9 @@ struct AgendaSheet: View {
     private var content: some View {
         if actions.isEmpty {
             ContentUnavailableView(
-                "Aucune action imminente",
+                "No upcoming actions",
                 systemImage: "checkmark.circle",
-                description: Text("Pas d'échéances dans les 48 prochaines heures.")
+                description: Text("No deadlines in the next 48 hours.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -108,7 +108,7 @@ private struct AgendaActionRow: View {
 
                 Spacer()
 
-                Button("Voir le document") {
+                Button("View document") {
                     onOpen()
                 }
                 .font(.caption)
@@ -144,7 +144,7 @@ private struct AgendaActionRow: View {
         .onTapGesture(count: 2) {
             onOpen()
         }
-        .accessibilityHint("Double-cliquez pour ouvrir le document source")
+        .accessibilityHint("Double-click to open the source document")
     }
 
     private func relativeDeadline(from isoDate: String) -> String {
@@ -160,13 +160,13 @@ private struct AgendaActionRow: View {
         let hours = components.hour ?? 0
 
         if hours <= 0 && days <= 0 {
-            return "Passé"
+            return "Past"
         } else if days == 0 {
-            return "dans \(hours)h"
+            return "in \(hours)h"
         } else if days == 1 {
-            return "demain"
+            return "tomorrow"
         } else {
-            return "dans \(days) jours"
+            return "in \(days) days"
         }
     }
 }
@@ -195,8 +195,8 @@ private struct PriorityPill: View {
     private var label: String {
         switch priority {
         case "high":   return "Urgent"
-        case "medium": return "Moyen"
-        default:       return "Bas"
+        case "medium": return "Medium"
+        default:       return "Low"
         }
     }
 
@@ -223,7 +223,7 @@ private func agendaDateFormatter() -> DateFormatter {
 
 #Preview {
     AgendaSheet(actions: [
-        AgendaAction(what: "Envoyer rapport Q2", deadlineISO: "2026-05-06", priority: "high", sourceId: "doc-1", confidence: 1.0),
-        AgendaAction(what: "Réviser contrat", deadlineISO: "2026-05-07", priority: "medium", sourceId: "doc-2", confidence: 0.9),
+        AgendaAction(what: "Send Q2 report", deadlineISO: "2026-05-06", priority: "high", sourceId: "doc-1", confidence: 1.0),
+        AgendaAction(what: "Review contract", deadlineISO: "2026-05-07", priority: "medium", sourceId: "doc-2", confidence: 0.9),
     ])
 }

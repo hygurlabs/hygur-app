@@ -162,7 +162,7 @@ extension Notification.Name {
     /// Switches the chat detail view to a specific session.
     /// Posted with `object` = session UUID string.
     static let openChatSession = Notification.Name("openChatSession")
-    /// Opens the Settings window and focuses the "À propos" tab where the
+    /// Opens the Settings window and focuses the "About" tab where the
     /// update controls live. Posted by the "Check for Updates…" menu item.
     static let openUpdatesPane = Notification.Name("openUpdatesPane")
 }

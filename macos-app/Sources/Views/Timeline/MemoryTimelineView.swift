@@ -37,7 +37,7 @@ struct MemoryTimelineView: View {
                 .foregroundStyle(HygurColors.textSecondary)
 
             TextField(
-                "Tape un sujet : TVA, projet X, personne…",
+                "Type a topic: VAT, project X, a person…",
                 text: Binding(
                     get: { viewModel.query },
                     set: { newValue in
@@ -59,7 +59,7 @@ struct MemoryTimelineView: View {
                         .foregroundStyle(HygurColors.textTertiary)
                 }
                 .buttonStyle(.plain)
-                .help("Effacer")
+                .help("Clear")
             }
         }
         .padding(.horizontal, HygurSpacing.md)
@@ -74,20 +74,20 @@ struct MemoryTimelineView: View {
         if let error = viewModel.error {
             EmptyStateView(
                 icon: "exclamationmark.triangle",
-                title: "Erreur",
+                title: "Error",
                 subtitle: error
             )
         } else if viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             EmptyStateView(
                 icon: "clock.arrow.circlepath",
-                title: "Explore ta mémoire",
-                subtitle: "Tape un sujet, un projet, une personne. Hygur t'affiche une frise chronologique des événements liés."
+                title: "Explore your memory",
+                subtitle: "Type a topic, a project, or a person. Hygur shows you a chronological view of related events."
             )
         } else if viewModel.chapters.isEmpty && !viewModel.isLoading {
             EmptyStateView(
                 icon: "magnifyingglass",
-                title: "Aucun événement",
-                subtitle: "Rien ne correspond à « \(viewModel.query) » dans la fenêtre de \(viewModel.rangeDays) jours."
+                title: "No events",
+                subtitle: "Nothing matches “\(viewModel.query)” in the last \(viewModel.rangeDays) days."
             )
         } else {
             timeline
@@ -212,15 +212,15 @@ private struct ChapterCard: View {
                         .foregroundStyle(HygurColors.accent)
                 }
                 .buttonStyle(.plain)
-                .help("Recentrer la timeline sur \(entity)")
+                .help("Refocus the timeline on \(entity)")
             }
         }
     }
 
     private var rangeLabel: String {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "fr_FR")
-        formatter.dateFormat = "dd MMM yyyy"
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.dateFormat = "MMM dd, yyyy"
         let start = formatter.string(from: chapter.parsedStart)
         let end = formatter.string(from: chapter.parsedEnd)
         return start == end ? start : "\(start) → \(end)"
@@ -304,7 +304,7 @@ private struct EventRow: View {
         .onTapGesture(count: 2) { onOpen() }
         // Single click → select (then Space to open).
         .onTapGesture(count: 1) { onSelect() }
-        .help("Double-cliquer ou appuyer sur Espace pour ouvrir")
+        .help("Double-click or press Space to open")
     }
 
     private var sourceColor: Color {
@@ -313,12 +313,12 @@ private struct EventRow: View {
 
     private var formattedDate: String {
         let df = DateFormatter()
-        df.locale = Locale(identifier: "fr_FR")
+        df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd"
         guard let date = df.date(from: event.date) else { return event.date }
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "fr_FR")
-        formatter.dateFormat = "dd MMM yyyy"
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.dateFormat = "MMM dd, yyyy"
         return formatter.string(from: date)
     }
 }

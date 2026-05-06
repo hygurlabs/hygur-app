@@ -221,7 +221,7 @@ struct KnowledgeBaseView: View {
         Button {
             quickLookItem = IdentifiableString(item.id)
         } label: {
-            Label("Voir / Éditer", systemImage: "doc.text.magnifyingglass")
+            Label("View / Edit", systemImage: "doc.text.magnifyingglass")
         }
 
         if let path = item.sourcePath {

@@ -88,14 +88,14 @@ struct EmailThreadsView: View {
                 LoadingIndicator(style: .small)
 
                 Text(elapsed > 0
-                     ? "Synchronisation en cours · \(elapsed)s"
-                     : "Synchronisation en cours…")
+                     ? "Syncing · \(elapsed)s"
+                     : "Syncing…")
                     .font(HygurTypography.caption)
                     .foregroundStyle(HygurColors.accent)
 
                 Spacer()
 
-                Text("Les résultats apparaîtront automatiquement")
+                Text("Results will appear automatically")
                     .font(HygurTypography.caption)
                     .foregroundStyle(HygurColors.textSecondary)
             }
@@ -134,7 +134,7 @@ struct EmailThreadsView: View {
                     Button {
                         clearLabels()
                     } label: {
-                        Text("Tout effacer")
+                        Text("Clear all")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
@@ -175,7 +175,7 @@ struct EmailThreadsView: View {
             // Arrow next to the dropdown: triggers a full async sync of the
             // selected account (folders + labels + emails). Disabled while a
             // sync is in flight or before any account is selected.
-            IconButton(systemImage: "arrow.clockwise", label: "Synchroniser") {
+            IconButton(systemImage: "arrow.clockwise", label: "Sync") {
                 Task { await viewModel.triggerFullSync() }
             }
             .disabled(viewModel.isLoading || viewModel.isSyncing || viewModel.selectedAccountId == nil)
@@ -188,7 +188,7 @@ struct EmailThreadsView: View {
                     }
                 }
             )) {
-                Text("Sélectionner un compte…").tag("")
+                Text("Select an account…").tag("")
                 ForEach(viewModel.accounts) { account in
                     HStack {
                         Circle()
@@ -226,20 +226,20 @@ struct EmailThreadsView: View {
         if viewModel.selectedAccountId == nil {
             EmptyStateView(
                 icon: "envelope.badge",
-                title: "Aucun compte sélectionné",
-                subtitle: "Choisissez un compte dans la liste déroulante ci-dessus."
+                title: "No account selected",
+                subtitle: "Choose an account from the dropdown above."
             )
         } else if let account = viewModel.accounts.first(where: { $0.accountId == viewModel.selectedAccountId }), !account.isConnected {
             EmptyStateView(
                 icon: "envelope.badge",
-                title: "Compte non connecté",
+                title: "Account not connected",
                 subtitle: account.briefReasonLocalized
             )
         } else {
             EmptyStateView(
                 icon: "envelope.badge",
-                title: "Aucun mail",
-                subtitle: "Aucun thread synchronisé pour ce compte. Cliquez sur la flèche pour lancer une synchronisation."
+                title: "No mail",
+                subtitle: "No threads synced for this account. Click the arrow to start a sync."
             )
         }
     }

@@ -326,7 +326,7 @@ class EditNoteViewModel: ObservableObject {
             availableTags.append(newTag)
             selectedTags.append(newTag)
         } catch {
-            errorMessage = "Création du tag impossible : \(error.localizedDescription)"
+            errorMessage = "Could not create tag: \(error.localizedDescription)"
             showError = true
         }
     }

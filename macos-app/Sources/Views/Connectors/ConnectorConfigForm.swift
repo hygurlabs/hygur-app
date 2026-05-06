@@ -505,18 +505,18 @@ struct ConnectorConfigForm: View {
 
     private var oauthCodeEntrySheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Autorisation Google")
+            Text("Google authorization")
                 .font(.headline)
 
-            Text("Google a affiché un code d'autorisation dans le navigateur. Copiez-le et collez-le ci-dessous.")
+            Text("Google displayed an authorization code in your browser. Copy it and paste it below.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            TextField("Code d'autorisation", text: $oauthCodeInput)
+            TextField("Authorization code", text: $oauthCodeInput)
                 .textFieldStyle(.roundedBorder)
 
             HStack {
-                Button("Annuler") {
+                Button("Cancel") {
                     showOAuthCodeEntry = false
                     oauthCodeInput = ""
                     if let field = pendingOAuthField {
@@ -528,7 +528,7 @@ struct ConnectorConfigForm: View {
 
                 Spacer()
 
-                Button("Connecter") {
+                Button("Connect") {
                     submitOAuthCode()
                 }
                 .keyboardShortcut(.defaultAction)

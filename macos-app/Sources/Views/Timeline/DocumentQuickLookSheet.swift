@@ -19,11 +19,11 @@ struct DocumentQuickLookSheet: View {
             Divider()
             if viewModel.isLoading {
                 Spacer()
-                ProgressView("Chargement…").padding()
+                ProgressView("Loading…").padding()
                 Spacer()
             } else if let err = viewModel.error {
                 Spacer()
-                EmptyStateView(icon: "exclamationmark.triangle", title: "Erreur", subtitle: err)
+                EmptyStateView(icon: "exclamationmark.triangle", title: "Error", subtitle: err)
                 Spacer()
             } else {
                 mainContent
@@ -103,10 +103,10 @@ struct DocumentQuickLookSheet: View {
                     Image(systemName: "doc.text")
                         .font(.largeTitle)
                         .foregroundStyle(HygurColors.textTertiary)
-                    Text("Contenu non disponible")
+                    Text("Content unavailable")
                         .font(HygurTypography.body)
                         .foregroundStyle(HygurColors.textSecondary)
-                    Text("Le texte complet de ce document n'est pas indexé.")
+                    Text("The full text of this document is not indexed.")
                         .font(HygurTypography.caption)
                         .foregroundStyle(HygurColors.textTertiary)
                         .multilineTextAlignment(.center)
@@ -151,12 +151,12 @@ struct DocumentQuickLookSheet: View {
             if viewModel.isLoadingTags {
                 HStack(spacing: HygurSpacing.xs) {
                     ProgressView().controlSize(.mini)
-                    Text("Chargement…").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
+                    Text("Loading…").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
                 }
             } else {
                 if !viewModel.currentTags.isEmpty {
                     VStack(alignment: .leading, spacing: HygurSpacing.xs) {
-                        Text("Actifs").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
+                        Text("Active").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
                         QuickLookTagsFlow(spacing: 6) {
                             ForEach(viewModel.currentTags) { tag in
                                 TagPillView(tag: tag, showRemoveButton: true) {
@@ -170,7 +170,7 @@ struct DocumentQuickLookSheet: View {
 
                 if !viewModel.unassignedTags.isEmpty {
                     VStack(alignment: .leading, spacing: HygurSpacing.xs) {
-                        Text("Ajouter").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
+                        Text("Add").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
                         QuickLookTagsFlow(spacing: 6) {
                             ForEach(viewModel.unassignedTags) { tag in
                                 SelectableTagPillView(tag: tag, isSelected: false) {
@@ -183,7 +183,7 @@ struct DocumentQuickLookSheet: View {
                 }
 
                 if viewModel.currentTags.isEmpty && viewModel.unassignedTags.isEmpty {
-                    Text("Aucun tag créé.")
+                    Text("No tags created yet.")
                         .font(HygurTypography.caption)
                         .foregroundStyle(HygurColors.textTertiary)
                 }
@@ -195,19 +195,19 @@ struct DocumentQuickLookSheet: View {
 
     private var projectSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            Text("Projet")
+            Text("Project")
                 .font(HygurTypography.subheadline)
                 .foregroundStyle(HygurColors.textSecondary)
 
             if viewModel.isLoadingProjects {
                 HStack(spacing: HygurSpacing.xs) {
                     ProgressView().controlSize(.mini)
-                    Text("Chargement…").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
+                    Text("Loading…").font(HygurTypography.caption).foregroundStyle(HygurColors.textTertiary)
                 }
             } else {
                 HStack {
-                    Picker("Projet", selection: $viewModel.selectedProjectId) {
-                        Text("Aucun").tag(String?.none)
+                    Picker("Project", selection: $viewModel.selectedProjectId) {
+                        Text("None").tag(String?.none)
                         ForEach(viewModel.projects) { project in
                             Text(project.name).tag(String?.some(project.id))
                         }
@@ -240,11 +240,11 @@ struct DocumentQuickLookSheet: View {
 
     private var noteSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            Text("Ajouter une note")
+            Text("Add a note")
                 .font(HygurTypography.subheadline)
                 .foregroundStyle(HygurColors.textSecondary)
 
-            TextField("Titre", text: $viewModel.noteTitle)
+            TextField("Title", text: $viewModel.noteTitle)
                 .textFieldStyle(.roundedBorder)
                 .font(HygurTypography.body)
 
@@ -258,7 +258,7 @@ struct DocumentQuickLookSheet: View {
 
             HStack {
                 if viewModel.noteSaved {
-                    Label("Note enregistrée", systemImage: "checkmark.circle.fill")
+                    Label("Note saved", systemImage: "checkmark.circle.fill")
                         .font(HygurTypography.caption)
                         .foregroundStyle(.green)
                 }
@@ -269,7 +269,7 @@ struct DocumentQuickLookSheet: View {
                     if viewModel.isSavingNote {
                         ProgressView().controlSize(.mini)
                     } else {
-                        Label("Enregistrer", systemImage: "arrow.up.circle.fill")
+                        Label("Save", systemImage: "arrow.up.circle.fill")
                     }
                 }
                 .buttonStyle(.borderedProminent)

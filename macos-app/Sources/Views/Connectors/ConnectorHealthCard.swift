@@ -18,8 +18,8 @@ struct ConnectorHealthCard: View {
     private var renderedLabel: String {
         if !health.briefReason.isEmpty {
             return BriefReason(rawValue: health.briefReason).isHealthy
-                ? "Connecté"
-                : "Déconnecté"
+                ? "Connected"
+                : "Disconnected"
         }
         return health.statusEnum.label
     }

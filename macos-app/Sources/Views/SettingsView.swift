@@ -27,7 +27,7 @@ struct SettingsView: View {
                 testConnection: testConnection,
                 loadTokenFromSidecar: loadTokenFromSidecar
             )
-            .tabItem { Label("Connexion", systemImage: "network") }
+            .tabItem { Label("Connection", systemImage: "network") }
             .tag(SettingsTab.connection)
 
             LMStudioTab()
@@ -35,7 +35,7 @@ struct SettingsView: View {
                 .tag(SettingsTab.lmStudio)
 
             ModelTab(settings: settings)
-                .tabItem { Label("Modèle", systemImage: "cpu") }
+                .tabItem { Label("Model", systemImage: "cpu") }
                 .tag(SettingsTab.model)
 
             NotificationsTab()
@@ -47,11 +47,11 @@ struct SettingsView: View {
                 isResetting: $isResetting,
                 resetMessage: $resetMessage
             )
-            .tabItem { Label("Système", systemImage: "gearshape") }
+            .tabItem { Label("System", systemImage: "gearshape") }
             .tag(SettingsTab.system)
 
             AboutTab(sidecarVersion: sidecarVersion)
-                .tabItem { Label("À propos", systemImage: "info.circle") }
+                .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(SettingsTab.about)
         }
         .onReceive(NotificationCenter.default.publisher(for: .openUpdatesPane)) { _ in
@@ -67,16 +67,16 @@ struct SettingsView: View {
         )
         .background(HygurColors.background)
         .confirmationDialog(
-            "Réinitialiser la base de connaissance ?",
+            "Reset knowledge base?",
             isPresented: $showResetConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Réinitialiser", role: .destructive) {
+            Button("Reset", role: .destructive) {
                 Task { await resetKnowledgeBase() }
             }
-            Button("Annuler", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Cette action supprime définitivement tous les documents, chunks et embeddings. Impossible d'annuler.")
+            Text("This permanently deletes all documents, chunks and embeddings. Cannot be undone.")
         }
         .onAppear {
             checkTokenStatus()
@@ -122,10 +122,10 @@ struct SettingsView: View {
         Task {
             if let token = await service.getToken(), !token.isEmpty {
                 tokenStatus = .valid
-                tokenMessage = "Token chargé depuis le Keychain"
+                tokenMessage = "Token loaded from Keychain"
             } else {
                 tokenStatus = .missing
-                tokenMessage = "Cliquez sur 'Charger le token' pour l'importer depuis le sidecar"
+                tokenMessage = "Click 'Load token' to import it from the sidecar"
             }
         }
     }
@@ -137,15 +137,15 @@ struct SettingsView: View {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty else {
                 tokenStatus = .invalid
-                tokenMessage = "Le fichier token est vide"
+                tokenMessage = "Token file is empty"
                 return
             }
             try SidecarService.saveTokenToKeychain(token)
             tokenStatus = .valid
-            tokenMessage = "Token importé avec succès. Redémarrez l'application pour l'appliquer."
+            tokenMessage = "Token imported successfully. Restart the app to apply."
         } catch {
             tokenStatus = .missing
-            tokenMessage = "Impossible de lire ~/Library/Application Support/Hygur/token : \(error.localizedDescription)"
+            tokenMessage = "Could not read ~/Library/Application Support/Hygur/token: \(error.localizedDescription)"
         }
     }
 
@@ -155,9 +155,9 @@ struct SettingsView: View {
         do {
             let sidecar = SidecarService.fromSettings()
             try await sidecar.resetKnowledgeBase()
-            resetMessage = "Réinitialisation réussie. Réimportez vos documents."
+            resetMessage = "Reset successful. Re-import your documents."
         } catch {
-            resetMessage = "Échec : \(error.localizedDescription)"
+            resetMessage = "Failed: \(error.localizedDescription)"
         }
         isResetting = false
     }
@@ -263,12 +263,12 @@ private struct ConnectionTab: View {
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Authentification")
+                SettingsSectionHeader(title: "Authentication")
                 SettingsCard {
                     HStack(spacing: HygurSpacing.sm) {
                         tokenStatusBadge
                         Spacer()
-                        Button("Charger le token") { loadTokenFromSidecar() }
+                        Button("Load token") { loadTokenFromSidecar() }
                             .buttonStyle(.bordered).controlSize(.small)
                     }
                     .padding(HygurSpacing.lg)
@@ -284,7 +284,7 @@ private struct ConnectionTab: View {
             }
 
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "URL du sidecar")
+                SettingsSectionHeader(title: "Sidecar URL")
                 SettingsCard {
                     TextField("http://localhost:8420", text: $settings.sidecarURL)
                         .textFieldStyle(.plain)
@@ -294,14 +294,14 @@ private struct ConnectionTab: View {
                     HStack(spacing: HygurSpacing.sm) {
                         connectionStatusBadge
                         Spacer()
-                        Button("Tester la connexion") { Task { await testConnection() } }
+                        Button("Test connection") { Task { await testConnection() } }
                             .buttonStyle(.bordered).controlSize(.small)
                             .disabled(isTestingConnection || !settings.isValidURL)
                     }
                     .padding(HygurSpacing.lg)
                     if !settings.isValidURL && !settings.sidecarURL.isEmpty {
                         CardDivider()
-                        Text("Format d'URL invalide. Utilisez http:// ou https://")
+                        Text("Invalid URL format. Use http:// or https://")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.danger)
                             .padding(.horizontal, HygurSpacing.lg)
@@ -317,16 +317,16 @@ private struct ConnectionTab: View {
             switch connectionStatus {
             case .unknown:
                 Image(systemName: "circle").foregroundStyle(HygurColors.textTertiary)
-                Text("Non testé").foregroundStyle(HygurColors.textSecondary)
+                Text("Not tested").foregroundStyle(HygurColors.textSecondary)
             case .testing:
                 LoadingIndicator(style: .small)
-                Text("Test en cours…").foregroundStyle(HygurColors.textSecondary)
+                Text("Testing…").foregroundStyle(HygurColors.textSecondary)
             case .connected:
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(HygurColors.success)
-                Text("Connecté").foregroundStyle(HygurColors.success)
+                Text("Connected").foregroundStyle(HygurColors.success)
             case .disconnected:
                 Image(systemName: "xmark.circle.fill").foregroundStyle(HygurColors.danger)
-                Text("Inaccessible").foregroundStyle(HygurColors.danger)
+                Text("Unreachable").foregroundStyle(HygurColors.danger)
             }
         }
         .font(HygurTypography.caption)
@@ -337,16 +337,16 @@ private struct ConnectionTab: View {
             switch tokenStatus {
             case .unknown:
                 Image(systemName: "key").foregroundStyle(HygurColors.textTertiary)
-                Text("Non vérifié").foregroundStyle(HygurColors.textSecondary)
+                Text("Not checked").foregroundStyle(HygurColors.textSecondary)
             case .valid:
                 Image(systemName: "key.fill").foregroundStyle(HygurColors.success)
-                Text("Token chargé").foregroundStyle(HygurColors.success)
+                Text("Token loaded").foregroundStyle(HygurColors.success)
             case .missing:
                 Image(systemName: "key.slash").foregroundStyle(HygurColors.warning)
-                Text("Aucun token").foregroundStyle(HygurColors.warning)
+                Text("No token").foregroundStyle(HygurColors.warning)
             case .invalid:
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(HygurColors.danger)
-                Text("Token invalide").foregroundStyle(HygurColors.danger)
+                Text("Invalid token").foregroundStyle(HygurColors.danger)
             }
         }
         .font(HygurTypography.caption)
@@ -409,7 +409,7 @@ private struct LMStudioTab: View {
 
     private var inferenceSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            SettingsSectionHeader(title: "Inférence (chat)")
+            SettingsSectionHeader(title: "Inference (chat)")
             SettingsCard {
                 LabeledURLField(
                     label: "URL",
@@ -422,9 +422,9 @@ private struct LMStudioTab: View {
                 }
                 CardDivider()
                 ModelAutocompleteField(
-                    label: "Modèle",
-                    placeholder: "ex. mistral-7b-instruct",
-                    hint: "Modèle par défaut pour le chat",
+                    label: "Model",
+                    placeholder: "e.g. mistral-7b-instruct",
+                    hint: "Default chat model",
                     text: $modelDefault,
                     options: inferenceModelOptions,
                     isLoading: isLoadingInferenceModels,
@@ -441,7 +441,7 @@ private struct LMStudioTab: View {
                 LabeledURLField(
                     label: "URL",
                     placeholder: "http://192.168.x.x:8081",
-                    hint: "Laisser vide pour réutiliser l'URL d'inférence",
+                    hint: "Leave empty to reuse the inference URL",
                     text: $embeddingURL
                 )
                 .onChange(of: embeddingURL) { _, _ in
@@ -449,9 +449,9 @@ private struct LMStudioTab: View {
                 }
                 CardDivider()
                 ModelAutocompleteField(
-                    label: "Modèle",
-                    placeholder: "ex. text-embedding-nomic-embed-text-v1.5",
-                    hint: "Laisser vide pour utiliser le modèle par défaut du serveur",
+                    label: "Model",
+                    placeholder: "e.g. text-embedding-nomic-embed-text-v1.5",
+                    hint: "Leave empty to use the server's default model",
                     text: $embeddingModel,
                     options: embeddingModelOptions,
                     isLoading: isLoadingEmbeddingModels,
@@ -463,20 +463,20 @@ private struct LMStudioTab: View {
 
     private var retrievalSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            SettingsSectionHeader(title: "Recherche (RAG)")
+            SettingsSectionHeader(title: "Search (RAG)")
             SettingsCard {
                 CardRow(
                     icon: "brain",
-                    title: "Classificateur d'intention (LLM)",
-                    subtitle: "Améliore la précision — ajoute ~0,5 s par requête"
+                    title: "Intent classifier (LLM)",
+                    subtitle: "Improves precision — adds ~0.5 s per query"
                 ) {
                     Toggle("", isOn: $useLlmIntent).toggleStyle(.switch).labelsHidden()
                 }
                 CardDivider()
                 CardRow(
                     icon: "checkmark.seal",
-                    title: "Juge de pertinence (LLM)",
-                    subtitle: "Post-filtre les résultats faibles — ajoute 1–3 s par requête"
+                    title: "Relevance judge (LLM)",
+                    subtitle: "Post-filters weak results — adds 1–3 s per query"
                 ) {
                     Toggle("", isOn: $useJudge).toggleStyle(.switch).labelsHidden()
                 }
@@ -486,16 +486,16 @@ private struct LMStudioTab: View {
 
     private var briefSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            SettingsSectionHeader(title: "Brief quotidien")
+            SettingsSectionHeader(title: "Daily brief")
             SettingsCard {
-                CardRow(icon: "sun.horizon", title: "Activer le brief automatique",
-                        subtitle: "Récapitulatif IA de l'activité de la veille") {
+                CardRow(icon: "sun.horizon", title: "Enable automatic brief",
+                        subtitle: "AI summary of yesterday's activity") {
                     Toggle("", isOn: $dailyBriefEnabled).toggleStyle(.switch).labelsHidden()
                 }
                 if dailyBriefEnabled {
                     CardDivider()
                     HStack {
-                        Text("Heure")
+                        Text("Time")
                             .font(HygurTypography.subheadline)
                             .foregroundStyle(HygurColors.textPrimary)
                         Spacer()
@@ -514,14 +514,14 @@ private struct LMStudioTab: View {
 
     private var loggingSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            SettingsSectionHeader(title: "Logs sidecar")
+            SettingsSectionHeader(title: "Sidecar logs")
             SettingsCard {
                 HStack(spacing: HygurSpacing.md) {
                     Image(systemName: "doc.text.magnifyingglass")
                         .font(.system(size: 15))
                         .foregroundStyle(HygurColors.accent)
                         .frame(width: 22)
-                    Text("Niveau de log")
+                    Text("Log level")
                         .font(HygurTypography.subheadline)
                         .foregroundStyle(HygurColors.textPrimary)
                     Spacer()
@@ -548,13 +548,13 @@ private struct LMStudioTab: View {
                 case .saving:
                     HStack(spacing: HygurSpacing.xs) {
                         LoadingIndicator(style: .small)
-                        Text("Enregistrement…").font(HygurTypography.caption)
+                        Text("Saving…").font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
                 case .restarting:
                     HStack(spacing: HygurSpacing.xs) {
                         LoadingIndicator(style: .small)
-                        Text("Redémarrage du sidecar…")
+                        Text("Restarting sidecar…")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
@@ -562,7 +562,7 @@ private struct LMStudioTab: View {
                     HStack(spacing: HygurSpacing.xs) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(HygurColors.success)
-                        Text("Enregistré et appliqué")
+                        Text("Saved and applied")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
@@ -576,7 +576,7 @@ private struct LMStudioTab: View {
                 }
             }
             Spacer()
-            Button("Enregistrer") { Task { await saveConfig() } }
+            Button("Save") { Task { await saveConfig() } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .disabled(isSaving)
@@ -745,7 +745,7 @@ private struct ModelAutocompleteField: View {
                         Image(systemName: "list.bullet")
                     }
                     .buttonStyle(.plain)
-                    .help("Choisir un modèle disponible")
+                    .help("Pick an available model")
                     .popover(isPresented: $isShowingPopover, arrowEdge: .top) {
                         modelList
                     }
@@ -757,14 +757,14 @@ private struct ModelAutocompleteField: View {
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
-                .help("Rafraîchir la liste depuis /v1/models")
+                .help("Refresh list from /v1/models")
             }
             HStack(spacing: HygurSpacing.xs) {
                 Text(hint)
                     .font(HygurTypography.caption)
                     .foregroundStyle(HygurColors.textTertiary)
                 if !options.isEmpty {
-                    Text("· \(options.count) modèle\(options.count > 1 ? "s" : "") détecté\(options.count > 1 ? "s" : "")")
+                    Text("· \(options.count) model\(options.count > 1 ? "s" : "") detected")
                         .font(HygurTypography.caption)
                         .foregroundStyle(HygurColors.textTertiary)
                 }
@@ -883,7 +883,7 @@ private struct LabeledTextField: View {
     }
 }
 
-// MARK: - Tab 3: Modèle (app-side preferences)
+// MARK: - Tab 3: Model (app-side preferences)
 
 private struct ModelTab: View {
     @ObservedObject var settings: AppPreferences
@@ -891,17 +891,17 @@ private struct ModelTab: View {
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Préférences de chat")
+                SettingsSectionHeader(title: "Chat preferences")
                 SettingsCard {
                     VStack(alignment: .leading, spacing: HygurSpacing.xs) {
-                        Text("Modèle préféré")
+                        Text("Preferred model")
                             .font(HygurTypography.subheadline)
                             .foregroundStyle(HygurColors.textPrimary)
-                        TextField("ex. gpt-4o, mistral-large…", text: $settings.defaultModel)
+                        TextField("e.g. gpt-4o, mistral-large…", text: $settings.defaultModel)
                             .textFieldStyle(.plain)
                             .font(HygurTypography.body)
                             .foregroundStyle(HygurColors.textPrimary)
-                        Text("Affiché dans le sélecteur de modèle du chat")
+                        Text("Shown in the chat's model picker")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textTertiary)
                     }
@@ -911,7 +911,7 @@ private struct ModelTab: View {
 
                     VStack(alignment: .leading, spacing: HygurSpacing.sm) {
                         HStack {
-                            Text("Timeout réseau")
+                            Text("Network timeout")
                                 .font(HygurTypography.subheadline)
                                 .foregroundStyle(HygurColors.textPrimary)
                             Spacer()
@@ -944,11 +944,11 @@ private struct NotificationsTab: View {
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Alertes système")
+                SettingsSectionHeader(title: "System alerts")
                 SettingsCard {
                     NotificationToggleRow(
-                        title: "Brief quotidien",
-                        description: "Notification quand le brief du jour est prêt",
+                        title: "Daily brief",
+                        description: "Notify when today's brief is ready",
                         icon: "sun.horizon",
                         isOn: $dailyBrief
                     )
@@ -958,8 +958,8 @@ private struct NotificationsTab: View {
                     }
                     CardDivider()
                     NotificationToggleRow(
-                        title: "Emails prioritaires",
-                        description: "Notification à la réception d'un email prioritaire",
+                        title: "Priority emails",
+                        description: "Notify when a priority email arrives",
                         icon: "envelope.badge",
                         isOn: $priorityMail
                     )
@@ -969,7 +969,7 @@ private struct NotificationsTab: View {
                     }
                 }
             }
-            Text("Les notifications système s'affichent en bannière. L'entrée dans la sidebar Activité reste disponible quelle que soit la configuration ci-dessus.")
+            Text("System notifications appear as banners. The Activity sidebar entry remains available regardless of the settings above.")
                 .font(HygurTypography.caption)
                 .foregroundStyle(HygurColors.textTertiary)
         }
@@ -999,7 +999,7 @@ private struct NotificationToggleRow: View {
     }
 }
 
-// MARK: - Tab 5: Système
+// MARK: - Tab 5: System
 
 private struct SystemTab: View {
     @Binding var showResetConfirmation: Bool
@@ -1009,9 +1009,9 @@ private struct SystemTab: View {
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Démarrage")
+                SettingsSectionHeader(title: "Startup")
                 SettingsCard {
-                    CardRow(icon: "power.circle", title: "Lancer Hygur à la connexion",
+                    CardRow(icon: "power.circle", title: "Launch Hygur at login",
                             subtitle: LaunchAgentService.shared.statusDescription) {
                         Toggle("", isOn: Binding(
                             get: { LaunchAgentService.shared.isRegistered },
@@ -1026,21 +1026,21 @@ private struct SystemTab: View {
             }
 
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Processus sidecar")
+                SettingsSectionHeader(title: "Sidecar process")
                 SettingsCard {
                     SidecarStatusRow().padding(HygurSpacing.lg)
                 }
             }
 
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Base de connaissance")
+                SettingsSectionHeader(title: "Knowledge base")
                 SettingsCard {
                     CardRow(icon: "trash", iconColor: HygurColors.danger,
-                            title: "Réinitialiser la base de connaissance",
-                            subtitle: "Supprime tous les documents, chunks et embeddings") {
+                            title: "Reset knowledge base",
+                            subtitle: "Deletes all documents, chunks and embeddings") {
                         Button(role: .destructive) { showResetConfirmation = true } label: {
                             if isResetting { LoadingIndicator(style: .small) }
-                            else { Text("Réinitialiser") }
+                            else { Text("Reset") }
                         }
                         .buttonStyle(.bordered).controlSize(.small).disabled(isResetting)
                     }
@@ -1048,7 +1048,7 @@ private struct SystemTab: View {
                         CardDivider()
                         Text(resetMessage)
                             .font(HygurTypography.caption)
-                            .foregroundStyle(resetMessage.contains("réussie") ? HygurColors.success : HygurColors.danger)
+                            .foregroundStyle(resetMessage.contains("successful") ? HygurColors.success : HygurColors.danger)
                             .padding(.horizontal, HygurSpacing.lg)
                             .padding(.vertical, HygurSpacing.md)
                     }
@@ -1058,7 +1058,7 @@ private struct SystemTab: View {
     }
 }
 
-// MARK: - Tab 6: À propos
+// MARK: - Tab 6: About
 
 private struct AboutTab: View {
     let sidecarVersion: String
@@ -1066,7 +1066,7 @@ private struct AboutTab: View {
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Mises à jour")
+                SettingsSectionHeader(title: "Updates")
                 UpdateCard()
             }
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
@@ -1080,9 +1080,9 @@ private struct AboutTab: View {
                 }
             }
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Ressources")
+                SettingsSectionHeader(title: "Resources")
                 SettingsCard {
-                    Link(destination: URL(string: "https://github.com/hygurlabs/hygur")!) {
+                    Link(destination: URL(string: "https://github.com/hygurlabs/hygur-app")!) {
                         HStack(spacing: HygurSpacing.sm) {
                             Image(systemName: "arrow.up.right.square")
                                 .font(.system(size: 14)).foregroundStyle(HygurColors.accent)
@@ -1107,7 +1107,7 @@ private struct UpdateCard: View {
         @Bindable var updater = updater
         SettingsCard {
             HStack {
-                Text("Vérification automatique")
+                Text("Automatic checks")
                     .font(HygurTypography.subheadline)
                     .foregroundStyle(HygurColors.textPrimary)
                 Spacer()
@@ -1120,7 +1120,7 @@ private struct UpdateCard: View {
             CardDivider()
 
             HStack {
-                Text("Dernière vérification")
+                Text("Last checked")
                     .font(HygurTypography.subheadline)
                     .foregroundStyle(HygurColors.textPrimary)
                 Spacer()
@@ -1138,10 +1138,10 @@ private struct UpdateCard: View {
     }
 
     private var lastCheckedLabel: String {
-        guard let date = updater.lastCheckedAt else { return "jamais" }
+        guard let date = updater.lastCheckedAt else { return "never" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.locale = Locale(identifier: "en_US")
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
@@ -1149,23 +1149,23 @@ private struct UpdateCard: View {
     private var statusSection: some View {
         switch updater.status {
         case .idle:
-            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Cliquez pour vérifier la disponibilité d'une mise à jour.") {
-                checkButton(label: "Vérifier maintenant")
+            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Click to check for updates.") {
+                checkButton(label: "Check now")
             }
 
         case .checking:
-            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Vérification en cours…") {
+            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Checking…") {
                 LoadingIndicator(style: .small)
             }
 
         case .upToDate:
-            statusRow(icon: "checkmark.circle.fill", color: HygurColors.success, message: "Hygur \(Bundle.main.appVersion) est à jour.") {
-                checkButton(label: "Vérifier")
+            statusRow(icon: "checkmark.circle.fill", color: HygurColors.success, message: "Hygur \(Bundle.main.appVersion) is up to date.") {
+                checkButton(label: "Check")
             }
 
         case .available(let release):
             VStack(alignment: .leading, spacing: HygurSpacing.md) {
-                statusRow(icon: "arrow.down.circle.fill", color: HygurColors.accent, message: "Mise à jour disponible : \(release.name)") {
+                statusRow(icon: "arrow.down.circle.fill", color: HygurColors.accent, message: "Update available: \(release.name)") {
                     EmptyView()
                 }
                 if !release.body.isEmpty {
@@ -1178,7 +1178,7 @@ private struct UpdateCard: View {
                         }
                         .frame(maxHeight: 200)
                     } label: {
-                        Text("Notes de version")
+                        Text("Release notes")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
@@ -1187,14 +1187,14 @@ private struct UpdateCard: View {
                     Button {
                         Task { await updater.downloadAndInstall() }
                     } label: {
-                        Text("Installer maintenant")
+                        Text("Install now")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(release.dmgAsset == nil)
 
                     Link(destination: release.htmlURL) {
-                        Text("Voir sur GitHub")
+                        Text("View on GitHub")
                             .font(HygurTypography.caption)
                     }
                     .buttonStyle(.plain)
@@ -1203,7 +1203,7 @@ private struct UpdateCard: View {
                     Spacer()
                 }
                 if release.dmgAsset == nil {
-                    Text("Aucun DMG disponible pour cette version.")
+                    Text("No DMG available for this release.")
                         .font(HygurTypography.caption)
                         .foregroundStyle(HygurColors.danger)
                 }
@@ -1212,7 +1212,7 @@ private struct UpdateCard: View {
         case .downloading(let progress):
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
                 HStack {
-                    Text("Téléchargement…")
+                    Text("Downloading…")
                         .font(HygurTypography.subheadline)
                         .foregroundStyle(HygurColors.textPrimary)
                     Spacer()
@@ -1225,25 +1225,25 @@ private struct UpdateCard: View {
             }
 
         case .readyToInstall:
-            statusRow(icon: "checkmark.circle.fill", color: HygurColors.success, message: "Téléchargement terminé. Prêt à installer.") {
+            statusRow(icon: "checkmark.circle.fill", color: HygurColors.success, message: "Download complete. Ready to install.") {
                 Button {
                     Task { await updater.downloadAndInstall() }
                 } label: {
-                    Text("Installer maintenant")
+                    Text("Install now")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             }
 
         case .installing:
-            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Installation en cours, l'application va redémarrer…") {
+            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Installing — the app will restart…") {
                 LoadingIndicator(style: .small)
             }
 
         case .error(let message):
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
                 statusRow(icon: "exclamationmark.triangle.fill", color: HygurColors.danger, message: message) {
-                    checkButton(label: "Réessayer")
+                    checkButton(label: "Retry")
                 }
             }
         }
@@ -1310,10 +1310,10 @@ private struct SidecarStatusRow: View {
                     .font(HygurTypography.callout)
                     .foregroundStyle(HygurColors.textPrimary)
                 Spacer()
-                Button("Voir les logs") { openLogs() }
+                Button("View logs") { openLogs() }
                     .buttonStyle(.bordered).controlSize(.small)
-                    .help("Ouvre sidecar.log dans Console.app")
-                Button("Redémarrer") { Task { await supervisor.restart() } }
+                    .help("Open sidecar.log in Console.app")
+                Button("Restart") { Task { await supervisor.restart() } }
                     .buttonStyle(.bordered).controlSize(.small)
             }
             if let err = supervisor.lastError {
@@ -1327,10 +1327,10 @@ private struct SidecarStatusRow: View {
     }
 
     private var statusLine: String {
-        if !supervisor.isRunning { return "Sidecar arrêté (ou externe)" }
+        if !supervisor.isRunning { return "Sidecar stopped (or external)" }
         let pidStr = supervisor.pid.map { String($0) } ?? "?"
         let uptime = supervisor.uptime.map(formatUptime) ?? "?"
-        return "Sidecar actif · PID \(pidStr) · uptime \(uptime)"
+        return "Sidecar running · PID \(pidStr) · uptime \(uptime)"
     }
 
     private func formatUptime(_ secs: TimeInterval) -> String {

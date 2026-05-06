@@ -152,7 +152,7 @@ final class DocumentQuickLookViewModel {
         defer { isSavingNote = false }
 
         let sourceTitle = item?.title ?? contentId
-        let body = "> Lié à : \(sourceTitle) (\(contentId))\n\n\(noteContent)"
+        let body = "> Linked to: \(sourceTitle) (\(contentId))\n\n\(noteContent)"
 
         do {
             _ = try await sidecar.createNote(

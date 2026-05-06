@@ -43,7 +43,7 @@ struct TagAutocompleteField: View {
             HStack(spacing: HygurSpacing.sm) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(HygurColors.textTertiary)
-                TextField("Rechercher ou créer un tag…", text: $query)
+                TextField("Search or create a tag…", text: $query)
                     .textFieldStyle(.plain)
                     .focused($isFocused)
                     .onSubmit(commitCurrent)
@@ -120,7 +120,7 @@ struct TagAutocompleteField: View {
             }
 
             // If the typed name doesn't match any visible suggestion, show a
-            // "Créer" affordance so the user can finalise the new tag with Return.
+            // "Create" affordance so the user can finalise the new tag with Return.
             if onCreate != nil, !query.trimmingCharacters(in: .whitespaces).isEmpty,
                !suggestions.contains(where: { $0.name.caseInsensitiveCompare(query) == .orderedSame }) {
                 Divider().padding(.vertical, 4)
@@ -144,7 +144,7 @@ struct TagAutocompleteField: View {
             HStack(spacing: HygurSpacing.sm) {
                 Image(systemName: "plus.circle")
                     .foregroundStyle(HygurColors.accent)
-                Text("Créer le tag « \(query) »")
+                Text("Create tag “\(query)”")
                     .font(HygurTypography.body)
                 Spacer()
                 Text("⏎")
@@ -171,7 +171,7 @@ struct TagAutocompleteField: View {
             HStack(spacing: HygurSpacing.sm) {
                 Image(systemName: "plus.circle.fill")
                     .foregroundStyle(HygurColors.accent)
-                Text("Créer « \(query) »")
+                Text("Create “\(query)”")
                     .font(HygurTypography.body)
                 Spacer()
             }

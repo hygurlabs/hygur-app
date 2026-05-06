@@ -70,7 +70,7 @@ final class NotificationsService {
     /// dictates three layouts depending on the count:
     ///   - 1 mail  → single-line body with the one_liner.
     ///   - 2-3     → grouped, body lists every one_liner on its own row.
-    ///   - 4+      → grouped, body shows top-3 one_liners + "+N autres".
+    ///   - 4+      → grouped, body shows top-3 one_liners + "+N more".
     /// Tap routes to the Activity view via `userInfo.kind` so the existing
     /// notification-tap pipeline can deep-link.
     private func postMailDigest(_ event: ActivityEvent) async {
@@ -82,16 +82,16 @@ final class NotificationsService {
         content.sound = .default
 
         if items.count == 1, let only = items.first {
-            content.title = "Email important"
+            content.title = "Important email"
             content.body = only.oneLiner
         } else if items.count <= 3 {
-            content.title = "\(items.count) nouveaux emails importants"
+            content.title = "\(items.count) new important emails"
             content.body = items.map(\.oneLiner).joined(separator: "\n")
         } else {
-            content.title = "\(total) nouveaux emails importants"
+            content.title = "\(total) new important emails"
             let top = items.prefix(3).map(\.oneLiner).joined(separator: "\n")
             let extra = total - 3
-            content.body = extra > 0 ? "\(top)\n+\(extra) autres" : top
+            content.body = extra > 0 ? "\(top)\n+\(extra) more" : top
         }
 
         content.userInfo = [
@@ -107,7 +107,7 @@ final class NotificationsService {
     private func postPriorityMail(_ event: ActivityEvent) async {
         let content = UNMutableNotificationContent()
         let from = event.raw.string("from") ?? "Unknown sender"
-        content.title = "Email important — \(from)"
+        content.title = "Important email — \(from)"
 
         var bodyParts: [String] = []
         if let title = event.raw.string("title"), !title.isEmpty { bodyParts.append(title) }
@@ -125,12 +125,12 @@ final class NotificationsService {
     }
 
     private func postAgendaAlert(_ event: ActivityEvent) async {
-        let what = event.raw.string("what") ?? event.message ?? "Action imminente"
+        let what = event.raw.string("what") ?? event.message ?? "Upcoming action"
         let deadline = event.raw.string("deadline_iso") ?? ""
 
         let content = UNMutableNotificationContent()
-        content.title = "Deadline imminente : \(what)"
-        content.body = deadline.isEmpty ? "" : "Deadline : \(relativeDeadlineLabel(from: deadline))"
+        content.title = "Upcoming deadline: \(what)"
+        content.body = deadline.isEmpty ? "" : "Deadline: \(relativeDeadlineLabel(from: deadline))"
         content.sound = .default
         content.userInfo = [
             "kind": "agenda_alert",
@@ -153,9 +153,9 @@ final class NotificationsService {
         let formatter = notifDateFormatter()
         guard let date = formatter.date(from: isoDate) else { return isoDate }
         let days = Calendar.current.dateComponents([.day], from: Date(), to: date).day ?? 0
-        if days <= 0 { return "Aujourd'hui" }
-        if days == 1 { return "Demain" }
-        return "Dans \(days) jours"
+        if days <= 0 { return "Today" }
+        if days == 1 { return "Tomorrow" }
+        return "In \(days) days"
     }
 
     private func notifDateFormatter() -> DateFormatter {
@@ -169,14 +169,14 @@ final class NotificationsService {
     private func postDailyBrief(_ event: ActivityEvent) async {
         let content = UNMutableNotificationContent()
         let date = event.raw.string("date") ?? ""
-        content.title = date.isEmpty ? "Brief du jour" : "Brief — \(date)"
+        content.title = date.isEmpty ? "Daily brief" : "Brief — \(date)"
 
         if let bullets = event.raw.stringArray("bullets"), !bullets.isEmpty {
             content.body = bullets.prefix(2).joined(separator: " · ")
         } else if let count = event.raw.int("item_count"), count > 0 {
-            content.body = "\(count) éléments d'activité résumés"
+            content.body = "\(count) activity items summarized"
         } else {
-            content.body = "Pas d'activité dans les dernières 24 h."
+            content.body = "No activity in the last 24 hours."
         }
         content.sound = .default
         content.userInfo = [

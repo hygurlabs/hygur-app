@@ -9,13 +9,13 @@ struct MemoriesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FeatureHeader(title: "Mémoires", count: viewModel.memories.count) {
+            FeatureHeader(title: "Memories", count: viewModel.memories.count) {
                 Button {
                     Task { await viewModel.load() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Recharger")
+                .help("Reload")
                 .buttonStyle(.plain)
             }
 
@@ -30,13 +30,13 @@ struct MemoriesView: View {
                 memoryList
             }
         }
-        .searchable(text: $searchText, prompt: "Rechercher dans les mémoires…")
+        .searchable(text: $searchText, prompt: "Search memories…")
         .task { await viewModel.load() }
         .alert(item: $pendingDeletion) { memory in
             Alert(
-                title: Text("Supprimer cette mémoire ?"),
+                title: Text("Delete this memory?"),
                 message: Text(memory.content),
-                primaryButton: .destructive(Text("Supprimer")) {
+                primaryButton: .destructive(Text("Delete")) {
                     Task { await viewModel.delete(memory) }
                 },
                 secondaryButton: .cancel()
@@ -58,13 +58,13 @@ struct MemoriesView: View {
             if searchText.isEmpty {
                 EmptyStateView(
                     icon: "brain.head.profile",
-                    title: "Aucune mémoire pour l'instant",
-                    subtitle: "Hygur extrait automatiquement les faits durables (préférences, identités, deadlines) à partir de tes conversations."
+                    title: "No memories yet",
+                    subtitle: "Hygur automatically extracts durable facts (preferences, identities, deadlines) from your conversations."
                 )
             } else {
                 EmptyStateView(
                     icon: "magnifyingglass",
-                    title: "Rien ne correspond à « \(searchText) »"
+                    title: "Nothing matches “\(searchText)”"
                 )
             }
         }
@@ -117,7 +117,7 @@ private struct MemoryRow: View {
                         .foregroundStyle(.red)
                 }
                 .buttonStyle(.plain)
-                .help("Supprimer")
+                .help("Delete")
             }
         }
         .padding(.vertical, 4)
@@ -125,7 +125,7 @@ private struct MemoryRow: View {
         .onHover { isHovered = $0 }
         .contextMenu {
             Button(role: .destructive, action: onDelete) {
-                Label("Supprimer", systemImage: "trash")
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -142,7 +142,7 @@ private struct MemoryRow: View {
 
     private func badgeLabel(for kind: MemoryKind) -> String {
         switch kind {
-        case .fact:       return "Fait"
+        case .fact:       return "Fact"
         case .preference: return "Pref"
         case .action:     return "Action"
         }

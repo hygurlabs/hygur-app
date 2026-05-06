@@ -60,7 +60,7 @@ struct CommandPaletteView: View {
             Image(systemName: "magnifyingglass")
                 .font(.title3)
                 .foregroundStyle(HygurColors.textSecondary)
-            TextField("Tape une commande, un projet, ou un titre de chat…", text: $viewModel.query)
+            TextField("Type a command, a project, or a chat title…", text: $viewModel.query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .focused($isSearchFocused)
@@ -125,7 +125,7 @@ struct CommandPaletteView: View {
             Image(systemName: "questionmark.circle")
                 .font(.title)
                 .foregroundStyle(HygurColors.textTertiary)
-            Text("Aucune commande ne correspond")
+            Text("No matching commands")
                 .font(.subheadline)
                 .foregroundStyle(HygurColors.textSecondary)
         }

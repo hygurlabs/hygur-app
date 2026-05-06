@@ -38,8 +38,8 @@ enum MemoryKind: String, Sendable {
 
     var label: String {
         switch self {
-        case .fact:       return "Fait"
-        case .preference: return "Préférence"
+        case .fact:       return "Fact"
+        case .preference: return "Preference"
         case .action:     return "Action"
         }
     }

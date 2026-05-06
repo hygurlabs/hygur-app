@@ -119,15 +119,15 @@ enum BriefReason: String, Sendable {
         }
     }
 
-    /// User-facing French label.
+    /// User-facing label.
     var localized: String {
         switch self {
-        case .ok: return "Connecté"
-        case .authIssue: return "Problème d'authentification"
-        case .networkIssue: return "Problème de connexion réseau"
-        case .rateLimited: return "Limite de quota atteinte"
-        case .notConfigured: return "Non configuré"
-        case .unknownIssue: return "Erreur interne"
+        case .ok: return "Connected"
+        case .authIssue: return "Authentication issue"
+        case .networkIssue: return "Network connection issue"
+        case .rateLimited: return "Rate limit reached"
+        case .notConfigured: return "Not configured"
+        case .unknownIssue: return "Internal error"
         }
     }
 

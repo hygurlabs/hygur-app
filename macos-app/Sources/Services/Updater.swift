@@ -99,7 +99,7 @@ final class Updater {
         }
         guard case .available(let release) = status,
               let asset = release.dmgAsset else {
-            status = .error("Aucune mise à jour disponible.")
+            status = .error("No update available.")
             return
         }
         do {
@@ -108,7 +108,7 @@ final class Updater {
             status = .readyToInstall(dmgURL)
             await runInstaller(dmgURL: dmgURL)
         } catch {
-            status = .error("Échec du téléchargement : \(error.localizedDescription)")
+            status = .error("Download failed: \(error.localizedDescription)")
         }
     }
 
@@ -150,7 +150,7 @@ final class Updater {
         if actual != expected {
             try? FileManager.default.removeItem(at: url)
             throw NSError(domain: "Updater", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "L'empreinte SHA256 du fichier téléchargé ne correspond pas à celle publiée."
+                NSLocalizedDescriptionKey: "The downloaded file's SHA256 hash does not match the published one."
             ])
         }
     }
@@ -182,12 +182,12 @@ final class Updater {
         let isInApplications = bundlePath.hasPrefix("/Applications/")
         guard isInApplications else {
             NSWorkspace.shared.open(dmgURL)
-            status = .error("Hygur ne tourne pas depuis /Applications. Le DMG a été ouvert dans le Finder — glissez Hygur.app dans /Applications manuellement.")
+            status = .error("Hygur is not running from /Applications. The DMG has been opened in Finder — drag Hygur.app into /Applications manually.")
             return
         }
 
         guard let scriptURL = Bundle.main.url(forResource: "install-update", withExtension: "sh") else {
-            status = .error("Script d'installation introuvable dans le bundle.")
+            status = .error("Installer script not found in bundle.")
             return
         }
 
@@ -216,7 +216,7 @@ final class Updater {
             task.standardError = FileHandle.nullDevice
             try task.run()
         } catch {
-            status = .error("Impossible de lancer l'installateur : \(error.localizedDescription)")
+            status = .error("Could not launch the installer: \(error.localizedDescription)")
             return
         }
 

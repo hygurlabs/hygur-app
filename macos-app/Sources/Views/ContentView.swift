@@ -205,7 +205,7 @@ struct ContentView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.title = "Indexer un fichier"
+        panel.title = "Index a file"
         panel.allowedContentTypes = Self.indexFilePanelTypes
         guard panel.runModal() == .OK, let url = panel.url else { return }
 

@@ -113,7 +113,7 @@ struct ChatView: View {
                         showingAgendaSheet = true
                     } label: {
                         Label(
-                            "Focus : \(agendaViewModel.actions.count) action\(agendaViewModel.actions.count > 1 ? "s" : "")",
+                            "Focus: \(agendaViewModel.actions.count) action\(agendaViewModel.actions.count > 1 ? "s" : "")",
                             systemImage: "target"
                         )
                         .font(.caption)
@@ -152,7 +152,7 @@ struct ChatView: View {
             Image(systemName: "scope")
                 .font(.caption)
                 .foregroundStyle(HygurColors.accent)
-            Text("Filtré sur \(label)")
+            Text("Filtered on \(label)")
                 .font(.caption)
                 .foregroundStyle(HygurColors.textSecondary)
             Spacer()
@@ -163,7 +163,7 @@ struct ChatView: View {
                     .foregroundStyle(HygurColors.textTertiary)
             }
             .buttonStyle(.plain)
-            .help("Retirer le filtre")
+            .help("Remove filter")
         }
         .padding(.horizontal, HygurSpacing.md)
         .padding(.vertical, HygurSpacing.sm)
