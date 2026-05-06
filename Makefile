@@ -164,14 +164,14 @@ verify-dmg: package-dmg
 # ── GitHub release ───────────────────────────────────────────────────────────
 
 release: package-dmg
-	@echo "→ Draft release v$(VERSION) sur hygurlabs/hygur..."
+	@echo "→ Draft release v$(VERSION) sur hygurlabs/hygur-app..."
 	gh release create "v$(VERSION)" \
 		"$(BUILD_DIR)/$(DMG_NAME)" \
-		--repo hygurlabs/hygur \
+		--repo hygurlabs/hygur-app \
 		--title "Hygur $(VERSION)" \
 		--draft \
 		--generate-notes
-	@echo "✅ Draft créé — à publier sur github.com/hygurlabs/hygur/releases"
+	@echo "✅ Draft créé — à publier sur github.com/hygurlabs/hygur-app/releases"
 
 # ── Nettoyage ────────────────────────────────────────────────────────────────
 
