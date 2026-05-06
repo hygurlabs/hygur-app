@@ -1,3 +1,5 @@
+import AppKit
+import Darwin
 import Foundation
 import Observation
 
@@ -65,11 +67,47 @@ final class SidecarSupervisor {
     private let unhealthyThreshold: Int = 2
     private var healthTask: Task<Void, Never>?
 
+    /// Token for the willTerminate observer so we can remove it on deinit.
+    /// Marked nonisolated(unsafe) because NotificationCenter's `removeObserver`
+    /// must be callable from `deinit`, which doesn't run on the main actor.
+    nonisolated(unsafe) private var terminationObserver: NSObjectProtocol?
+
+    init() {
+        // Hook macOS app shutdown: Cmd+Q, "Quit Hygur" menu item, and any other
+        // graceful termination route fire `willTerminateNotification` on the
+        // main thread. We send SIGTERM to the child and briefly block the main
+        // thread so the kernel forwards the signal before the parent exits —
+        // otherwise the child becomes orphaned and keeps holding port 8420,
+        // which blocks the next launch from binding.
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.terminateSynchronously()
+            }
+        }
+    }
+
+    deinit {
+        if let observer = terminationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     /// Spawn the sidecar. No-op if already running. Sets `lastError` if the
     /// binary is missing or cannot be made executable.
     func start() {
         guard !isRunning else { return }
         intentionalStop = false
+
+        // Belt-and-suspenders: a previous run may have leaked an orphaned
+        // sidecar holding the configured port (typically 8420). Detect and
+        // kill it here so the new child can bind cleanly. This only kills
+        // processes whose binary basename is `hygur-sidecar` so we never
+        // touch unrelated services that happen to share the port.
+        reapStaleSidecar()
 
         // Xcode's CpResource phase strips the execute bit from bundled binaries.
         // Restore it here (in a mutating context) so `isExecutableFile` passes.
@@ -174,6 +212,72 @@ final class SidecarSupervisor {
     }
 
     // MARK: - Private
+
+    /// Synchronous variant of `stop()` for use during `applicationWillTerminate`,
+    /// where the runloop is about to be torn down and async tasks won't get to
+    /// run. Sends SIGTERM, polls for up to 3 s, then SIGKILLs as a fallback.
+    private func terminateSynchronously() {
+        guard let proc = process, proc.isRunning else { return }
+        intentionalStop = true
+        proc.terminate()
+        let deadline = Date().addingTimeInterval(3.0)
+        while proc.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if proc.isRunning {
+            kill(proc.processIdentifier, SIGKILL)
+        }
+    }
+
+    /// Locate any stray `hygur-sidecar` process (typically an orphan from a
+    /// prior run that didn't shut down cleanly) and SIGTERM it, with a short
+    /// SIGKILL fallback if it doesn't exit. Matches by binary name only —
+    /// never touches unrelated processes — and silently no-ops when nothing
+    /// is found.
+    private func reapStaleSidecar() {
+        let ourPID = ProcessInfo.processInfo.processIdentifier
+        let pidsOutput = runForOutput("/usr/bin/pgrep", ["-x", "hygur-sidecar"]) ?? ""
+        let candidates = pidsOutput
+            .split(whereSeparator: { $0.isNewline })
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { $0 != ourPID }
+
+        for pid in candidates {
+            kill(pid, SIGTERM)
+        }
+        guard !candidates.isEmpty else { return }
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            let alive = candidates.contains(where: { kill($0, 0) == 0 })
+            if !alive { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        for pid in candidates where kill(pid, 0) == 0 {
+            kill(pid, SIGKILL)
+        }
+    }
+
+    /// Run a child process and capture its stdout. Returns nil on failure.
+    /// Used only by `reapStaleSidecar` for `pgrep` — keeps the dependency
+    /// surface minimal so we don't pull a generic shell helper into the
+    /// supervisor for one call site.
+    private func runForOutput(_ path: String, _ args: [String]) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = args
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        return String(data: data, encoding: .utf8)
+    }
 
     private func handleTermination(_ terminated: Process) {
         cleanup()

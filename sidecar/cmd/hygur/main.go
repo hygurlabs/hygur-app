@@ -49,6 +49,13 @@ func main() {
 	// Initialize structured logger
 	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 
+	// Parent-process watchdog: when the macOS app force-quits or crashes, the
+	// kernel re-parents us to launchd (PID 1) without sending SIGTERM. macOS
+	// has no PR_SET_PDEATHSIG equivalent, so we poll. If our PPID flips to 1
+	// (or any other unexpected value), trigger graceful shutdown so the HTTP
+	// port is released — otherwise the next app launch can't bind.
+	watchParent(ctx, stop, logger)
+
 	// Determine data directory early — needed to locate the canonical config file.
 	// On macOS the standard location is ~/Library/Application Support/Hygur/.
 	// A one-time silent migration copies existing data from ~/.hygur/ when needed.
@@ -427,6 +434,37 @@ func main() {
 	}
 
 	logger.Info().Msg("hygur sidecar stopped")
+}
+
+// watchParent polls the parent process ID every 2 seconds and triggers
+// shutdown via `stop` (the cancel from signal.NotifyContext) the first time
+// it changes. If we were started detached (PPID already 1, e.g. via
+// launchd / nohup), the watchdog is disabled — there's no parent to die.
+func watchParent(ctx context.Context, stop func(), logger zerolog.Logger) {
+	initialPPID := os.Getppid()
+	if initialPPID <= 1 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				current := os.Getppid()
+				if current != initialPPID {
+					logger.Info().
+						Int("initial_parent_pid", initialPPID).
+						Int("current_parent_pid", current).
+						Msg("parent process exited — initiating shutdown")
+					stop()
+					return
+				}
+			}
+		}
+	}()
 }
 
 // resolveDataDir returns the canonical data directory for the sidecar:
