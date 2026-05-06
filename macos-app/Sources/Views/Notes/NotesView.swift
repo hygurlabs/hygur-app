@@ -261,6 +261,7 @@ class NotesViewModel: ObservableObject {
 
         do {
             notes = try await sidecar.listNotes()
+            SpotlightIndexer.reindexAllNotes(notes)
         } catch {
             showError(error)
         }
@@ -270,6 +271,7 @@ class NotesViewModel: ObservableObject {
         do {
             try await sidecar.deleteNote(id: note.id)
             notes.removeAll { $0.id == note.id }
+            SpotlightIndexer.removeNote(id: note.id)
         } catch {
             showError(error)
         }
@@ -279,6 +281,7 @@ class NotesViewModel: ObservableObject {
         if let index = notes.firstIndex(where: { $0.id == updatedNote.id }) {
             notes[index] = updatedNote
         }
+        SpotlightIndexer.index(note: updatedNote)
     }
 
     // MARK: - Error Handling

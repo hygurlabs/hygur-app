@@ -155,6 +155,9 @@ struct SettingsView: View {
         do {
             let sidecar = SidecarService.fromSettings()
             try await sidecar.resetKnowledgeBase()
+            // Notes live in the sidecar DB and are wiped along with the KB,
+            // so drop them from Spotlight too. Sessions persist on disk.
+            SpotlightIndexer.clearNotes()
             resetMessage = "Reset successful. Re-import your documents."
         } catch {
             resetMessage = "Failed: \(error.localizedDescription)"
@@ -1243,6 +1246,10 @@ private struct BackupRestoreSheet: View {
         await supervisor.stop()
         do {
             let rescued = try await BackupService.restoreBackup(from: url, passphrase: passphrase)
+            // Spotlight will repopulate from disk on the next launch via
+            // ChatSessionManager.loadSessions / NotesViewModel.loadNotes;
+            // wipe the now-stale items so search results match the new tree.
+            SpotlightIndexer.clearAll()
             inFlight = false
             let detail = rescued.map { " Previous data kept at \($0.lastPathComponent)." } ?? ""
             onComplete("Restore successful.\(detail) Quit and relaunch Hygur.", true)

@@ -63,6 +63,14 @@ final class ChatSessionManager {
                 }
                 return lhs.updatedAt > rhs.updatedAt
             }
+
+            // Push everything to Spotlight on launch — idempotent thanks to
+            // stable uniqueIdentifiers, and covers the case where sessions
+            // were imported via a backup restore.
+            let snapshot = sessions
+            Task { @MainActor in
+                SpotlightIndexer.reindexAllSessions(snapshot)
+            }
         } catch {
             self.error = "Failed to load sessions: \(error.localizedDescription)"
         }
@@ -146,6 +154,10 @@ final class ChatSessionManager {
 
         let fileURL = sessionFileURL(for: sessionId)
         try? fileManager.removeItem(at: fileURL)
+
+        Task { @MainActor in
+            SpotlightIndexer.removeSession(id: sessionId)
+        }
     }
 
     /// Toggle pin status
@@ -207,6 +219,11 @@ final class ChatSessionManager {
             try data.write(to: url, options: .atomic)
         } catch {
             self.error = "Failed to save session: \(error.localizedDescription)"
+        }
+        // Mirror to Spotlight after persistence so a search hit can never
+        // return a session whose JSON is missing on disk.
+        Task { @MainActor in
+            SpotlightIndexer.index(session: session)
         }
     }
 

@@ -324,6 +324,7 @@ class CreateNoteViewModel: ObservableObject {
                 projectId: selectedProjectId,
                 tagIds: tagIds
             )
+            SpotlightIndexer.index(note: note)
             return note
         } catch {
             showError(error)

@@ -346,6 +346,7 @@ class EditNoteViewModel: ObservableObject {
                 projectId: selectedProjectId,
                 tagIds: tagIds
             )
+            SpotlightIndexer.index(note: updatedNote)
             return updatedNote
         } catch {
             showError(error)

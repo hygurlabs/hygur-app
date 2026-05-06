@@ -52,6 +52,9 @@ struct HygurApp: App {
                         showOnboarding = true
                     }
                 }
+                .onOpenURL { url in
+                    handleHygurURL(url)
+                }
                 .task {
                     // Spawn the supervised sidecar child process if the binary
                     // is installed. Errors are surfaced via `supervisor.lastError`
@@ -170,6 +173,30 @@ struct HygurApp: App {
                 .environment(eventStream)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+// MARK: - URL Routing
+
+/// Routes `hygur://session/<uuid>` and `hygur://note/<id>` deep links —
+/// fired by Spotlight results and (later) third-party links/Shortcuts.
+/// Sessions get full deep-linking via the existing `.openChatSession`
+/// notification; notes navigate to the Notes tab for now (the sheet to
+/// open a specific note is a follow-up).
+private func handleHygurURL(_ url: URL) {
+    guard url.scheme == "hygur" else { return }
+    let host = url.host()
+    let segment = url.pathComponents.dropFirst().first ?? ""
+    switch host {
+    case "session":
+        guard !segment.isEmpty else { return }
+        NotificationCenter.default.post(name: .openChatSession, object: segment)
+    case "note":
+        // No per-note open path yet — land the user on Notes so they can
+        // pick the result manually.
+        NotificationCenter.default.post(name: .navigateToSection, object: "notes")
+    default:
+        break
     }
 }
 

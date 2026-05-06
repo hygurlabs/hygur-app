@@ -72,6 +72,11 @@ targets:
         NSMainStoryboardFile: ""
         NSMicrophoneUsageDescription: "Hygur uses the microphone for push-to-talk voice input in the chat."
         NSSpeechRecognitionUsageDescription: "Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages."
+        CFBundleURLTypes:
+          - CFBundleURLName: com.hygur.app.url
+            CFBundleURLSchemes:
+              - hygur
+            CFBundleTypeRole: Viewer
     entitlements:
       path: Sources/Hygur.entitlements
       properties:
