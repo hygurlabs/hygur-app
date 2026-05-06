@@ -1006,6 +1006,12 @@ private struct SystemTab: View {
     @Binding var isResetting: Bool
     @Binding var resetMessage: String
 
+    @Environment(SidecarSupervisor.self) private var supervisor
+    @State private var showingBackupExport = false
+    @State private var showingBackupRestore = false
+    @State private var backupMessage: String = ""
+    @State private var backupSuccess: Bool = false
+
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
@@ -1033,6 +1039,33 @@ private struct SystemTab: View {
             }
 
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Backup")
+                SettingsCard {
+                    CardRow(icon: "lock.shield",
+                            title: "Encrypted backup",
+                            subtitle: "Export your data to a passphrase-protected archive") {
+                        Button { showingBackupExport = true } label: { Text("Export…") }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                    CardDivider()
+                    CardRow(icon: "tray.and.arrow.down",
+                            title: "Restore from backup",
+                            subtitle: "Replaces current data; previous data is moved aside") {
+                        Button { showingBackupRestore = true } label: { Text("Restore…") }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                    if !backupMessage.isEmpty {
+                        CardDivider()
+                        Text(backupMessage)
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(backupSuccess ? HygurColors.success : HygurColors.danger)
+                            .padding(.horizontal, HygurSpacing.lg)
+                            .padding(.vertical, HygurSpacing.md)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
                 SettingsSectionHeader(title: "Knowledge base")
                 SettingsCard {
                     CardRow(icon: "trash", iconColor: HygurColors.danger,
@@ -1054,6 +1087,169 @@ private struct SystemTab: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showingBackupExport) {
+            BackupExportSheet { msg, ok in
+                backupMessage = msg
+                backupSuccess = ok
+            }
+        }
+        .sheet(isPresented: $showingBackupRestore) {
+            BackupRestoreSheet(supervisor: supervisor) { msg, ok in
+                backupMessage = msg
+                backupSuccess = ok
+            }
+        }
+    }
+}
+
+// MARK: - Backup sheets
+
+private struct BackupExportSheet: View {
+    let onComplete: (String, Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var passphrase: String = ""
+    @State private var confirm: String = ""
+    @State private var inFlight: Bool = false
+    @State private var error: String = ""
+
+    private var canSubmit: Bool {
+        !inFlight && passphrase.count >= 8 && passphrase == confirm
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HygurSpacing.md) {
+            Text("Export encrypted backup")
+                .font(HygurTypography.title3)
+
+            Text("Choose a passphrase to encrypt your backup. Losing it means losing access to the backup forever — there is no recovery.")
+                .font(HygurTypography.caption)
+                .foregroundStyle(HygurColors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: HygurSpacing.xs) {
+                Text("Passphrase").font(HygurTypography.caption)
+                SecureField("At least 8 characters", text: $passphrase)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.xs) {
+                Text("Confirm passphrase").font(HygurTypography.caption)
+                SecureField("Re-enter passphrase", text: $confirm)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if !error.isEmpty {
+                Text(error)
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.disabled(inFlight)
+                Button("Export…") { Task { await runExport() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSubmit)
+            }
+        }
+        .padding(HygurSpacing.lg)
+        .frame(width: 460)
+    }
+
+    private func runExport() async {
+        error = ""
+        let panel = NSSavePanel()
+        panel.title = "Export Hygur backup"
+        panel.allowedContentTypes = [.data]
+        panel.nameFieldStringValue = BackupService.defaultExportFilename()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        inFlight = true
+        do {
+            try await BackupService.exportBackup(to: url, passphrase: passphrase)
+            inFlight = false
+            onComplete("Backup written to \(url.lastPathComponent).", true)
+            dismiss()
+        } catch {
+            inFlight = false
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+private struct BackupRestoreSheet: View {
+    let supervisor: SidecarSupervisor
+    let onComplete: (String, Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var passphrase: String = ""
+    @State private var inFlight: Bool = false
+    @State private var error: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HygurSpacing.md) {
+            Text("Restore from backup")
+                .font(HygurTypography.title3)
+
+            Text("Your current data will be moved aside as a safety copy, then replaced with the contents of the backup. The sidecar will be stopped during restore.")
+                .font(HygurTypography.caption)
+                .foregroundStyle(HygurColors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Quit and relaunch Hygur after restore completes.")
+                .font(HygurTypography.caption)
+                .foregroundStyle(HygurColors.textSecondary)
+
+            VStack(alignment: .leading, spacing: HygurSpacing.xs) {
+                Text("Passphrase").font(HygurTypography.caption)
+                SecureField("Backup passphrase", text: $passphrase)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if !error.isEmpty {
+                Text(error)
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.disabled(inFlight)
+                Button("Choose backup…") { Task { await runRestore() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(inFlight || passphrase.isEmpty)
+            }
+        }
+        .padding(HygurSpacing.lg)
+        .frame(width: 460)
+    }
+
+    private func runRestore() async {
+        error = ""
+        let panel = NSOpenPanel()
+        panel.title = "Open Hygur backup"
+        panel.allowedContentTypes = [.data]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        inFlight = true
+        await supervisor.stop()
+        do {
+            let rescued = try await BackupService.restoreBackup(from: url, passphrase: passphrase)
+            inFlight = false
+            let detail = rescued.map { " Previous data kept at \($0.lastPathComponent)." } ?? ""
+            onComplete("Restore successful.\(detail) Quit and relaunch Hygur.", true)
+            dismiss()
+        } catch {
+            inFlight = false
+            self.error = error.localizedDescription
         }
     }
 }
