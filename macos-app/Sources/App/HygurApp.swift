@@ -13,11 +13,16 @@ struct HygurApp: App {
     // Idempotent; a no-op if the user runs the sidecar manually elsewhere.
     @State private var supervisor = SidecarSupervisor()
 
+    // GitHub-backed update checker. Owns the auto-check schedule and the
+    // download/install state machine.
+    @State private var updater = Updater()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(eventStream)
                 .environment(supervisor)
+                .environment(updater)
                 .task {
                     // Spawn the supervised sidecar child process if the binary
                     // is installed. Errors are surfaced via `supervisor.lastError`
@@ -42,6 +47,10 @@ struct HygurApp: App {
                     }
                     // Start the event consumer once the sidecar URL is known.
                     eventStream.start(sidecar: SidecarService.fromSettings())
+
+                    // Background update check (no-op if checked in last 24h or
+                    // if the user disabled auto-check).
+                    await updater.checkAtLaunchIfDue()
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -99,11 +108,18 @@ struct HygurApp: App {
                 }
                 .keyboardShortcut("f", modifiers: .command)
             }
+
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    NotificationCenter.default.post(name: .openUpdatesPane, object: nil)
+                }
+            }
         }
 
         Settings {
             SettingsView()
                 .environment(supervisor)
+                .environment(updater)
         }
 
         // Menubar status — always visible. Drives a small status dot
@@ -146,4 +162,7 @@ extension Notification.Name {
     /// Switches the chat detail view to a specific session.
     /// Posted with `object` = session UUID string.
     static let openChatSession = Notification.Name("openChatSession")
+    /// Opens the Settings window and focuses the "À propos" tab where the
+    /// update controls live. Posted by the "Check for Updates…" menu item.
+    static let openUpdatesPane = Notification.Name("openUpdatesPane")
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import MarkdownUI
 
 // MARK: - SettingsView
 
@@ -13,9 +14,10 @@ struct SettingsView: View {
     @State private var showResetConfirmation = false
     @State private var isResetting = false
     @State private var resetMessage: String = ""
+    @State private var selectedTab: SettingsTab = .connection
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             ConnectionTab(
                 settings: settings,
                 connectionStatus: $connectionStatus,
@@ -26,15 +28,19 @@ struct SettingsView: View {
                 loadTokenFromSidecar: loadTokenFromSidecar
             )
             .tabItem { Label("Connexion", systemImage: "network") }
+            .tag(SettingsTab.connection)
 
             LMStudioTab()
                 .tabItem { Label("Local LLM", systemImage: "server.rack") }
+                .tag(SettingsTab.lmStudio)
 
             ModelTab(settings: settings)
                 .tabItem { Label("Modèle", systemImage: "cpu") }
+                .tag(SettingsTab.model)
 
             NotificationsTab()
                 .tabItem { Label("Notifications", systemImage: "bell") }
+                .tag(SettingsTab.notifications)
 
             SystemTab(
                 showResetConfirmation: $showResetConfirmation,
@@ -42,9 +48,14 @@ struct SettingsView: View {
                 resetMessage: $resetMessage
             )
             .tabItem { Label("Système", systemImage: "gearshape") }
+            .tag(SettingsTab.system)
 
             AboutTab(sidecarVersion: sidecarVersion)
                 .tabItem { Label("À propos", systemImage: "info.circle") }
+                .tag(SettingsTab.about)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openUpdatesPane)) { _ in
+            selectedTab = .about
         }
         .frame(
             minWidth: 760,
@@ -156,6 +167,10 @@ struct SettingsView: View {
 
 private enum ConnectionStatus { case unknown, testing, connected, disconnected }
 private enum TokenStatus { case unknown, valid, missing, invalid }
+
+private enum SettingsTab: Hashable {
+    case connection, lmStudio, model, notifications, system, about
+}
 
 private struct SettingsCard<Content: View>: View {
     let content: () -> Content
@@ -1051,6 +1066,10 @@ private struct AboutTab: View {
     var body: some View {
         TabScrollContainer {
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Mises à jour")
+                UpdateCard()
+            }
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
                 SettingsSectionHeader(title: "Version")
                 SettingsCard {
                     AboutRow(label: "Application", value: Bundle.main.appVersion)
@@ -1077,6 +1096,189 @@ private struct AboutTab: View {
                 }
             }
         }
+    }
+}
+
+private struct UpdateCard: View {
+    @Environment(Updater.self) private var updater
+    @State private var showReleaseNotes = false
+
+    var body: some View {
+        @Bindable var updater = updater
+        SettingsCard {
+            HStack {
+                Text("Vérification automatique")
+                    .font(HygurTypography.subheadline)
+                    .foregroundStyle(HygurColors.textPrimary)
+                Spacer()
+                Toggle("", isOn: $updater.autoCheckEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            .padding(HygurSpacing.lg)
+
+            CardDivider()
+
+            HStack {
+                Text("Dernière vérification")
+                    .font(HygurTypography.subheadline)
+                    .foregroundStyle(HygurColors.textPrimary)
+                Spacer()
+                Text(lastCheckedLabel)
+                    .font(HygurTypography.captionMono)
+                    .foregroundStyle(HygurColors.textSecondary)
+            }
+            .padding(HygurSpacing.lg)
+
+            CardDivider()
+
+            statusSection
+                .padding(HygurSpacing.lg)
+        }
+    }
+
+    private var lastCheckedLabel: String {
+        guard let date = updater.lastCheckedAt else { return "jamais" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        formatter.locale = Locale(identifier: "fr_FR")
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    @ViewBuilder
+    private var statusSection: some View {
+        switch updater.status {
+        case .idle:
+            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Cliquez pour vérifier la disponibilité d'une mise à jour.") {
+                checkButton(label: "Vérifier maintenant")
+            }
+
+        case .checking:
+            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Vérification en cours…") {
+                LoadingIndicator(style: .small)
+            }
+
+        case .upToDate:
+            statusRow(icon: "checkmark.circle.fill", color: HygurColors.success, message: "Hygur \(Bundle.main.appVersion) est à jour.") {
+                checkButton(label: "Vérifier")
+            }
+
+        case .available(let release):
+            VStack(alignment: .leading, spacing: HygurSpacing.md) {
+                statusRow(icon: "arrow.down.circle.fill", color: HygurColors.accent, message: "Mise à jour disponible : \(release.name)") {
+                    EmptyView()
+                }
+                if !release.body.isEmpty {
+                    DisclosureGroup(isExpanded: $showReleaseNotes) {
+                        ScrollView {
+                            Markdown(release.body)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, HygurSpacing.sm)
+                        }
+                        .frame(maxHeight: 200)
+                    } label: {
+                        Text("Notes de version")
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.textSecondary)
+                    }
+                }
+                HStack(spacing: HygurSpacing.sm) {
+                    Button {
+                        Task { await updater.downloadAndInstall() }
+                    } label: {
+                        Text("Installer maintenant")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(release.dmgAsset == nil)
+
+                    Link(destination: release.htmlURL) {
+                        Text("Voir sur GitHub")
+                            .font(HygurTypography.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(HygurColors.accent)
+
+                    Spacer()
+                }
+                if release.dmgAsset == nil {
+                    Text("Aucun DMG disponible pour cette version.")
+                        .font(HygurTypography.caption)
+                        .foregroundStyle(HygurColors.danger)
+                }
+            }
+
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                HStack {
+                    Text("Téléchargement…")
+                        .font(HygurTypography.subheadline)
+                        .foregroundStyle(HygurColors.textPrimary)
+                    Spacer()
+                    Text("\(Int(progress * 100)) %")
+                        .font(HygurTypography.captionMono)
+                        .foregroundStyle(HygurColors.textSecondary)
+                }
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+            }
+
+        case .readyToInstall:
+            statusRow(icon: "checkmark.circle.fill", color: HygurColors.success, message: "Téléchargement terminé. Prêt à installer.") {
+                Button {
+                    Task { await updater.downloadAndInstall() }
+                } label: {
+                    Text("Installer maintenant")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+        case .installing:
+            statusRow(icon: nil, color: HygurColors.textSecondary, message: "Installation en cours, l'application va redémarrer…") {
+                LoadingIndicator(style: .small)
+            }
+
+        case .error(let message):
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                statusRow(icon: "exclamationmark.triangle.fill", color: HygurColors.danger, message: message) {
+                    checkButton(label: "Réessayer")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusRow<Trailing: View>(
+        icon: String?,
+        color: Color,
+        message: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: HygurSpacing.sm) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(color)
+            }
+            Text(message)
+                .font(HygurTypography.subheadline)
+                .foregroundStyle(HygurColors.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: HygurSpacing.sm)
+            trailing()
+        }
+    }
+
+    private func checkButton(label: String) -> some View {
+        Button {
+            Task { await updater.checkForUpdates() }
+        } label: {
+            Text(label)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 }
 

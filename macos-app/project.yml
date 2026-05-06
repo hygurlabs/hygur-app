@@ -26,6 +26,8 @@ targets:
       - path: Resources/hygur-sidecar
         buildPhase: resources
         optional: true
+      - path: Resources/install-update.sh
+        buildPhase: resources
     preBuildScripts:
       - name: Build Sidecar
         script: |
@@ -44,7 +46,7 @@ targets:
         INFOPLIST_FILE: Sources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/Hygur.entitlements
         PRODUCT_NAME: Hygur
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
@@ -62,7 +64,7 @@ targets:
         CFBundleDisplayName: Hygur
         CFBundleIdentifier: com.hygur.app
         CFBundleVersion: "1"
-        CFBundleShortVersionString: "0.1.0"
+        CFBundleShortVersionString: "0.1.2"
         CFBundlePackageType: APPL
         CFBundleExecutable: Hygur
         LSMinimumSystemVersion: "26.0"
