@@ -4,6 +4,10 @@ import SwiftUI
 struct HygurApp: App {
     @AppStorage("lastSidebarSelection") private var lastSidebarSelectionRaw: String = "chat"
 
+    // Gates the first-run onboarding sheet. Flipped to `true` when the user
+    // either finishes the flow or chooses Start chatting on the final step.
+    @AppStorage("onboarding.completed") private var onboardingCompleted: Bool = false
+
     // Single, app-wide event stream consumer. Connects to /events on the
     // sidecar at launch and fans events out to the menubar, ActivityView,
     // and (later) the notifications service.
@@ -17,12 +21,37 @@ struct HygurApp: App {
     // download/install state machine.
     @State private var updater = Updater()
 
+    @State private var showOnboarding: Bool = false
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(eventStream)
                 .environment(supervisor)
                 .environment(updater)
+                .sheet(isPresented: $showOnboarding) {
+                    OnboardingView(onComplete: {
+                        onboardingCompleted = true
+                        showOnboarding = false
+                    })
+                    // Sheets present a fresh environment scope on macOS 26;
+                    // re-inject the @Observable services the steps need so
+                    // `@Environment(SidecarSupervisor.self)` resolves inside
+                    // the sheet (otherwise the Connect AI model step crashes
+                    // on transition).
+                    .environment(eventStream)
+                    .environment(supervisor)
+                    .environment(updater)
+                    .interactiveDismissDisabled()
+                }
+                .onAppear {
+                    // Surface the onboarding sheet on the very first launch.
+                    // Subsequent launches see `onboardingCompleted == true`
+                    // and the sheet stays dismissed.
+                    if !onboardingCompleted {
+                        showOnboarding = true
+                    }
+                }
                 .task {
                     // Spawn the supervised sidecar child process if the binary
                     // is installed. Errors are surfaced via `supervisor.lastError`
@@ -113,6 +142,13 @@ struct HygurApp: App {
                 Button("Check for Updates…") {
                     NotificationCenter.default.post(name: .openUpdatesPane, object: nil)
                 }
+                #if DEBUG
+                Divider()
+                Button("Reset Onboarding…") {
+                    onboardingCompleted = false
+                    showOnboarding = true
+                }
+                #endif
             }
         }
 
