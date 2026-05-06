@@ -95,6 +95,7 @@ struct NoteRow: View {
     @ObservedObject var viewModel: NotesViewModel
     @State private var showingDeleteConfirmation = false
     @State private var showingEditSheet = false
+    @State private var exportError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
@@ -157,6 +158,14 @@ struct NoteRow: View {
                 viewModel.updateNoteInList(updatedNote)
             }
         }
+        .alert("Export failed", isPresented: .init(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
     }
 
     // MARK: - Context Menu
@@ -169,12 +178,28 @@ struct NoteRow: View {
             Label("Edit", systemImage: "pencil")
         }
 
+        Button {
+            exportNote()
+        } label: {
+            Label("Export to Markdown…", systemImage: "square.and.arrow.up")
+        }
+
         Divider()
 
         Button(role: .destructive) {
             showingDeleteConfirmation = true
         } label: {
             Label("Delete", systemImage: "trash")
+        }
+    }
+
+    private func exportNote() {
+        do {
+            try MarkdownExportService.exportNote(note)
+        } catch MarkdownExportService.ExportError.userCancelled {
+            // Silent — the user dismissed the save panel intentionally.
+        } catch {
+            exportError = error.localizedDescription
         }
     }
 

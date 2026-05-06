@@ -252,6 +252,7 @@ struct ChatSessionRow: View {
     @State private var isRenaming = false
     @State private var editedTitle: String = ""
     @State private var showingOrganizeSheet = false
+    @State private var exportError: String?
     @FocusState private var isTitleFieldFocused: Bool
 
     var body: some View {
@@ -342,6 +343,13 @@ struct ChatSessionRow: View {
                 Label("Organize...", systemImage: "folder.badge.gearshape")
             }
 
+            Button {
+                exportSession()
+            } label: {
+                Label("Export to Markdown…", systemImage: "square.and.arrow.up")
+            }
+            .disabled(!session.hasMessages)
+
             Divider()
 
             Button(role: .destructive) {
@@ -356,6 +364,14 @@ struct ChatSessionRow: View {
                 onUpdateProject: onUpdateProject,
                 onUpdateTags: onUpdateTags
             )
+        }
+        .alert("Export failed", isPresented: .init(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
         }
     }
 
@@ -380,6 +396,16 @@ struct ChatSessionRow: View {
         isRenaming = false
         isTitleFieldFocused = false
         editedTitle = ""
+    }
+
+    private func exportSession() {
+        do {
+            try MarkdownExportService.exportChatSession(session)
+        } catch MarkdownExportService.ExportError.userCancelled {
+            // Silent — the user dismissed the save panel intentionally.
+        } catch {
+            exportError = error.localizedDescription
+        }
     }
 }
 
