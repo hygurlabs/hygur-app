@@ -44,9 +44,12 @@ struct EditNoteView: View {
             // Actions
             actionBar
         }
-        .frame(minWidth: 500, idealWidth: 600, minHeight: 500, idealHeight: 600)
+        .frame(minWidth: 640, idealWidth: 720, minHeight: 620, idealHeight: 720)
         .task {
             await viewModel.loadData()
+        }
+        .onChange(of: viewModel.selectedProjectId) { _, _ in
+            viewModel.applyProjectTagsIfAny()
         }
         .onChange(of: viewModel.showError) { _, isShowing in
             if isShowing {
@@ -166,31 +169,14 @@ struct EditNoteView: View {
                         .font(HygurTypography.caption)
                         .foregroundStyle(HygurColors.textSecondary)
                 }
-            } else if viewModel.availableTags.isEmpty {
-                Text("No tags available. Create tags in the Tags section.")
-                    .font(HygurTypography.caption)
-                    .foregroundStyle(HygurColors.textTertiary)
             } else {
-                // Selected tags
-                if !viewModel.selectedTags.isEmpty {
-                    FlowLayout(spacing: HygurSpacing.sm) {
-                        ForEach(viewModel.selectedTags) { tag in
-                            TagPillView(tag: tag, showRemoveButton: true) {
-                                viewModel.selectedTags.removeAll { $0.id == tag.id }
-                            }
-                        }
+                TagAutocompleteField(
+                    selectedTags: $viewModel.selectedTags,
+                    availableTags: viewModel.availableTags,
+                    onCreate: { name in
+                        Task { await viewModel.createTag(named: name) }
                     }
-                    .padding(.bottom, HygurSpacing.sm)
-                }
-
-                // Available tags
-                FlowLayout(spacing: HygurSpacing.sm) {
-                    ForEach(viewModel.unselectedTags) { tag in
-                        SelectableTagPillView(tag: tag, isSelected: false) {
-                            viewModel.selectedTags.append(tag)
-                        }
-                    }
-                }
+                )
             }
         }
     }
@@ -308,6 +294,40 @@ class EditNoteViewModel: ObservableObject {
             availableTags = try await sidecar.listTags()
         } catch {
             print("Failed to load tags: \(error)")
+        }
+    }
+
+    /// Auto-select tags belonging to the chosen project. Mirrors
+    /// CreateNoteViewModel — see that file for the rationale.
+    func applyProjectTagsIfAny() {
+        guard let projectId = selectedProjectId,
+              let project = projects.first(where: { $0.id == projectId })
+        else { return }
+
+        let projectTagNames = Set(project.tags.map { $0.lowercased() })
+        for tag in availableTags where projectTagNames.contains(tag.name.lowercased()) {
+            if !selectedTags.contains(where: { $0.id == tag.id }) {
+                selectedTags.append(tag)
+            }
+        }
+    }
+
+    func createTag(named rawName: String) async {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if let existing = availableTags.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            if !selectedTags.contains(where: { $0.id == existing.id }) {
+                selectedTags.append(existing)
+            }
+            return
+        }
+        do {
+            let newTag = try await sidecar.createTag(name: name, color: "#5E5CE6")
+            availableTags.append(newTag)
+            selectedTags.append(newTag)
+        } catch {
+            errorMessage = "Création du tag impossible : \(error.localizedDescription)"
+            showError = true
         }
     }
 

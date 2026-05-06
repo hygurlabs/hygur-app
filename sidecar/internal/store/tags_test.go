@@ -477,6 +477,230 @@ func TestDefaultTagColor(t *testing.T) {
 	}
 }
 
+func TestNormalizeTagName(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"banques", "banques"},
+		{"Banques", "banques"},
+		{"BANQUES", "banques"},
+		{"  Banques  ", "banques"},
+		{"Banqués", "banques"},
+		{"Banqués ", "banques"},
+		{"Café", "cafe"},
+		{"École", "ecole"},
+		{"  multi   spaces  ", "multi spaces"},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tc := range cases {
+		if got := NormalizeTagName(tc.in); got != tc.want {
+			t.Errorf("NormalizeTagName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestMergeTags(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Two items, two tag variants — one item carries only the source variant,
+	// the other carries both. The merged target should end up on both items
+	// with no orphaned source rows.
+	itemA := &KnowledgeItem{
+		ContentID: uuid.New().String(), SourceType: "test", Title: "A",
+		NormalizedText: "a", VersionID: "v1", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	itemB := &KnowledgeItem{
+		ContentID: uuid.New().String(), SourceType: "test", Title: "B",
+		NormalizedText: "b", VersionID: "v1", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	if err := db.InsertKnowledgeItem(ctx, itemA); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertKnowledgeItem(ctx, itemB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Schema enforces UNIQUE COLLATE NOCASE on tags.name, so pure case dupes
+	// can't coexist — accent variants ("Banques" vs "Banqués") are the
+	// real-world dedup target.
+	target := &Tag{ID: uuid.New().String(), Name: "Banques", Color: "#3B82F6"}
+	source := &Tag{ID: uuid.New().String(), Name: "Banqués", Color: "#10B981"}
+	if err := db.CreateTag(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateTag(ctx, source); err != nil {
+		t.Fatal(err)
+	}
+
+	// itemA only has the source; itemB has both — merge must dedupe.
+	if err := db.AddTagToItem(ctx, itemA.ContentID, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddTagToItem(ctx, itemB.ContentID, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddTagToItem(ctx, itemB.ContentID, target.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.MergeTags(ctx, source.ID, target.ID); err != nil {
+		t.Fatalf("MergeTags failed: %v", err)
+	}
+
+	// Source tag is gone.
+	gone, err := db.GetTag(ctx, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gone != nil {
+		t.Error("source tag should be deleted after merge")
+	}
+
+	// Target now applies to both items.
+	merged, err := db.GetTag(ctx, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.ItemCount != 2 {
+		t.Errorf("expected target item_count 2, got %d", merged.ItemCount)
+	}
+}
+
+func TestMergeTagsRejectsSelf(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.MergeTags(context.Background(), "x", "x"); err == nil {
+		t.Error("merging a tag into itself should error")
+	}
+}
+
+func TestDedupeTags(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Schema's UNIQUE COLLATE NOCASE makes pure case dupes impossible at
+	// insert time, so test the realistic case: accent variants that the DB
+	// treats as distinct names. NormalizeTagName collapses them.
+	heavy := &Tag{ID: uuid.New().String(), Name: "Banques", Color: "#3B82F6"}
+	light := &Tag{ID: uuid.New().String(), Name: "Bànques", Color: "#10B981"}
+	accented := &Tag{ID: uuid.New().String(), Name: "Banqués", Color: "#F59E0B"}
+	for _, tg := range []*Tag{heavy, light, accented} {
+		if err := db.CreateTag(ctx, tg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Give `heavy` two items and the others one each.
+	for i := 0; i < 2; i++ {
+		item := &KnowledgeItem{
+			ContentID: uuid.New().String(), SourceType: "test", Title: "h",
+			NormalizedText: "x", VersionID: "v1", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		if err := db.InsertKnowledgeItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AddTagToItem(ctx, item.ContentID, heavy.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tg := range []*Tag{light, accented} {
+		item := &KnowledgeItem{
+			ContentID: uuid.New().String(), SourceType: "test", Title: tg.Name,
+			NormalizedText: "x", VersionID: "v1", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		if err := db.InsertKnowledgeItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AddTagToItem(ctx, item.ContentID, tg.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Add an unrelated tag that must NOT be merged.
+	other := &Tag{ID: uuid.New().String(), Name: "Voyages", Color: "#EC4899"}
+	if err := db.CreateTag(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := db.DedupeTags(ctx)
+	if err != nil {
+		t.Fatalf("DedupeTags failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 merged group, got %d", len(results))
+	}
+	if results[0].Canonical != heavy.ID {
+		t.Errorf("expected heavy tag (id %s) to win, got %s", heavy.ID, results[0].Canonical)
+	}
+	if len(results[0].MergedIDs) != 2 {
+		t.Errorf("expected 2 merged ids, got %d", len(results[0].MergedIDs))
+	}
+
+	// Survivor now owns all 4 items.
+	survivor, err := db.GetTag(ctx, heavy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if survivor.ItemCount != 4 {
+		t.Errorf("expected survivor item_count 4, got %d", survivor.ItemCount)
+	}
+
+	// Losers gone.
+	for _, id := range []string{light.ID, accented.ID} {
+		gone, err := db.GetTag(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gone != nil {
+			t.Errorf("tag %s should have been merged away", id)
+		}
+	}
+
+	// Unrelated tag untouched.
+	stillThere, err := db.GetTag(ctx, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillThere == nil {
+		t.Error("unrelated tag should still exist")
+	}
+}
+
+func TestGetOrCreateTagAccentInsensitive(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	first, err := db.GetOrCreateTag(ctx, "Banques", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.GetOrCreateTag(ctx, "banqués", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Errorf("expected accent variants to resolve to same tag: %s != %s", first.ID, second.ID)
+	}
+}
+
 func TestItemTagsCascadeDelete(t *testing.T) {
 	db, err := NewDB(":memory:")
 	if err != nil {

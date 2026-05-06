@@ -473,6 +473,25 @@ func (h *TagHandler) RemoveTagFromItem(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// DedupeResponse summarizes a /tags/dedupe run.
+type DedupeResponse struct {
+	Merges []store.DedupeResult `json:"merges"`
+	Count  int                  `json:"count"`
+}
+
+// Dedupe handles POST /tags/dedupe — collapses tags whose names normalize
+// to the same key (case + accent insensitive) by merging losers into the
+// most-used winner per group.
+func (h *TagHandler) Dedupe(w http.ResponseWriter, r *http.Request) {
+	merges, err := h.store.DedupeTags(r.Context())
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to dedupe tags")
+		writeTagError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to dedupe tags")
+		return
+	}
+	writeTagJSON(w, http.StatusOK, DedupeResponse{Merges: merges, Count: len(merges)})
+}
+
 // Helper functions
 
 func tagToResponse(t *store.Tag) TagResponse {

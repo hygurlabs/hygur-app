@@ -23,18 +23,33 @@ struct CommandPaletteView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            searchBar
-            Divider()
-            resultsList
+        // Backdrop catches clicks outside the palette and dismisses it. On
+        // macOS sheets are modal and ignore outside taps by default; rendering
+        // the palette inside its own overlay lets us implement the standard
+        // Spotlight behaviour the user expects.
+        ZStack {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+
+            VStack(spacing: 0) {
+                searchBar
+                Divider()
+                resultsList
+            }
+            .frame(width: 600, height: 420)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: HygurRadius.lg))
+            .overlay(
+                RoundedRectangle(cornerRadius: HygurRadius.lg)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.30), radius: 24, x: 0, y: 8)
+            // Block backdrop taps from passing through the palette itself.
+            .contentShape(RoundedRectangle(cornerRadius: HygurRadius.lg))
+            .onTapGesture { /* swallow */ }
         }
-        .frame(width: 600, height: 420)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: HygurRadius.lg))
-        .overlay(
-            RoundedRectangle(cornerRadius: HygurRadius.lg)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
         .onAppear { isSearchFocused = true }
     }
 

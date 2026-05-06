@@ -142,14 +142,28 @@ struct KnowledgeBaseView: View {
             }
         }
         .listStyle(.inset)
-        // Space bar opens QuickLook for the selected item.
+        // Space and Return both open QuickLook for the selected item — Return
+        // is the macOS convention for "open" in Finder-like lists, Space is
+        // the QuickLook shortcut.
         .onKeyPress(.space) {
+            guard let id = selectedItemId else { return .ignored }
+            quickLookItem = IdentifiableString(id)
+            return .handled
+        }
+        .onKeyPress(.return) {
             guard let id = selectedItemId else { return .ignored }
             quickLookItem = IdentifiableString(id)
             return .handled
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
+        }
+        // Allow other views (AgendaSheet, search results, etc.) to open a
+        // specific document by posting `.openDocument` with the content ID.
+        .onReceive(NotificationCenter.default.publisher(for: .openDocument)) { notification in
+            guard let id = notification.object as? String, !id.isEmpty else { return }
+            selectedItemId = id
+            quickLookItem = IdentifiableString(id)
         }
     }
 
@@ -303,6 +317,8 @@ struct KnowledgeItemRow: View {
     /// Maximum number of tags to display before showing "+N"
     private let maxVisibleTags = 3
 
+    @State private var isHovered = false
+
     var body: some View {
         HStack {
             sourceTypeLeadingView
@@ -347,6 +363,14 @@ struct KnowledgeItemRow: View {
                 .foregroundStyle(HygurColors.textSecondary)
         }
         .padding(.vertical, HygurSpacing.xs)
+        .padding(.horizontal, HygurSpacing.xs)
+        .background(
+            RoundedRectangle(cornerRadius: HygurRadius.sm)
+                .fill(isHovered ? HygurColors.accent.opacity(0.07) : Color.clear)
+        )
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
 
     /// Leading visual for a row: thumbnail for images, waveform icon for audio,

@@ -12,48 +12,71 @@ struct ContentView: View {
     @State private var chatViewModel = ChatViewModel()
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                selection: $sidebarSelection,
-                showingNewNote: $showingNewNote,
-                sessionManager: sessionManager
-            )
-        } detail: {
-            detailView
-        }
-        .onChange(of: sidebarSelection) { _, newValue in
-            handleSelectionChange(newValue)
-        }
-        .frame(minWidth: 800, minHeight: 600)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                if isChatView {
-                    ModelSelectorView()
+        ZStack {
+            NavigationSplitView {
+                SidebarView(
+                    selection: $sidebarSelection,
+                    showingNewNote: $showingNewNote,
+                    sessionManager: sessionManager
+                )
+            } detail: {
+                detailView
+            }
+            .onChange(of: sidebarSelection) { _, newValue in
+                handleSelectionChange(newValue)
+            }
+            .frame(minWidth: 800, minHeight: 600)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    if isChatView {
+                        ModelSelectorView()
+                    }
                 }
             }
+            .sheet(isPresented: $showingNewNote) {
+                CreateNoteView()
+            }
+
+            // Command palette as an in-window overlay rather than a modal
+            // sheet. Sheets on macOS don't dismiss on outside-click, which is
+            // jarring for a Spotlight-style interface; the overlay approach
+            // also lets Cmd+K toggle the palette without fighting AppKit's
+            // sheet lifecycle.
+            if showingCommandPalette {
+                CommandPaletteView(
+                    sessionManager: sessionManager,
+                    onExecute: { action in
+                        showingCommandPalette = false
+                        handleCommandAction(action)
+                    },
+                    onDismiss: { showingCommandPalette = false }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .zIndex(1000)
+            }
         }
-        .sheet(isPresented: $showingNewNote) {
-            CreateNoteView()
-        }
-        .sheet(isPresented: $showingCommandPalette) {
-            CommandPaletteView(
-                sessionManager: sessionManager,
-                onExecute: { action in
-                    showingCommandPalette = false
-                    handleCommandAction(action)
-                },
-                onDismiss: { showingCommandPalette = false }
-            )
-        }
+        .animation(.easeOut(duration: 0.15), value: showingCommandPalette)
+        // ChatSessionManager is also exposed via the SwiftUI environment so
+        // detail views (ProjectDetailView, etc.) can read project-linked
+        // sessions without us threading the manager through every initializer.
+        .environment(sessionManager)
         .onReceive(NotificationCenter.default.publisher(for: .showNewNoteSheet)) { _ in
             showingNewNote = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
-            showingCommandPalette = true
+            // Toggle: pressing Cmd+K twice closes the palette instead of
+            // re-presenting an already-visible sheet (which macOS just ignores).
+            showingCommandPalette.toggle()
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToSection)) { notification in
             guard let sectionKey = notification.object as? String else { return }
             navigateToSection(sectionKey)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openChatSession)) { notification in
+            guard let raw = notification.object as? String,
+                  let uuid = UUID(uuidString: raw) else { return }
+            chatViewModel.bind(to: sessionManager, sessionId: uuid)
+            sidebarSelection = .chatSession(uuid)
         }
         .onAppear {
             restoreLastSelection()

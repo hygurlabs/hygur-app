@@ -46,6 +46,7 @@ func (s *Server) setupRoutes() {
 		r.Route("/tags", func(r chi.Router) {
 			r.Get("/", s.handleTagList)
 			r.Post("/", s.handleTagCreate)
+			r.Post("/dedupe", s.handleTagDedupe)
 			r.Get("/{id}", s.handleTagGet)
 			r.Put("/{id}", s.handleTagUpdate)
 			r.Delete("/{id}", s.handleTagDelete)
@@ -675,6 +676,16 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTagListItems(w http.ResponseWriter, r *http.Request) {
 	if s.tagHandler != nil {
 		s.tagHandler.ListItems(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "tag handler not configured")
+}
+
+// handleTagDedupe handles POST /tags/dedupe.
+// It delegates to the TagHandler to merge tags with identical normalized names.
+func (s *Server) handleTagDedupe(w http.ResponseWriter, r *http.Request) {
+	if s.tagHandler != nil {
+		s.tagHandler.Dedupe(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "tag handler not configured")

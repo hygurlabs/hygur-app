@@ -140,4 +140,10 @@ extension Notification.Name {
     static let showNewNoteSheet = Notification.Name("showNewNoteSheet")
     static let navigateToSection = Notification.Name("navigateToSection")
     static let showCommandPalette = Notification.Name("showCommandPalette")
+    /// Opens the QuickLook preview for a specific knowledge content ID.
+    /// Posted with `object` = content ID (`String`).
+    static let openDocument = Notification.Name("openDocument")
+    /// Switches the chat detail view to a specific session.
+    /// Posted with `object` = session UUID string.
+    static let openChatSession = Notification.Name("openChatSession")
 }

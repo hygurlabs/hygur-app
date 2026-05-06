@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - SettingsView
 
@@ -46,11 +47,11 @@ struct SettingsView: View {
                 .tabItem { Label("À propos", systemImage: "info.circle") }
         }
         .frame(
-            minWidth: 560,
-            idealWidth: 600,
+            minWidth: 760,
+            idealWidth: 860,
             maxWidth: .infinity,
-            minHeight: 500,
-            idealHeight: 560,
+            minHeight: 640,
+            idealHeight: 760,
             maxHeight: .infinity
         )
         .background(HygurColors.background)
@@ -76,20 +77,33 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
+    /// Probe the sidecar `/health` endpoint. To avoid the false-negative flicker
+    /// users were seeing right after launch (the sidecar takes ~300-800 ms to
+    /// bind its port even after `Process.run` returns), retry up to 3 times
+    /// with a 250 ms gap before declaring the connection dead. Only the final
+    /// outcome is published so the UI doesn't oscillate.
     private func testConnection() async {
         guard settings.isValidURL else { connectionStatus = .disconnected; return }
         isTestingConnection = true
         connectionStatus = .testing
-        do {
-            let sidecar = SidecarService(baseURL: settings.sidecarURLValue!)
-            let health = try await sidecar.health()
-            connectionStatus = health.status == "ok" ? .connected : .disconnected
-            sidecarVersion = health.version
-        } catch {
-            connectionStatus = .disconnected
-            sidecarVersion = "—"
+        defer { isTestingConnection = false }
+
+        let sidecar = SidecarService(baseURL: settings.sidecarURLValue!)
+        for attempt in 0..<3 {
+            do {
+                let health = try await sidecar.health()
+                connectionStatus = health.status == "ok" ? .connected : .disconnected
+                sidecarVersion = health.version
+                return
+            } catch {
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    continue
+                }
+                connectionStatus = .disconnected
+                sidecarVersion = "—"
+            }
         }
-        isTestingConnection = false
     }
 
     private func checkTokenStatus() {
@@ -327,6 +341,7 @@ private struct ConnectionTab: View {
 // MARK: - Tab 2: LM Studio
 
 private struct LMStudioTab: View {
+    @Environment(SidecarSupervisor.self) private var supervisor
     @State private var inferenceURL: String = ""
     @State private var embeddingURL: String = ""
     @State private var modelDefault: String = ""
@@ -340,8 +355,15 @@ private struct LMStudioTab: View {
     @State private var isSaving: Bool = false
     @State private var saveStatus: SaveStatus = .idle
 
+    /// Lists of model IDs returned by the LM Studio /v1/models endpoint for
+    /// the inference URL and the embedding URL. Used to drive autocomplete.
+    @State private var inferenceModelOptions: [String] = []
+    @State private var embeddingModelOptions: [String] = []
+    @State private var isLoadingInferenceModels: Bool = false
+    @State private var isLoadingEmbeddingModels: Bool = false
+
     private enum SaveStatus: Equatable {
-        case idle, saving, saved, error(String)
+        case idle, saving, saved, restarting, error(String)
     }
 
     private let sidecar = SidecarService.fromSettings()
@@ -353,48 +375,72 @@ private struct LMStudioTab: View {
                 HStack { Spacer(); LoadingIndicator(style: .small); Spacer() }
                     .padding(.top, HygurSpacing.xxl)
             } else {
-                lmStudioSection
+                inferenceSection
+                embeddingsSection
                 retrievalSection
                 briefSection
                 loggingSection
                 saveBar
             }
         }
-        .task { await loadConfig() }
+        .task {
+            await loadConfig()
+            await refreshInferenceModels()
+            await refreshEmbeddingModels()
+        }
     }
 
     // MARK: - Sections
 
-    private var lmStudioSection: some View {
+    private var inferenceSection: some View {
         VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            SettingsSectionHeader(title: "Local LLM — Endpoints")
+            SettingsSectionHeader(title: "Inférence (chat)")
             SettingsCard {
                 LabeledURLField(
-                    label: "Inference",
+                    label: "URL",
                     placeholder: "http://192.168.x.x:8082",
-                    hint: "Chat completions & model listing (LM Studio, Ollama, llama.cpp…)",
+                    hint: "Chat completions (LM Studio, Ollama, llama.cpp…)",
                     text: $inferenceURL
                 )
+                .onChange(of: inferenceURL) { _, _ in
+                    inferenceModelOptions = []
+                }
                 CardDivider()
+                ModelAutocompleteField(
+                    label: "Modèle",
+                    placeholder: "ex. mistral-7b-instruct",
+                    hint: "Modèle par défaut pour le chat",
+                    text: $modelDefault,
+                    options: inferenceModelOptions,
+                    isLoading: isLoadingInferenceModels,
+                    onRefresh: { Task { await refreshInferenceModels(force: true) } }
+                )
+            }
+        }
+    }
+
+    private var embeddingsSection: some View {
+        VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+            SettingsSectionHeader(title: "Embeddings")
+            SettingsCard {
                 LabeledURLField(
-                    label: "Embeddings",
+                    label: "URL",
                     placeholder: "http://192.168.x.x:8081",
-                    hint: "Leave empty to reuse the inference URL",
+                    hint: "Laisser vide pour réutiliser l'URL d'inférence",
                     text: $embeddingURL
                 )
+                .onChange(of: embeddingURL) { _, _ in
+                    embeddingModelOptions = []
+                }
                 CardDivider()
-                LabeledTextField(
-                    label: "Chat model",
-                    placeholder: "e.g. mistral-7b-instruct",
-                    hint: "Default model when none is specified in the request",
-                    text: $modelDefault
-                )
-                CardDivider()
-                LabeledTextField(
-                    label: "Embed model",
-                    placeholder: "e.g. text-embedding-nomic-embed-text-v1.5",
-                    hint: "Leave empty to use the server default",
-                    text: $embeddingModel
+                ModelAutocompleteField(
+                    label: "Modèle",
+                    placeholder: "ex. text-embedding-nomic-embed-text-v1.5",
+                    hint: "Laisser vide pour utiliser le modèle par défaut du serveur",
+                    text: $embeddingModel,
+                    options: embeddingModelOptions,
+                    isLoading: isLoadingEmbeddingModels,
+                    onRefresh: { Task { await refreshEmbeddingModels(force: true) } }
                 )
             }
         }
@@ -490,11 +536,18 @@ private struct LMStudioTab: View {
                         Text("Enregistrement…").font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
+                case .restarting:
+                    HStack(spacing: HygurSpacing.xs) {
+                        LoadingIndicator(style: .small)
+                        Text("Redémarrage du sidecar…")
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.textSecondary)
+                    }
                 case .saved:
                     HStack(spacing: HygurSpacing.xs) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(HygurColors.success)
-                        Text("Enregistré — redémarrez le sidecar pour appliquer")
+                        Text("Enregistré et appliqué")
                             .font(HygurTypography.caption)
                             .foregroundStyle(HygurColors.textSecondary)
                     }
@@ -537,8 +590,14 @@ private struct LMStudioTab: View {
         }
     }
 
+    /// Persist the patched config and immediately bounce the sidecar so the
+    /// new endpoints/model take effect without the user having to do it
+    /// manually. Errors at either step are surfaced inline; the supervisor
+    /// only restarts when it's currently running (otherwise the user is
+    /// using a remote sidecar and we leave it alone).
     private func saveConfig() async {
         isSaving = true
+        defer { isSaving = false }
         saveStatus = .saving
         let patch = SidecarConfigPatch(
             lmStudio: .init(
@@ -559,11 +618,199 @@ private struct LMStudioTab: View {
         )
         do {
             try await sidecar.patchConfig(patch)
-            saveStatus = .saved
         } catch {
             saveStatus = .error(error.localizedDescription)
+            return
         }
-        isSaving = false
+
+        if supervisor.isRunning {
+            saveStatus = .restarting
+            await supervisor.restart()
+        }
+        saveStatus = .saved
+
+        // Reload the model lists from the new endpoints so the autocomplete
+        // reflects what the just-saved server actually exposes.
+        await refreshInferenceModels(force: true)
+        await refreshEmbeddingModels(force: true)
+    }
+
+    // MARK: - Model Autocomplete
+
+    /// Hits the OpenAI-compatible /v1/models endpoint at `inferenceURL` and
+    /// caches the result in `inferenceModelOptions`. No-op when the URL is
+    /// empty or invalid; silently degrades if the server is unreachable.
+    private func refreshInferenceModels(force: Bool = false) async {
+        let url = inferenceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return }
+        if !force, !inferenceModelOptions.isEmpty { return }
+        isLoadingInferenceModels = true
+        defer { isLoadingInferenceModels = false }
+        let models = await Self.fetchModelIDs(baseURL: url)
+        inferenceModelOptions = models
+    }
+
+    private func refreshEmbeddingModels(force: Bool = false) async {
+        let raw = embeddingURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = raw.isEmpty
+            ? inferenceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            : raw
+        guard !url.isEmpty else { return }
+        if !force, !embeddingModelOptions.isEmpty { return }
+        isLoadingEmbeddingModels = true
+        defer { isLoadingEmbeddingModels = false }
+        let models = await Self.fetchModelIDs(baseURL: url)
+        embeddingModelOptions = models
+    }
+
+    /// Probe the OpenAI-compatible `/v1/models` endpoint and return the list
+    /// of model IDs. Returns an empty array on any failure — the UI treats
+    /// "no options" the same as "free-form input", so the field stays
+    /// usable even when the LLM server is offline.
+    private static func fetchModelIDs(baseURL raw: String) async -> [String] {
+        guard let base = URL(string: raw) else { return [] }
+        // LM Studio exposes /v1/models. Path-stripping isn't needed since
+        // we expect the user to enter the LLM server root, not a sub-path.
+        let endpoint = base.appendingPathComponent("v1/models")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                return []
+            }
+            struct ModelsResponse: Decodable {
+                struct Model: Decodable { let id: String }
+                let data: [Model]
+            }
+            let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
+            return decoded.data.map(\.id)
+        } catch {
+            return []
+        }
+    }
+}
+
+// MARK: - Model Autocomplete Field
+
+/// Text field with a dropdown surfacing the IDs returned by `/v1/models`.
+/// Falls back to a plain text field when no options are available — the user
+/// can always type a model name freely (LM Studio servers occasionally hide
+/// the listing behind auth or expose models the API doesn't enumerate).
+private struct ModelAutocompleteField: View {
+    let label: String
+    let placeholder: String
+    let hint: String
+    @Binding var text: String
+    let options: [String]
+    let isLoading: Bool
+    let onRefresh: () -> Void
+
+    @State private var isShowingPopover = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HygurSpacing.xs) {
+            HStack {
+                Text(label)
+                    .font(HygurTypography.subheadline)
+                    .foregroundStyle(HygurColors.textPrimary)
+                    .frame(width: 100, alignment: .leading)
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .font(HygurTypography.body)
+                    .foregroundStyle(HygurColors.textPrimary)
+                if isLoading {
+                    LoadingIndicator(style: .small)
+                } else if !options.isEmpty {
+                    Button {
+                        isShowingPopover = true
+                    } label: {
+                        Image(systemName: "list.bullet")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Choisir un modèle disponible")
+                    .popover(isPresented: $isShowingPopover, arrowEdge: .top) {
+                        modelList
+                    }
+                }
+                Button {
+                    onRefresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help("Rafraîchir la liste depuis /v1/models")
+            }
+            HStack(spacing: HygurSpacing.xs) {
+                Text(hint)
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.textTertiary)
+                if !options.isEmpty {
+                    Text("· \(options.count) modèle\(options.count > 1 ? "s" : "") détecté\(options.count > 1 ? "s" : "")")
+                        .font(HygurTypography.caption)
+                        .foregroundStyle(HygurColors.textTertiary)
+                }
+            }
+            // Inline filtered suggestions appear when the user starts typing
+            // and there's at least one non-exact match. Keeps the chooser
+            // discoverable without forcing a popover click.
+            if !text.isEmpty, !options.isEmpty {
+                let matches = options.filter {
+                    $0.localizedCaseInsensitiveContains(text) && $0 != text
+                }.prefix(4)
+                if !matches.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(matches), id: \.self) { match in
+                            Button {
+                                text = match
+                            } label: {
+                                Text(match)
+                                    .font(HygurTypography.captionMono)
+                                    .foregroundStyle(HygurColors.textPrimary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, HygurSpacing.sm)
+                            }
+                            .buttonStyle(.plain)
+                            .background(HygurColors.surface, in: RoundedRectangle(cornerRadius: HygurRadius.xs))
+                        }
+                    }
+                    .padding(.top, HygurSpacing.xs)
+                }
+            }
+        }
+        .padding(HygurSpacing.lg)
+    }
+
+    private var modelList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    text = option
+                    isShowingPopover = false
+                } label: {
+                    HStack {
+                        Text(option)
+                            .font(HygurTypography.captionMono)
+                            .foregroundStyle(HygurColors.textPrimary)
+                        Spacer()
+                        if option == text {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(HygurColors.accent)
+                        }
+                    }
+                    .padding(.vertical, HygurSpacing.xs)
+                    .padding(.horizontal, HygurSpacing.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(minWidth: 280)
+        .padding(.vertical, HygurSpacing.xs)
     }
 }
 
@@ -861,12 +1108,19 @@ private struct SidecarStatusRow: View {
                     .font(HygurTypography.callout)
                     .foregroundStyle(HygurColors.textPrimary)
                 Spacer()
+                Button("Voir les logs") { openLogs() }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("Ouvre sidecar.log dans Console.app")
                 Button("Redémarrer") { Task { await supervisor.restart() } }
                     .buttonStyle(.bordered).controlSize(.small)
             }
             if let err = supervisor.lastError {
                 Text(err).font(HygurTypography.caption).foregroundStyle(HygurColors.danger)
             }
+            Text("Logs: \(supervisor.logPath.path)")
+                .font(HygurTypography.caption)
+                .foregroundStyle(HygurColors.textTertiary)
+                .textSelection(.enabled)
         }
     }
 
@@ -883,6 +1137,27 @@ private struct SidecarStatusRow: View {
         let m = (total % 3600) / 60
         if h > 0 { return "\(h) h \(m) m" }
         return "\(m) m"
+    }
+
+    /// Opens the rotating sidecar log inside Console.app — the standard macOS log
+    /// viewer. We try Console first because it formats logs nicely and follows
+    /// the file as it grows; if it isn't available for some reason we fall back
+    /// to the system default for `.log` files (TextEdit) and finally to Finder.
+    private func openLogs() {
+        let logURL = supervisor.logPath
+        let consoleURL = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
+        let cfg = NSWorkspace.OpenConfiguration()
+        if FileManager.default.fileExists(atPath: consoleURL.path) {
+            NSWorkspace.shared.open([logURL], withApplicationAt: consoleURL, configuration: cfg) { _, err in
+                if err != nil {
+                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                }
+            }
+            return
+        }
+        if !NSWorkspace.shared.open(logURL) {
+            NSWorkspace.shared.activateFileViewerSelecting([logURL])
+        }
     }
 }
 

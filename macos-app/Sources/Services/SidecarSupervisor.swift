@@ -56,6 +56,15 @@ final class SidecarSupervisor {
         return dir.appendingPathComponent("sidecar.log")
     }
 
+    /// Health-probe state — used by Settings to render the status row without
+    /// flicker. The supervisor probes `/health` every 5 s once started and
+    /// only flips `isHealthy` to `false` after `unhealthyThreshold` consecutive
+    /// failures, so a single dropped packet doesn't paint the dot red.
+    private(set) var isHealthy: Bool = false
+    private var healthFailureStreak: Int = 0
+    private let unhealthyThreshold: Int = 2
+    private var healthTask: Task<Void, Never>?
+
     /// Spawn the sidecar. No-op if already running. Sets `lastError` if the
     /// binary is missing or cannot be made executable.
     func start() {
@@ -126,7 +135,10 @@ final class SidecarSupervisor {
             self.pid = proc.processIdentifier
             self.startedAt = Date()
             self.isRunning = true
+            self.isHealthy = false
+            self.healthFailureStreak = 0
             armStableTimer()
+            startHealthPolling()
         } catch {
             lastError = "Failed to launch sidecar: \(error.localizedDescription)"
         }
@@ -179,12 +191,62 @@ final class SidecarSupervisor {
     private func cleanup() {
         stableTimer?.invalidate()
         stableTimer = nil
+        healthTask?.cancel()
+        healthTask = nil
+        isHealthy = false
+        healthFailureStreak = 0
         try? logHandle?.close()
         logHandle = nil
         process = nil
         pid = nil
         startedAt = nil
         isRunning = false
+    }
+
+    /// Periodic health probe. Called once after `start()`. Hits `/health` on
+    /// the configured URL; flips `isHealthy` to true on the first success and
+    /// only back to false after `unhealthyThreshold` consecutive failures.
+    /// This is the single source of truth for the "sidecar reachable" badge —
+    /// callers should prefer it over running their own probes, which is what
+    /// caused the KO/OK/KO flicker the user reported.
+    private func startHealthPolling() {
+        healthTask?.cancel()
+        let initialDelay: UInt64 = 500_000_000   // 0.5 s — give the server time to bind.
+        let interval: UInt64 = 5_000_000_000     // 5 s.
+        healthTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: initialDelay)
+            while let self, self.isRunning, !Task.isCancelled {
+                let ok = await Self.probeHealth()
+                if ok {
+                    self.healthFailureStreak = 0
+                    if !self.isHealthy { self.isHealthy = true }
+                } else {
+                    self.healthFailureStreak += 1
+                    if self.healthFailureStreak >= self.unhealthyThreshold, self.isHealthy {
+                        self.isHealthy = false
+                    }
+                }
+                try? await Task.sleep(nanoseconds: interval)
+            }
+        }
+    }
+
+    /// One-shot health probe used by `startHealthPolling`. Built without
+    /// touching `SidecarService` to keep the supervisor self-contained and
+    /// avoid pulling auth headers into the loop — `/health` is unauthenticated.
+    private nonisolated static func probeHealth() async -> Bool {
+        let urlString = AppPreferences.shared.sidecarURL
+        guard let base = URL(string: urlString) else { return false }
+        var request = URLRequest(url: base.appendingPathComponent("health"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 3
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200...299).contains(http.statusCode)
+        } catch {
+            return false
+        }
     }
 
     /// After 60 s of stable run, reset the backoff counter so a future crash

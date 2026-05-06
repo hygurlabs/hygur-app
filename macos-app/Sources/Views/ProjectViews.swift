@@ -275,7 +275,7 @@ struct NewProjectSheet: View {
             }
         }
         .padding(HygurSpacing.lg)
-        .frame(width: 350)
+        .frame(minWidth: 520, idealWidth: 560)
     }
 
     private func createProject() {
@@ -362,7 +362,7 @@ struct EditProjectSheet: View {
             }
         }
         .padding(HygurSpacing.lg)
-        .frame(width: 350)
+        .frame(minWidth: 520, idealWidth: 560)
     }
 
     private func saveProject() {
@@ -386,6 +386,7 @@ struct EditProjectSheet: View {
     }
 }
 
+
 // MARK: - Project Detail View
 
 /// Sheet showing all documents in a project with full details
@@ -393,12 +394,14 @@ struct ProjectDetailView: View {
     let project: Project
     @Environment(\.dismiss) private var dismiss
     @Environment(EventStreamService.self) private var events
+    @Environment(ChatSessionManager.self) private var chatSessions
     @State private var items: [ProjectItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedItem: ProjectItem?
     @State private var showingNoteEditor = false
     @State private var editingNoteId: String?
+    @State private var showingNewNote = false
     @State private var briefRunning = false
     /// Wall-clock at which the last project brief was requested. Cleared
     /// when a `brief` SSE event with `receivedAt >= briefRequestedAt`
@@ -408,9 +411,18 @@ struct ProjectDetailView: View {
 
     private let sidecar = SidecarService.fromSettings()
 
+    /// Chat sessions associated with this project — pulled from the live
+    /// session manager so updates (renames, new sessions) reflect without a
+    /// reload. We hide empty/untitled sessions: a session that was never
+    /// sent doesn't tell the user anything useful.
+    private var linkedSessions: [ChatSession] {
+        chatSessions.sessions(forProject: project.id)
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
     var body: some View {
         HSplitView {
-            // Main content
+            // Main content: documents list + linked chats
             VStack(spacing: 0) {
                 header
 
@@ -419,19 +431,13 @@ struct ProjectDetailView: View {
                 if isLoading {
                     LoadingIndicator(style: .large)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = errorMessage, items.isEmpty {
+                } else if let error = errorMessage, items.isEmpty, linkedSessions.isEmpty {
                     errorState(error)
-                } else if items.isEmpty {
-                    EmptyStateView(
-                        icon: "doc.text",
-                        title: "No documents",
-                        subtitle: "This project has no linked documents yet"
-                    )
                 } else {
-                    itemList
+                    documentsAndChatsBody
                 }
             }
-            .frame(minWidth: 450)
+            .frame(minWidth: 520)
             .errorBannerOverlay($errorMessage)
 
             // Metadata panel
@@ -440,7 +446,7 @@ struct ProjectDetailView: View {
                     .frame(width: 280)
             }
         }
-        .frame(minWidth: 700, idealWidth: 850, minHeight: 500, idealHeight: 600)
+        .frame(minWidth: 880, idealWidth: 1000, minHeight: 620, idealHeight: 720)
         .task {
             await loadItems()
         }
@@ -454,6 +460,95 @@ struct ProjectDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingNewNote) {
+            // CreateNoteView creates the note via the sidecar; we then
+            // refresh items so the new note appears in this view without a
+            // round-trip through the parent list.
+            CreateNoteView { newNote in
+                Task {
+                    if newNote.projectId != project.id {
+                        // The user explicitly picked a different project in
+                        // the modal — don't override their choice. We just
+                        // refresh in case items changed elsewhere.
+                    }
+                    await loadItems()
+                }
+            }
+        }
+    }
+
+    // MARK: - Combined body (documents + chats)
+
+    @ViewBuilder
+    private var documentsAndChatsBody: some View {
+        VSplitView {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader("Documents", count: items.count, systemImage: "doc.text")
+                if items.isEmpty {
+                    EmptyStateView(
+                        icon: "doc.text",
+                        title: "No documents",
+                        subtitle: "This project has no linked documents yet"
+                    )
+                } else {
+                    itemList
+                }
+            }
+            .frame(minHeight: 200)
+
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader("Linked chats", count: linkedSessions.count, systemImage: "bubble.left.and.bubble.right")
+                if linkedSessions.isEmpty {
+                    Text("No chat sessions are tagged with this project yet.")
+                        .font(HygurTypography.caption)
+                        .foregroundStyle(HygurColors.textTertiary)
+                        .padding(HygurSpacing.lg)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    chatList
+                }
+            }
+            .frame(minHeight: 140, idealHeight: 220)
+        }
+    }
+
+    private func sectionHeader(_ title: String, count: Int, systemImage: String) -> some View {
+        HStack(spacing: HygurSpacing.sm) {
+            Image(systemName: systemImage)
+                .foregroundStyle(HygurColors.textSecondary)
+            Text(title)
+                .font(HygurTypography.subheadline)
+                .fontWeight(.semibold)
+            Text("\(count)")
+                .font(HygurTypography.captionMono)
+                .foregroundStyle(HygurColors.textTertiary)
+            Spacer()
+        }
+        .padding(.horizontal, HygurSpacing.lg)
+        .padding(.vertical, HygurSpacing.sm)
+        .background(HygurColors.surface.opacity(0.5))
+    }
+
+    private var chatList: some View {
+        List {
+            ForEach(linkedSessions) { session in
+                LinkedChatSessionRow(session: session) {
+                    // Open the chat in the main window: switch to the
+                    // chat session, dismiss this sheet so the user lands
+                    // on the conversation immediately.
+                    NotificationCenter.default.post(
+                        name: .navigateToSection,
+                        object: "chat"
+                    )
+                    NotificationCenter.default.post(
+                        name: .openChatSession,
+                        object: session.id.uuidString
+                    )
+                    dismiss()
+                }
+            }
+        }
+        .listStyle(.inset)
     }
 
     // MARK: - Header
@@ -500,6 +595,17 @@ struct ProjectDetailView: View {
             }
 
             Spacer()
+
+            // Quick-create a note that auto-binds to this project. Solves
+            // the user complaint that the project modal didn't expose a
+            // "create note for this project" action — they had to leave the
+            // sheet, open the new-note flow, and re-pick the project.
+            Button {
+                showingNewNote = true
+            } label: {
+                Label("Add Note", systemImage: "square.and.pencil")
+            }
+            .help("Create a note attached to this project")
 
             // Meeting-prep helper: run a project-scoped brief that pulls
             // every item linked to the project through the LLM and
@@ -944,6 +1050,58 @@ class ProjectListViewModel: ObservableObject {
         errorMessage = error.localizedDescription
         showError = true
         print("ProjectListViewModel error: \(error)")
+    }
+}
+
+// MARK: - Chat session row
+
+/// Compact row used by ProjectDetailView's "Linked chats" section.
+/// Tap (or double-click) to navigate the main window to the conversation.
+private struct LinkedChatSessionRow: View {
+    let session: ChatSession
+    let onOpen: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: HygurSpacing.md) {
+            Image(systemName: session.isPinned ? "pin.fill" : "bubble.left")
+                .foregroundStyle(session.isPinned ? HygurColors.accent : HygurColors.textSecondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.displayTitle)
+                    .font(HygurTypography.body)
+                    .lineLimit(1)
+                if let preview = session.lastMessagePreview {
+                    Text(preview)
+                        .font(HygurTypography.caption)
+                        .foregroundStyle(HygurColors.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Text(formattedDate(session.updatedAt))
+                .font(HygurTypography.caption)
+                .foregroundStyle(HygurColors.textTertiary)
+        }
+        .padding(.vertical, HygurSpacing.xs)
+        .padding(.horizontal, HygurSpacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: HygurRadius.sm)
+                .fill(isHovered ? HygurColors.accent.opacity(0.08) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture(count: 2, perform: onOpen)
+    }
+
+    private func formattedDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

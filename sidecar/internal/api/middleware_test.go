@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/hygur/sidecar/internal/config"
@@ -40,8 +41,9 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 		t.Error("handler was called but should have been blocked by auth middleware")
 	}
 
-	// Check response body contains expected error
-	body := rec.Body.String()
+	// Check response body contains expected error.
+	// json.Encoder.Encode appends a trailing newline; trim before comparing.
+	body := strings.TrimSpace(rec.Body.String())
 	if body != `{"code":"UNAUTHORIZED","message":"Missing X-Hygur-Token header"}` {
 		t.Errorf("unexpected response body: %s", body)
 	}
@@ -87,7 +89,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	}
 
 	// Check response body contains expected error
-	body := rec.Body.String()
+	body := strings.TrimSpace(rec.Body.String())
 	if body != `{"code":"UNAUTHORIZED","message":"Invalid token"}` {
 		t.Errorf("unexpected response body: %s", body)
 	}

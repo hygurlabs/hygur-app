@@ -1304,7 +1304,14 @@ func (c *MailConnector) captureAndPublishDigest(ctx context.Context, runCycle fu
 	captured := make([]string, 0, 8)
 	doneCapturing := make(chan struct{})
 
+	// `wg` synchronises the capture goroutine with the main routine.
+	// Without it, reading `captured` after close(doneCapturing) races with
+	// the goroutine's final drain — the goroutine isn't guaranteed to have
+	// returned just because we closed the signal channel.
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-doneCapturing:
@@ -1332,6 +1339,7 @@ func (c *MailConnector) captureAndPublishDigest(ctx context.Context, runCycle fu
 
 	cycleErr := runCycle()
 	close(doneCapturing)
+	wg.Wait()
 
 	if len(captured) == 0 {
 		return cycleErr

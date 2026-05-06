@@ -1,34 +1,84 @@
 import SwiftUI
 
+/// Modal listing the urgent actions extracted from the user's documents
+/// (the "focus mode" surfaced in chat). Presented as a sheet, but caller
+/// closes it through the explicit close button or Esc — macOS sheets do
+/// not dismiss on outside-click, so we make sure both paths actually work.
 struct AgendaSheet: View {
     let actions: [AgendaAction]
 
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
-        NavigationStack {
-            Group {
-                if actions.isEmpty {
-                    ContentUnavailableView(
-                        "Aucune action imminente",
-                        systemImage: "checkmark.circle",
-                        description: Text("Pas d'échéances dans les 48 prochaines heures.")
-                    )
-                } else {
-                    List(actions) { action in
-                        AgendaActionRow(action: action)
-                    }
-                    .listStyle(.inset)
-                }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .frame(minWidth: 600, idealWidth: 640, minHeight: 520, idealHeight: 560)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: HygurSpacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Actions urgentes")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                Text("\(actions.count) action\(actions.count > 1 ? "s" : "") dans les 48 prochaines heures")
+                    .font(.caption)
+                    .foregroundStyle(HygurColors.textSecondary)
             }
-            .navigationTitle("Actions urgentes")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Fermer") {
-                        // Dismiss handled by parent
+            Spacer()
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(HygurColors.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.escape, modifiers: [])
+            .help("Fermer (Esc)")
+        }
+        .padding(HygurSpacing.lg)
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        if actions.isEmpty {
+            ContentUnavailableView(
+                "Aucune action imminente",
+                systemImage: "checkmark.circle",
+                description: Text("Pas d'échéances dans les 48 prochaines heures.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: HygurSpacing.sm) {
+                    ForEach(actions) { action in
+                        AgendaActionRow(action: action) {
+                            // Open the source document via the central
+                            // notification so KnowledgeBaseView can present
+                            // QuickLook regardless of which view is active.
+                            NotificationCenter.default.post(
+                                name: .navigateToSection,
+                                object: "knowledgeBase"
+                            )
+                            NotificationCenter.default.post(
+                                name: .openDocument,
+                                object: action.sourceId
+                            )
+                            dismiss()
+                        }
                     }
                 }
+                .padding(HygurSpacing.md)
             }
         }
-        .frame(minWidth: 400, minHeight: 300)
     }
 }
 
@@ -36,10 +86,14 @@ struct AgendaSheet: View {
 
 private struct AgendaActionRow: View {
     let action: AgendaAction
+    let onOpen: () -> Void
+
+    @State private var isHovered = false
+    @State private var isLinkHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+            HStack(spacing: HygurSpacing.sm) {
                 PriorityPill(priority: action.priority)
                 Text(action.what)
                     .font(.body)
@@ -47,25 +101,50 @@ private struct AgendaActionRow: View {
                     .lineLimit(2)
                 Spacer()
             }
-            HStack(spacing: 12) {
+            HStack(spacing: HygurSpacing.md) {
                 Label(relativeDeadline(from: action.deadlineISO), systemImage: "calendar")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HygurColors.textSecondary)
 
                 Spacer()
 
-                Button("Voir le doc") {
-                    NotificationCenter.default.post(
-                        name: .navigateToSection,
-                        object: "knowledgeBase"
-                    )
+                Button("Voir le document") {
+                    onOpen()
                 }
                 .font(.caption)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.blue)
+                .buttonStyle(.plain)
+                .foregroundStyle(isLinkHovered ? Color.accentColor : .blue)
+                .underline(isLinkHovered, color: Color.accentColor)
+                .onHover { hovering in
+                    isLinkHovered = hovering
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
             }
         }
-        .padding(.vertical, 4)
+        .padding(HygurSpacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: HygurRadius.md)
+                .fill(isHovered ? HygurColors.accent.opacity(0.06) : HygurColors.surfaceElevated.opacity(0.4))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HygurRadius.md)
+                .strokeBorder(
+                    isHovered ? HygurColors.accent.opacity(0.30) : HygurColors.border.opacity(0.6),
+                    lineWidth: 0.5
+                )
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .onTapGesture(count: 2) {
+            onOpen()
+        }
+        .accessibilityHint("Double-cliquez pour ouvrir le document source")
     }
 
     private func relativeDeadline(from isoDate: String) -> String {

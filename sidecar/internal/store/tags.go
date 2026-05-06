@@ -389,11 +389,36 @@ func (d *DB) RemoveAllTagsFromItem(ctx context.Context, contentID string) error 
 	return nil
 }
 
+// GetTagByNormalizedName matches a tag by its normalized form, so
+// "Banques" finds an existing "banqués" or "BANQUES ". Falls back to
+// case-insensitive match if normalization yields no result, preserving the
+// pre-existing GetTagByName semantics for callers that rely on them.
+func (d *DB) GetTagByNormalizedName(ctx context.Context, name string) (*Tag, error) {
+	target := NormalizeTagName(name)
+	if target == "" {
+		return nil, nil
+	}
+
+	all, err := d.ListTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range all {
+		if NormalizeTagName(t.Name) == target {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
 // GetOrCreateTag gets an existing tag by name or creates a new one.
 // This is useful for auto-tagging where we want to reuse existing tags.
+//
+// Matching is normalized (case + accent insensitive) so a user who creates
+// "Banques" then later types "banqués" gets the same tag back instead of
+// fragmenting their library.
 func (d *DB) GetOrCreateTag(ctx context.Context, name string, isAuto bool, autoRule string) (*Tag, error) {
-	// Check if tag already exists (case-insensitive)
-	existing, err := d.GetTagByName(ctx, name)
+	existing, err := d.GetTagByNormalizedName(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +439,7 @@ func (d *DB) GetOrCreateTag(ctx context.Context, name string, isAuto bool, autoR
 	if err := d.CreateTag(ctx, tag); err != nil {
 		// Handle race condition: another goroutine might have created the tag
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
-			existing, err := d.GetTagByName(ctx, name)
+			existing, err := d.GetTagByNormalizedName(ctx, name)
 			if err != nil {
 				return nil, err
 			}
@@ -485,6 +510,138 @@ func (d *DB) GetLeastUsedAutoTags(ctx context.Context, limit int) ([]*Tag, error
 	}
 
 	return tags, nil
+}
+
+// MergeTags moves all item associations from sourceID into targetID and then
+// deletes the source tag. Used by the dedupe flow to collapse twin tags
+// ("banques" → "Banques") without losing any item links.
+//
+// `INSERT OR IGNORE` handles the case where an item already carries both
+// tags: the existing target row wins, the source row is silently dropped.
+func (d *DB) MergeTags(ctx context.Context, sourceID, targetID string) error {
+	if sourceID == targetID {
+		return fmt.Errorf("cannot merge a tag into itself")
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin merge tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO item_tags (content_id, tag_id, created_at)
+		SELECT content_id, ?, created_at FROM item_tags WHERE tag_id = ?
+	`, targetID, sourceID); err != nil {
+		return fmt.Errorf("failed to copy associations: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM item_tags WHERE tag_id = ?`, sourceID); err != nil {
+		return fmt.Errorf("failed to drop source associations: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tags WHERE id = ?`, sourceID); err != nil {
+		return fmt.Errorf("failed to delete source tag: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit merge: %w", err)
+	}
+	return nil
+}
+
+// FindDuplicateTagGroups groups tags by their normalized name and returns
+// only the groups with more than one entry — the candidates for merging.
+// The map key is the normalized form (e.g. "banques"); the slice contains
+// the raw tags ordered by descending usage so callers can pick the most-used
+// as the canonical winner.
+func (d *DB) FindDuplicateTagGroups(ctx context.Context) (map[string][]*Tag, error) {
+	all, err := d.ListTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	groups := make(map[string][]*Tag)
+	for _, t := range all {
+		key := NormalizeTagName(t.Name)
+		if key == "" {
+			continue
+		}
+		groups[key] = append(groups[key], t)
+	}
+
+	dupes := make(map[string][]*Tag)
+	for key, tags := range groups {
+		if len(tags) < 2 {
+			continue
+		}
+		// Sort by item_count desc, then created_at asc — the heaviest, oldest
+		// tag wins. Lexicographic on ID breaks remaining ties deterministically.
+		sortTagsForMerge(tags)
+		dupes[key] = tags
+	}
+	return dupes, nil
+}
+
+// sortTagsForMerge orders a slice in-place so the survivor is at index 0:
+// most items first, then earliest created, then ID for stable tie-break.
+func sortTagsForMerge(tags []*Tag) {
+	for i := 1; i < len(tags); i++ {
+		for j := i; j > 0 && tagLessForMerge(tags[j], tags[j-1]); j-- {
+			tags[j], tags[j-1] = tags[j-1], tags[j]
+		}
+	}
+}
+
+func tagLessForMerge(a, b *Tag) bool {
+	if a.ItemCount != b.ItemCount {
+		return a.ItemCount > b.ItemCount
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.ID < b.ID
+}
+
+// DedupeResult summarizes one merge step for the API response.
+type DedupeResult struct {
+	Canonical string   `json:"canonical_id"`
+	Name      string   `json:"name"`
+	MergedIDs []string `json:"merged_ids"`
+}
+
+// DedupeTags walks every duplicate group, merges the losers into the
+// canonical winner, and returns a per-group summary. Best-effort: if one
+// group fails the rest still proceed so a transient issue can't strand the
+// whole tag table in a half-merged state.
+func (d *DB) DedupeTags(ctx context.Context) ([]DedupeResult, error) {
+	groups, err := d.FindDuplicateTagGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]DedupeResult, 0, len(groups))
+	for _, tags := range groups {
+		if len(tags) < 2 {
+			continue
+		}
+		canonical := tags[0]
+		merged := make([]string, 0, len(tags)-1)
+		for _, t := range tags[1:] {
+			if err := d.MergeTags(ctx, t.ID, canonical.ID); err != nil {
+				continue
+			}
+			merged = append(merged, t.ID)
+		}
+		if len(merged) > 0 {
+			results = append(results, DedupeResult{
+				Canonical: canonical.ID,
+				Name:      canonical.Name,
+				MergedIDs: merged,
+			})
+		}
+	}
+	return results, nil
 }
 
 // PruneAutoTags removes the least-used auto-generated tags to stay under MaxAutoTags.
