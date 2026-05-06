@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -408,6 +409,241 @@ func TestRAGChatHandler_WithOptionalParams(t *testing.T) {
 	}
 }
 
+// TestRAGChatHandler_ImageAttachment_EmitsMultimodalArray sends a /chat
+// request with an image attachment and asserts that the body the handler
+// forwards to the LLM uses the OpenAI multimodal `content: []` shape with a
+// text part followed by an image_url part containing a data URL. This is the
+// canonical end-to-end check for the Phase 0.2 attachment plumbing.
+func TestRAGChatHandler_ImageAttachment_EmitsMultimodalArray(t *testing.T) {
+	var capturedBody []byte
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		capturedBody = body
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer mockServer.Close()
+
+	client := createMockLLMClient(mockServer.URL)
+	logger := zerolog.Nop()
+	handler := NewRAGChatHandler(client, nil, nil, DefaultRAGConfig, logger)
+
+	// Tiny base64 payload — the model never executes it, we just verify the
+	// wire shape the sidecar produces.
+	const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII="
+	reqBody := fmt.Sprintf(`{
+		"messages":[{
+			"role":"user",
+			"content":"What is in this image?",
+			"attachments":[{"type":"image","mime_type":"image/png","data":%q}]
+		}],
+		"stream":true,
+		"rag_enabled":false
+	}`, pngB64)
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(capturedBody) == 0 {
+		t.Fatal("LLM mock never received a request body")
+	}
+
+	var raw struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedBody, &raw); err != nil {
+		t.Fatalf("decode captured body: %v\nbody: %s", err, capturedBody)
+	}
+	if len(raw.Messages) == 0 {
+		t.Fatalf("captured body has no messages: %s", capturedBody)
+	}
+
+	// Find the user message — the handler may prepend a system message.
+	var user map[string]any
+	for _, m := range raw.Messages {
+		if role, _ := m["role"].(string); role == "user" {
+			user = m
+			break
+		}
+	}
+	if user == nil {
+		t.Fatalf("no user message in captured body: %s", capturedBody)
+	}
+
+	parts, ok := user["content"].([]any)
+	if !ok {
+		t.Fatalf("user.content must be an array (multimodal), got %T: %v", user["content"], user["content"])
+	}
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 content parts (text + image), got %d: %v", len(parts), parts)
+	}
+
+	text := parts[0].(map[string]any)
+	if text["type"] != "text" || text["text"] != "What is in this image?" {
+		t.Errorf("part[0] not text/'What is in this image?': %v", text)
+	}
+
+	img := parts[1].(map[string]any)
+	if img["type"] != "image_url" {
+		t.Errorf("part[1] type = %v, want image_url", img["type"])
+	}
+	imgURL, _ := img["image_url"].(map[string]any)
+	url, _ := imgURL["url"].(string)
+	wantPrefix := "data:image/png;base64,"
+	if !strings.HasPrefix(url, wantPrefix) {
+		t.Errorf("image_url.url should start with %q, got %q", wantPrefix, url)
+	}
+	if !strings.HasSuffix(url, pngB64) {
+		t.Errorf("image_url.url should end with the original base64 payload, got %q", url)
+	}
+
+	// `attachments` must NOT leak into the LLM request — only OpenAI-shaped
+	// content should reach the model.
+	if _, present := user["attachments"]; present {
+		t.Errorf("user message must not carry the Hygur 'attachments' field on the wire to the LLM")
+	}
+}
+
+// TestRAGChatHandler_AudioAttachment_EmitsInputAudioBlock mirrors the image
+// test but for audio: the handler should emit an `input_audio` block with
+// raw base64 + format, never the Hygur internal `attachments` field.
+func TestRAGChatHandler_AudioAttachment_EmitsInputAudioBlock(t *testing.T) {
+	var capturedBody []byte
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		capturedBody = body
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer mockServer.Close()
+
+	client := createMockLLMClient(mockServer.URL)
+	logger := zerolog.Nop()
+	handler := NewRAGChatHandler(client, nil, nil, DefaultRAGConfig, logger)
+
+	const wavB64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
+	reqBody := fmt.Sprintf(`{
+		"messages":[{
+			"role":"user",
+			"content":"Transcribe this clip",
+			"attachments":[{"type":"audio","format":"wav","data":%q}]
+		}],
+		"stream":true,
+		"rag_enabled":false
+	}`, wavB64)
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var raw struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedBody, &raw); err != nil {
+		t.Fatalf("decode captured body: %v", err)
+	}
+
+	var user map[string]any
+	for _, m := range raw.Messages {
+		if role, _ := m["role"].(string); role == "user" {
+			user = m
+			break
+		}
+	}
+	parts, ok := user["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("user.content not [text, input_audio]: %v", user["content"])
+	}
+	audio := parts[1].(map[string]any)
+	if audio["type"] != "input_audio" {
+		t.Errorf("audio block type = %v, want input_audio", audio["type"])
+	}
+	inner, _ := audio["input_audio"].(map[string]any)
+	if inner["format"] != "wav" {
+		t.Errorf("input_audio.format = %v, want wav", inner["format"])
+	}
+	if inner["data"] != wavB64 {
+		t.Errorf("input_audio.data should be the original base64 payload, got %v", inner["data"])
+	}
+}
+
+// TestRAGChatHandler_DocumentAttachment_StubbedWithoutSearcher confirms that
+// when no UnifiedSearcher is wired, document attachments survive into the
+// MarshalJSON path and are emitted as inert `[document:...]` text stubs (the
+// fallback behaviour) rather than crashing or leaking the Hygur attachments
+// field. With a searcher in place (production), they would be expanded to
+// inline excerpts before the LLM client is invoked.
+func TestRAGChatHandler_DocumentAttachment_StubbedWithoutSearcher(t *testing.T) {
+	var capturedBody []byte
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		capturedBody = body
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer mockServer.Close()
+
+	client := createMockLLMClient(mockServer.URL)
+	logger := zerolog.Nop()
+	handler := NewRAGChatHandler(client, nil, nil, DefaultRAGConfig, logger)
+
+	reqBody := `{
+		"messages":[{
+			"role":"user",
+			"content":"Summarise this",
+			"attachments":[{"type":"document","content_id":"doc-42","title":"Quarterly notes"}]
+		}],
+		"stream":true,
+		"rag_enabled":false
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	if !strings.Contains(string(capturedBody), "[document:Quarterly notes]") {
+		t.Errorf("document stub missing from outbound LLM body: %s", capturedBody)
+	}
+	if strings.Contains(string(capturedBody), `"attachments"`) {
+		t.Errorf("Hygur 'attachments' field leaked into LLM body: %s", capturedBody)
+	}
+}
 
 func TestRAGConfig_Validate(t *testing.T) {
 	tests := []struct {

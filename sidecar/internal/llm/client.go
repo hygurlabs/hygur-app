@@ -58,6 +58,12 @@ func (c *Client) EmbeddingBaseURL() string { return c.embeddingURL() }
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Attachments carry non-text payloads (images, audio, document refs) that
+	// accompany the message. They are part of the Hygur internal API surface
+	// only — the LLM sees them flattened into the OpenAI multimodal `content`
+	// array via Message.MarshalJSON. Document refs must be resolved to text
+	// upstream (in the chat handler) before reaching the LLM client.
+	Attachments []Attachment `json:"attachments,omitempty"`
 	// Reasoning is populated by reasoning-capable backends (vLLM, LM Studio
 	// serving Qwen/Nemotron-super, etc.) when the model emits its scratch
 	// thinking in a dedicated field instead of inline `<think>` tags inside
@@ -78,6 +84,107 @@ type Message struct {
 	// Name is optional metadata; some providers expect it on tool messages
 	// to mirror the function name. Kept for forward compatibility.
 	Name string `json:"name,omitempty"`
+}
+
+// AttachmentType discriminates the variants of Attachment.
+type AttachmentType string
+
+const (
+	AttachmentTypeImage    AttachmentType = "image"
+	AttachmentTypeAudio    AttachmentType = "audio"
+	AttachmentTypeDocument AttachmentType = "document"
+)
+
+// Attachment is a non-text payload carried on a Message. The wire shape is
+// Hygur-internal: clients send `{type, mime_type, data, ...}` and the LLM
+// client translates to whichever runtime-specific format the inference
+// backend expects (OpenAI multimodal array today; vLLM/NIM may differ when
+// the Phase 1.0 spike confirms the runtime API).
+//
+// Field semantics by Type:
+//   - image:    Data (base64) + MimeType (e.g. "image/png")
+//   - audio:    Data (base64) + Format (e.g. "wav", "mp3")
+//   - document: ContentID — must be resolved to text by the chat handler
+//     before the message reaches the LLM client.
+type Attachment struct {
+	Type      AttachmentType `json:"type"`
+	MimeType  string         `json:"mime_type,omitempty"`
+	Data      string         `json:"data,omitempty"`
+	Format    string         `json:"format,omitempty"`
+	ContentID string         `json:"content_id,omitempty"`
+	// Title is an optional human-readable label rendered by the UI on
+	// document attachments. It has no meaning for the LLM.
+	Title string `json:"title,omitempty"`
+}
+
+// MarshalJSON emits the OpenAI multimodal `content` array shape when
+// attachments are present and the plain string `content` shape otherwise.
+// Document attachments are expected to have been resolved to text upstream;
+// any that slip through are emitted as inert text references so the model
+// doesn't choke on an unknown block type.
+func (m Message) MarshalJSON() ([]byte, error) {
+	if len(m.Attachments) == 0 {
+		// No attachments → standard OpenAI message with string content.
+		// Use a type alias to recurse without triggering this method again.
+		type alias Message
+		return json.Marshal(alias(m))
+	}
+
+	parts := make([]map[string]any, 0, 1+len(m.Attachments))
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, att := range m.Attachments {
+		switch att.Type {
+		case AttachmentTypeImage:
+			mime := att.MimeType
+			if mime == "" {
+				mime = "image/png"
+			}
+			parts = append(parts, map[string]any{
+				"type": "image_url",
+				"image_url": map[string]any{
+					"url": fmt.Sprintf("data:%s;base64,%s", mime, att.Data),
+				},
+			})
+		case AttachmentTypeAudio:
+			format := att.Format
+			if format == "" {
+				format = "wav"
+			}
+			parts = append(parts, map[string]any{
+				"type": "input_audio",
+				"input_audio": map[string]any{
+					"data":   att.Data,
+					"format": format,
+				},
+			})
+		case AttachmentTypeDocument:
+			label := att.Title
+			if label == "" {
+				label = att.ContentID
+			}
+			parts = append(parts, map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("[document:%s]", label),
+			})
+		}
+	}
+
+	out := map[string]any{
+		"role":    m.Role,
+		"content": parts,
+	}
+	if m.Name != "" {
+		out["name"] = m.Name
+	}
+	if m.ToolCallID != "" {
+		out["tool_call_id"] = m.ToolCallID
+	}
+	if len(m.ToolCalls) > 0 {
+		out["tool_calls"] = m.ToolCalls
+	}
+	return json.Marshal(out)
 }
 
 // ToolCall represents a single tool invocation emitted by the model. OpenAI

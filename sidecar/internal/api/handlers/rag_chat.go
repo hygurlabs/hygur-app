@@ -170,6 +170,61 @@ func injectAgendaIntoSystemPrompt(prompt string, actions []agenda.AgendaAction) 
 	return b.String() + prompt
 }
 
+// resolveDocumentAttachments expands any Attachment of type "document" into
+// inline text on the same message, then strips those attachments from the
+// list. The LLM client never sees document refs — only the resolved excerpts.
+// Image and audio attachments pass through untouched so the multimodal
+// MarshalJSON path can serialise them to OpenAI content blocks.
+//
+// Best-effort: when a content_id can't be hydrated (deleted, never ingested),
+// the attachment is dropped silently rather than failing the whole turn.
+func (h *RAGChatHandler) resolveDocumentAttachments(ctx context.Context, messages []llm.Message) []llm.Message {
+	if h.unifiedSearcher == nil {
+		return messages
+	}
+	out := make([]llm.Message, len(messages))
+	for i, m := range messages {
+		out[i] = m
+		if len(m.Attachments) == 0 {
+			continue
+		}
+		var docIDs []string
+		var keep []llm.Attachment
+		for _, att := range m.Attachments {
+			if att.Type == llm.AttachmentTypeDocument && att.ContentID != "" {
+				docIDs = append(docIDs, att.ContentID)
+			} else {
+				keep = append(keep, att)
+			}
+		}
+		if len(docIDs) == 0 {
+			continue
+		}
+		results, err := h.unifiedSearcher.FetchByContentIDs(ctx, docIDs)
+		if err != nil {
+			h.logger.Warn().Err(err).Strs("content_ids", docIDs).
+				Msg("failed to resolve document attachments")
+			out[i].Attachments = keep
+			continue
+		}
+		var b strings.Builder
+		if m.Content != "" {
+			b.WriteString(m.Content)
+			b.WriteString("\n\n")
+		}
+		for _, r := range results {
+			label := r.Title
+			if label == "" {
+				label = r.ContentID
+			}
+			b.WriteString(fmt.Sprintf("[Document: %s]\n%s\n\n", label, r.Excerpt))
+		}
+		out[i].Content = strings.TrimRight(b.String(), "\n")
+		out[i].Attachments = keep
+	}
+	return out
+}
+
 // injectAgendaIntoMessages injects an agenda urgency block into the messages
 // list, augmenting the system message when one exists or prepending a new one.
 func injectAgendaIntoMessages(messages []llm.Message, actions []agenda.AgendaAction) []llm.Message {
@@ -281,8 +336,10 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Prepare messages for LLM.
-	messages := req.Messages
+	// Prepare messages for LLM. Document attachments must be resolved to
+	// text BEFORE any RAG/agenda/memory injection so the resolved content
+	// is part of the context the LLM sees on this turn.
+	messages := h.resolveDocumentAttachments(r.Context(), req.Messages)
 
 	// Direct-retrieval fast-path: when the latest user query is an entity
 	// follow-up ("et son IBAN ?") and we already know the relevant sources

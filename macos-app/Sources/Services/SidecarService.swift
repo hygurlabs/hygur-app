@@ -1645,16 +1645,33 @@ struct ModelInfo: Codable, Identifiable, Sendable {
 struct ChatMessage: Codable, Sendable {
     let role: String
     let content: String
+    /// Non-text payloads (images, audio, document refs). The sidecar
+    /// resolves document refs to inline text and translates image/audio
+    /// into the runtime-specific multimodal content blocks.
+    let attachments: [Attachment]?
 
-    init(role: String, content: String) {
+    init(role: String, content: String, attachments: [Attachment]? = nil) {
         self.role = role
         self.content = content
+        self.attachments = attachments
     }
 
     /// Create from app Message model
     init(from message: Message) {
         self.role = message.role.rawValue
         self.content = message.content
+        self.attachments = message.attachments
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role, content, attachments
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(role, forKey: .role)
+        try c.encode(content, forKey: .content)
+        try c.encodeIfPresent(attachments, forKey: .attachments)
     }
 }
 

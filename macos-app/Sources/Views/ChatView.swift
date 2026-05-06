@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
@@ -261,6 +262,9 @@ struct MessageBubble: View {
             if message.role == .user { Spacer(minLength: 60) }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+                if let atts = message.attachments, !atts.isEmpty {
+                    attachmentsPreview(atts)
+                }
                 ZStack(alignment: message.role == .user ? .topLeading : .topTrailing) {
                     messageContent
                         .padding(HygurSpacing.md)
@@ -434,6 +438,56 @@ struct MessageBubble: View {
             return "Error: \(error)"
         }
         return call.arguments
+    }
+
+    // MARK: - Attachments Preview
+
+    @ViewBuilder
+    private func attachmentsPreview(_ attachments: [Attachment]) -> some View {
+        let alignment: HorizontalAlignment = message.role == .user ? .trailing : .leading
+        VStack(alignment: alignment, spacing: HygurSpacing.xs) {
+            ForEach(Array(attachments.enumerated()), id: \.offset) { _, att in
+                attachmentChip(att)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func attachmentChip(_ attachment: Attachment) -> some View {
+        switch attachment {
+        case .image(let data, _):
+            if let nsImage = NSImage(data: data) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: 120, maxHeight: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: HygurRadius.md))
+            } else {
+                attachmentLabel(icon: "photo", text: "Image")
+            }
+        case .audio(_, let format, let duration):
+            let label = duration.map { String(format: "Audio · %.0fs", $0) } ?? "Audio (.\(format))"
+            attachmentLabel(icon: "waveform", text: label)
+        case .document(let contentId, let title):
+            attachmentLabel(icon: "doc.text", text: title ?? contentId)
+        }
+    }
+
+    private func attachmentLabel(icon: String, text: String) -> some View {
+        HStack(spacing: HygurSpacing.xs) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(HygurColors.textSecondary)
+            Text(text)
+                .font(HygurTypography.caption)
+                .foregroundStyle(HygurColors.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, HygurSpacing.sm)
+        .padding(.vertical, HygurSpacing.xs)
+        .background(HygurColors.surface)
+        .clipShape(Capsule())
     }
 
     // MARK: - Bubble Background
