@@ -8,6 +8,11 @@ struct ChatView: View {
     @State private var scrolledID: Message.ID?
     @State private var agendaViewModel = AgendaViewModel()
     @State private var showingAgendaSheet = false
+    @State private var voiceService = VoiceService()
+    /// Captured value of inputText at the moment recording starts, so the
+    /// live transcript appends rather than wiping anything the user already
+    /// typed. Reset on stop.
+    @State private var voiceBaseline: String = ""
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -209,6 +214,8 @@ struct ChatView: View {
                 .disabled(viewModel.isStreaming)
                 .help("Attach an image")
 
+                micButton
+
                 TextField("Message...", text: $viewModel.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
@@ -249,6 +256,45 @@ struct ChatView: View {
         .onPasteCommand(of: [UTType.image.identifier]) { providers in
             ingestImageProviders(providers)
         }
+    }
+
+    /// Hold-to-talk button. Pressing starts on-device speech recognition;
+    /// releasing stops it and leaves the transcript in the input field for
+    /// the user to edit before sending. The DragGesture with zero distance
+    /// is the only SwiftUI primitive that gives us mouseDown/mouseUp on a
+    /// stationary touch — Button's action fires only on click.
+    private var micButton: some View {
+        let isOn = voiceService.isRecording
+        return Image(systemName: isOn ? "mic.fill" : "mic")
+            .font(.title3)
+            .foregroundStyle(isOn ? Color.red : HygurColors.textSecondary)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+            .help(isOn ? "Release to stop recording" : "Hold to talk")
+            .opacity(viewModel.isStreaming ? 0.4 : 1)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !viewModel.isStreaming, !voiceService.isRecording else { return }
+                        voiceBaseline = viewModel.inputText
+                        Task { await voiceService.start() }
+                    }
+                    .onEnded { _ in
+                        guard voiceService.isRecording else { return }
+                        voiceService.stop()
+                    }
+            )
+            .onChange(of: voiceService.transcript) { _, newValue in
+                guard voiceService.isRecording else { return }
+                let glue = voiceBaseline.isEmpty || newValue.isEmpty ? "" : " "
+                viewModel.inputText = voiceBaseline + glue + newValue
+            }
+            .onChange(of: voiceService.error) { _, newError in
+                if let newError {
+                    viewModel.error = newError
+                    voiceService.error = nil
+                }
+            }
     }
 
     /// Send is enabled when either typed text or a queued attachment is

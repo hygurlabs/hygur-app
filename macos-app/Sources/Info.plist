@@ -26,5 +26,9 @@
 	<string>26.0</string>
 	<key>NSMainStoryboardFile</key>
 	<string></string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hygur uses the microphone for push-to-talk voice input in the chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages.</string>
 </dict>
 </plist>
