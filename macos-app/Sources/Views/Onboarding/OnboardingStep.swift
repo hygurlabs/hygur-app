@@ -7,6 +7,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     case connectMail
     case importFolder
     case enableVoice
+    case notifications
     case ready
 
     var id: Int { rawValue }
@@ -19,6 +20,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
         case .connectMail:   return "Connect mail"
         case .importFolder:  return "Import documents"
         case .enableVoice:   return "Enable voice"
+        case .notifications: return "Notifications"
         case .ready:         return "All set"
         }
     }
@@ -31,7 +33,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
         switch self {
         case .welcome, .permissions, .ready:            return false
         case .connectModel:                             return true
-        case .connectMail, .importFolder, .enableVoice: return true
+        case .connectMail, .importFolder, .enableVoice, .notifications: return true
         }
     }
 

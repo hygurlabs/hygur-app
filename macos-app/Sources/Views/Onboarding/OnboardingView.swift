@@ -44,6 +44,8 @@ struct OnboardingView: View {
             StepImportFolder()
         case .enableVoice:
             StepEnableVoice()
+        case .notifications:
+            StepNotifications()
         case .ready:
             StepReady()
         }
