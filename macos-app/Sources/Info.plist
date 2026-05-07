@@ -37,11 +37,41 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>NSAppleScriptEnabled</key>
+	<false/>
 	<key>NSMainStoryboardFile</key>
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hygur uses the microphone for push-to-talk voice input in the chat.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Add to Hygur</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>addToHygur</string>
+			<key>NSPortName</key>
+			<string>Hygur</string>
+			<key>NSReturnTypes</key>
+			<array/>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.utf8-plain-text</string>
+				<string>public.url</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>AskHygurIntent</string>
+		<string>SaveToHygurIntent</string>
+		<string>WhatsOnMyAgendaIntent</string>
+		<string>CreateNoteInHygurIntent</string>
+	</array>
 </dict>
 </plist>

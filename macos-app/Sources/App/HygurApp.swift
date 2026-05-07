@@ -1,8 +1,15 @@
+import AppKit
 import SwiftUI
 
 @main
 struct HygurApp: App {
     @AppStorage("lastSidebarSelection") private var lastSidebarSelectionRaw: String = "chat"
+
+    // Backs the Services menu entry "Add to Hygur". Held as a strong
+    // reference here because `NSApp.servicesProvider` only keeps a weak
+    // reference and the provider would otherwise be deallocated as soon
+    // as the `.task` block returns.
+    @State private var servicesProvider = HygurServiceProvider()
 
     // Gates the first-run onboarding sheet. Flipped to `true` when the user
     // either finishes the flow or chooses Start chatting on the final step.
@@ -80,6 +87,24 @@ struct HygurApp: App {
                     // macOS 26 cascades into a window-level layout reflow).
                     Task { await voiceService.prepare() }
 
+                    // Wire up the Services menu entry "Add to Hygur" before
+                    // anything else — this is what makes the NSServices
+                    // declaration in Info.plist actually receive selections.
+                    // `NSUpdateDynamicServices` re-scans Info.plist so the
+                    // menu picks up our entry on the very first launch
+                    // after install (otherwise it's only refreshed on
+                    // login).
+                    NSApp.servicesProvider = servicesProvider
+                    NSUpdateDynamicServices()
+
+                    // Mirror the sidecar URL into the App Group right away
+                    // so the Share Extension knows where to talk even
+                    // before the sidecar token has been generated.
+                    SharedAppGroup.writeSidecarConfig(
+                        url: AppPreferences.shared.sidecarURL,
+                        token: nil
+                    )
+
                     // Spawn the supervised sidecar child process if the binary
                     // is installed. Errors are surfaced via `supervisor.lastError`
                     // in the Settings view; the rest of the app continues to
@@ -90,6 +115,35 @@ struct HygurApp: App {
                     // pushing secrets — supervisor.start() is non-blocking and
                     // the process needs time to bind its port.
                     await waitForSidecar()
+
+                    // Now that the sidecar has booted (and therefore the
+                    // token file at ~/Library/Application Support/Hygur/token
+                    // exists), push the URL+token pair into the App Group
+                    // so the Share Extension and Services menu provider can
+                    // authenticate.
+                    let sidecar = SidecarService.fromSettings()
+                    let token = await sidecar.getToken()
+                    SharedAppGroup.writeSidecarConfig(
+                        url: AppPreferences.shared.sidecarURL,
+                        token: token
+                    )
+
+                    // Keep the App Group in sync if the sidecar URL or token
+                    // change at runtime (Settings edits, token rotation).
+                    // We poll once a minute rather than observing
+                    // `UserDefaults.didChangeNotification` because every
+                    // `@AppStorage` write fires that notification — a
+                    // throttled poll is simpler and cheaper.
+                    Task {
+                        while !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: 60_000_000_000)
+                            let latestToken = await SidecarService.fromSettings().getToken()
+                            SharedAppGroup.writeSidecarConfig(
+                                url: AppPreferences.shared.sidecarURL,
+                                token: latestToken
+                            )
+                        }
+                    }
 
                     // Push Keychain-stored secrets to the sidecar at launch so
                     // it can re-init enabled connectors with their credentials.
