@@ -1385,6 +1385,7 @@ private struct SystemTab: View {
     @Environment(SidecarSupervisor.self) private var supervisor
     @AppStorage("hygur.shortcut.quickLook") private var quickLookShortcutRaw: String = QuickLookShortcut.space.rawValue
     @AppStorage("hotkey.summon.enabled") private var summonHotkeyEnabled: Bool = true
+    @AppStorage("ui.menuBarOnly") private var menuBarOnly: Bool = false
     @State private var showingBackupExport = false
     @State private var showingBackupRestore = false
     @State private var backupMessage: String = ""
@@ -1414,6 +1415,22 @@ private struct SystemTab: View {
                         .toggleStyle(.switch).labelsHidden()
                     }
                 }
+            }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Appearance")
+                SettingsCard {
+                    CardRow(icon: "menubar.rectangle",
+                            title: "Run as menu bar only",
+                            subtitle: "Hide the Dock icon. Use the menu bar item or ⌘⇧H to summon a window.") {
+                        Toggle("", isOn: $menuBarOnly)
+                            .toggleStyle(.switch).labelsHidden()
+                    }
+                }
+                Text("Useful if you only want Hygur as a quick-access assistant in the background. Re-enable to bring the Dock icon back.")
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.textTertiary)
+                    .padding(.horizontal, HygurSpacing.xs)
             }
 
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {

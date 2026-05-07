@@ -55,6 +55,12 @@ struct HygurApp: App {
     /// it clashes with another app's binding.
     @AppStorage("hotkey.summon.enabled") private var summonHotkeyEnabled: Bool = true
 
+    /// When `true`, Hygur runs without a Dock icon — only the menu bar item
+    /// remains visible, summoned windows still work but the app doesn't
+    /// participate in Cmd+Tab. Applied at runtime via setActivationPolicy
+    /// (no relaunch required).
+    @AppStorage("ui.menuBarOnly") private var menuBarOnly: Bool = false
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -93,6 +99,12 @@ struct HygurApp: App {
                     handleHygurURL(url)
                 }
                 .task {
+                    // Apply the menu-bar-only activation policy as early as
+                    // possible. Doing this before any heavy launch work means
+                    // the Dock icon never flashes for users who've opted into
+                    // accessory mode.
+                    applyMenuBarOnlyMode()
+
                     // Pre-warm the speech recognizer in the background so the
                     // first user-tap on the mic doesn't synchronously load
                     // the Speech framework on the tap frame (which on
@@ -198,6 +210,9 @@ struct HygurApp: App {
                         HotkeyManager.shared.unregister()
                     }
                 }
+                .onChange(of: menuBarOnly) { _, _ in
+                    applyMenuBarOnlyMode()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
@@ -289,6 +304,28 @@ struct HygurApp: App {
                 .environment(eventStream)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+// MARK: - Activation policy
+
+/// Applies the current `ui.menuBarOnly` preference to the running app.
+/// `.accessory` removes the Dock icon and Cmd+Tab presence; `.regular`
+/// restores them. Called at launch and on every toggle flip.
+@MainActor
+fileprivate func applyMenuBarOnlyMode() {
+    let menuBarOnly = UserDefaults.standard.bool(forKey: "ui.menuBarOnly")
+    let target: NSApplication.ActivationPolicy = menuBarOnly ? .accessory : .regular
+    if NSApp.activationPolicy() != target {
+        NSApp.setActivationPolicy(target)
+    }
+    // When transitioning *into* menu-bar-only mode, hide any visible main
+    // windows so the user gets the expected "minimal" state immediately.
+    // The menu bar item and global hotkey still bring the window back.
+    if menuBarOnly {
+        for window in NSApp.windows where window.canBecomeMain && window.isVisible {
+            window.orderOut(nil)
+        }
     }
 }
 
