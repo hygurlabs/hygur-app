@@ -4,38 +4,88 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @AppStorage("lastSidebarSelection") private var lastSidebarSelectionRaw: String = "chat"
+    /// Right-hand inspector visibility — Phase 3 introduces the toggle; the
+    /// pane currently hosts a placeholder, real inspectors land in Phase 6.
+    @AppStorage("hygur.properties.visible") private var propertiesVisible: Bool = false
 
     @State private var sidebarSelection: SidebarItem? = .newChat
     @State private var showingNewNote = false
     @State private var showingCommandPalette = false
     @State private var sessionManager = ChatSessionManager()
     @State private var chatViewModel = ChatViewModel()
+    @Environment(InspectorSelection.self) private var inspector
+    @Environment(EventStreamService.self) private var eventStream
+
+    /// Gates the launch-time runtime offline banner. Two layers:
+    /// - `runtimeBannerArmed` flips on after a short grace window so we
+    ///   don't flash the banner during the normal SSE startup race.
+    /// - `runtimeBannerDismissed` is a per-session opt-out so users who
+    ///   know their runtime is intentionally offline aren't nagged.
+    @AppStorage("onboarding.completed") private var onboardingCompleted: Bool = false
+    @State private var runtimeBannerArmed: Bool = false
+    @State private var runtimeBannerDismissed: Bool = false
 
     var body: some View {
         ZStack {
-            NavigationSplitView {
-                SidebarView(
-                    selection: $sidebarSelection,
-                    showingNewNote: $showingNewNote,
-                    sessionManager: sessionManager
-                )
-            } detail: {
-                detailView
-            }
-            .onChange(of: sidebarSelection) { _, newValue in
-                handleSelectionChange(newValue)
-            }
-            .frame(minWidth: 800, minHeight: 600)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    if isChatView {
-                        ModelSelectorView()
+            VStack(spacing: 0) {
+                if shouldShowRuntimeBanner {
+                    RuntimeUnreachableBanner(
+                        onConfigure: openSettings,
+                        onDismiss: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                runtimeBannerDismissed = true
+                            }
+                        }
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                NavigationSplitView {
+                    SidebarView(
+                        selection: $sidebarSelection,
+                        showingNewNote: $showingNewNote,
+                        sessionManager: sessionManager
+                    )
+                } detail: {
+                    ColumnRouter.main(
+                        for: sidebarSelection,
+                        chatViewModel: chatViewModel,
+                        showingNewNote: $showingNewNote
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(HygurColors.background)
+                }
+                .inspector(isPresented: $propertiesVisible) {
+                    PropertiesPanel(selection: sidebarSelection)
+                        .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
+                }
+                .onChange(of: sidebarSelection) { _, newValue in
+                    handleSelectionChange(newValue)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        if isChatView {
+                            ModelSelectorView()
+                        }
+                    }
+                    // Flexible spacer + Properties toggle anchors the inspector
+                    // toggle to the absolute trailing edge of the window toolbar.
+                    ToolbarSpacer(.flexible, placement: .primaryAction)
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            propertiesVisible.toggle()
+                        } label: {
+                            Image(systemName: propertiesVisible ? "sidebar.right" : "sidebar.squares.right")
+                        }
+                        .help(propertiesVisible ? "Hide Properties" : "Show Properties")
                     }
                 }
+                .sheet(isPresented: $showingNewNote) {
+                    CreateNoteView()
+                }
+
+                HygurStatusBar()
             }
-            .sheet(isPresented: $showingNewNote) {
-                CreateNoteView()
-            }
+            .frame(minWidth: 1000, minHeight: 700)
 
             // Command palette as an in-window overlay rather than a modal
             // sheet. Sheets on macOS don't dismiss on outside-click, which is
@@ -81,42 +131,31 @@ struct ContentView: View {
         .onAppear {
             restoreLastSelection()
         }
-    }
-
-    // MARK: - Detail View
-
-    @ViewBuilder
-    private var detailView: some View {
-        switch sidebarSelection {
-        case .newChat:
-            ChatView(viewModel: chatViewModel)
-        case .chatSession(let sessionId):
-            ChatView(viewModel: chatViewModel)
-                .id(sessionId)
-        case .knowledgeBase:
-            KnowledgeBaseView()
-        case .notes:
-            NotesView(showingNewNote: $showingNewNote)
-        case .search:
-            SearchView()
-        case .projects:
-            ProjectListView()
-        case .tags:
-            TagsView()
-        case .email:
-            EmailThreadsView()
-        case .graph:
-            MemoryTimelineView()
-        case .connectors:
-            ConnectorsView()
-        case .marketplace:
-            ConnectorMarketplaceView()
-        case .activity:
-            ActivityView()
-        case .memories:
-            MemoriesView()
-        case .none:
-            ChatView(viewModel: chatViewModel)
+        .task {
+            // Grace window before we trust `lmStudioStatus == .down` — at
+            // launch the SSE stream and the first /health probe race the
+            // app appearing on screen, and we'd otherwise flash the banner
+            // for ~1 s before the seed result lands.
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            runtimeBannerArmed = true
+        }
+        // Re-arm the banner if the runtime flips back down later in the
+        // session — the user may have dismissed it earlier, but a fresh
+        // failure should be re-surfaceable. Only resets on transitions to
+        // .down; flips to .up just hide the banner via shouldShowRuntimeBanner.
+        .onChange(of: eventStream.lmStudioStatus) { _, newStatus in
+            if newStatus == .down {
+                runtimeBannerDismissed = false
+            }
+        }
+        // Single-click in any list view (Notes, KB, Mail) writes to
+        // InspectorSelection — auto-open the Properties pane so the user
+        // gets immediate visible feedback rather than wondering whether the
+        // click registered.
+        .onChange(of: inspector.current) { _, newValue in
+            if newValue != nil && !propertiesVisible {
+                propertiesVisible = true
+            }
         }
     }
 
@@ -131,6 +170,16 @@ struct ContentView: View {
 
         case .chatSession(let sessionId):
             chatViewModel.bind(to: sessionManager, sessionId: sessionId)
+
+        case .note:
+            // Favorited note clicked — keep the deep-link selection so
+            // ColumnRouter can show the editor in the detail column. Just
+            // unbind chat state.
+            chatViewModel.unbind()
+
+        case .project:
+            // Same idea as `.note` — keep the deep-link, ColumnRouter handles routing.
+            chatViewModel.unbind()
 
         default:
             chatViewModel.unbind()
@@ -262,11 +311,19 @@ struct ContentView: View {
         case .email:         return "email"
         case .activity:      return "activity"
         case .memories:      return "memories"
+        case .note(let id):    return "note:\(id)"
+        case .project(let id): return "project:\(id)"
         default:             return nil
         }
     }
 
     private func sidebarItem(for key: String) -> SidebarItem? {
+        if let id = key.hygur_stripping(prefix: "note:") {
+            return .note(id)
+        }
+        if let id = key.hygur_stripping(prefix: "project:") {
+            return .project(id)
+        }
         switch key {
         case "chat":          return .newChat
         case "knowledgeBase": return .knowledgeBase
@@ -282,6 +339,39 @@ struct ContentView: View {
         case "memories":      return .memories
         default:              return nil
         }
+    }
+
+    // MARK: - Runtime banner
+
+    /// All conditions that must be true for the launch-time banner to show.
+    /// We deliberately don't surface this during onboarding (the user is
+    /// already in setup) or before the grace window (false-flash on launch).
+    private var shouldShowRuntimeBanner: Bool {
+        guard onboardingCompleted else { return false }
+        guard runtimeBannerArmed else { return false }
+        guard !runtimeBannerDismissed else { return false }
+        return eventStream.lmStudioStatus == .down
+    }
+
+    /// Opens the Settings window. macOS 14+ ships `showSettings(_:)` as the
+    /// preferred selector — `showPreferences` is the old name and was
+    /// soft-deprecated. Falls through silently if neither selector exists.
+    private func openSettings() {
+        if NSApp.responds(to: Selector(("showSettingsWindow:"))) {
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        } else {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
+    }
+}
+
+private extension String {
+    /// Returns the suffix after `prefix`, or nil if the prefix isn't matched.
+    /// Used to round-trip sidebar deep-links like `note:abc-123` from
+    /// `@AppStorage` without juggling Codable for an enum with associated values.
+    func hygur_stripping(prefix: String) -> String? {
+        guard hasPrefix(prefix) else { return nil }
+        return String(dropFirst(prefix.count))
     }
 }
 
