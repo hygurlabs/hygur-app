@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 import MarkdownUI
+import AVFoundation
+import Speech
+import EventKit
+import UserNotifications
 
 // MARK: - SettingsView
 
@@ -41,6 +45,10 @@ struct SettingsView: View {
             NotificationsTab()
                 .tabItem { Label("Notifications", systemImage: "bell") }
                 .tag(SettingsTab.notifications)
+
+            PrivacyTab()
+                .tabItem { Label("Privacy", systemImage: "lock.shield") }
+                .tag(SettingsTab.privacy)
 
             SystemTab(
                 showResetConfirmation: $showResetConfirmation,
@@ -172,7 +180,7 @@ private enum ConnectionStatus { case unknown, testing, connected, disconnected }
 private enum TokenStatus { case unknown, valid, missing, invalid }
 
 private enum SettingsTab: Hashable {
-    case connection, lmStudio, model, notifications, system, about
+    case connection, lmStudio, model, notifications, privacy, system, about
 }
 
 private struct SettingsCard<Content: View>: View {
@@ -1159,6 +1167,211 @@ private struct NotificationToggleRow: View {
             Toggle("", isOn: $isOn).toggleStyle(.switch).labelsHidden()
         }
         .padding(HygurSpacing.lg)
+    }
+}
+
+// MARK: - Tab: Privacy & Permissions
+
+/// Mirrors the onboarding "What Hygur may ask for" page but always reflects
+/// the live grant state of every system permission Hygur uses. Each row is
+/// passive — toggling here is delegated to System Settings via a deep link
+/// because macOS doesn't allow apps to grant their own permissions, and we
+/// don't want to fake control we don't have.
+private struct PrivacyTab: View {
+    @State private var notificationStatus: PrivacyPermissionStatus = .checking
+    /// Used as a re-render trigger when the user comes back from System
+    /// Settings — every focus regain pings the synchronous APIs and
+    /// re-fetches the async notification status.
+    @State private var refreshTick: Int = 0
+
+    var body: some View {
+        TabScrollContainer {
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Permissions")
+                Text("Hygur only requests these when you use the matching feature. Each is granted or revoked from System Settings — the buttons below open the right pane directly.")
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.textSecondary)
+                    .padding(.horizontal, HygurSpacing.xs)
+                    .padding(.bottom, HygurSpacing.xxs)
+
+                SettingsCard {
+                    PrivacyPermissionRow(
+                        icon: "mic.fill",
+                        title: "Microphone",
+                        description: "Push-to-talk voice input in chat.",
+                        status: PrivacyTab.microphoneStatus(),
+                        settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+                    )
+                    CardDivider()
+                    PrivacyPermissionRow(
+                        icon: "waveform",
+                        title: "Speech Recognition",
+                        description: "On-device transcription of your voice into text.",
+                        status: PrivacyTab.speechStatus(),
+                        settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+                    )
+                    CardDivider()
+                    PrivacyPermissionRow(
+                        icon: "calendar",
+                        title: "Calendar",
+                        description: "Read upcoming events and create new ones from chat (always with confirmation).",
+                        status: PrivacyTab.calendarStatus(),
+                        settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
+                    )
+                    CardDivider()
+                    PrivacyPermissionRow(
+                        icon: "bell.badge",
+                        title: "Notifications",
+                        description: "Daily briefs and priority alerts. Opt-in via the Notifications tab.",
+                        status: notificationStatus,
+                        settingsURL: "x-apple.systempreferences:com.apple.preference.notifications"
+                    )
+                }
+                .id(refreshTick) // Force re-evaluation of synchronous statuses on refresh.
+            }
+        }
+        .task(id: refreshTick) {
+            notificationStatus = await PrivacyTab.fetchNotificationStatus()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+            // Refresh after the user returns from System Settings so toggles
+            // flip live without having to re-open the tab.
+            refreshTick &+= 1
+        }
+    }
+
+    // MARK: - Status fetchers
+
+    /// Synchronous fetchers are kept off the view body to avoid re-evaluating
+    /// the macOS APIs on every redraw — they're cheap but not free.
+    private static func microphoneStatus() -> PrivacyPermissionStatus {
+        PrivacyPermissionStatus(avAuth: AVCaptureDevice.authorizationStatus(for: .audio))
+    }
+
+    private static func speechStatus() -> PrivacyPermissionStatus {
+        PrivacyPermissionStatus(speechAuth: SFSpeechRecognizer.authorizationStatus())
+    }
+
+    private static func calendarStatus() -> PrivacyPermissionStatus {
+        PrivacyPermissionStatus(eventAuth: EKEventStore.authorizationStatus(for: .event))
+    }
+
+    private static func fetchNotificationStatus() async -> PrivacyPermissionStatus {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return PrivacyPermissionStatus(notificationAuth: settings.authorizationStatus)
+    }
+}
+
+/// Shared lightweight status enum so every row renders the same badge
+/// regardless of which framework backs it. `.checking` is only used by
+/// async statuses (notifications) while we await the first read.
+private enum PrivacyPermissionStatus {
+    case granted
+    case denied
+    case notDetermined
+    case checking
+
+    var label: String {
+        switch self {
+        case .granted:       return "Granted"
+        case .denied:        return "Denied"
+        case .notDetermined: return "Not yet asked"
+        case .checking:      return "Checking…"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .granted:       return HygurColors.success
+        case .denied:        return HygurColors.danger
+        case .notDetermined: return HygurColors.warning
+        case .checking:      return HygurColors.textTertiary
+        }
+    }
+
+    init(avAuth: AVAuthorizationStatus) {
+        switch avAuth {
+        case .authorized: self = .granted
+        case .denied, .restricted: self = .denied
+        case .notDetermined: self = .notDetermined
+        @unknown default: self = .notDetermined
+        }
+    }
+
+    init(speechAuth: SFSpeechRecognizerAuthorizationStatus) {
+        switch speechAuth {
+        case .authorized: self = .granted
+        case .denied, .restricted: self = .denied
+        case .notDetermined: self = .notDetermined
+        @unknown default: self = .notDetermined
+        }
+    }
+
+    init(eventAuth: EKAuthorizationStatus) {
+        switch eventAuth {
+        case .fullAccess, .authorized: self = .granted
+        case .denied, .restricted: self = .denied
+        case .notDetermined, .writeOnly: self = .notDetermined
+        @unknown default: self = .notDetermined
+        }
+    }
+
+    init(notificationAuth: UNAuthorizationStatus) {
+        switch notificationAuth {
+        case .authorized, .provisional, .ephemeral: self = .granted
+        case .denied: self = .denied
+        case .notDetermined: self = .notDetermined
+        @unknown default: self = .notDetermined
+        }
+    }
+}
+
+private struct PrivacyPermissionRow: View {
+    let icon: String
+    let title: String
+    let description: String
+    let status: PrivacyPermissionStatus
+    let settingsURL: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: HygurSpacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(HygurColors.accent)
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: HygurSpacing.sm) {
+                    Text(title)
+                        .font(HygurTypography.subheadline)
+                        .foregroundStyle(HygurColors.textPrimary)
+                    statusBadge
+                }
+                Text(description)
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Open System Settings") {
+                if let url = URL(string: settingsURL) {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(HygurSpacing.lg)
+    }
+
+    private var statusBadge: some View {
+        Text(status.label)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(status.tint.opacity(0.18), in: Capsule())
+            .foregroundStyle(status.tint)
     }
 }
 
