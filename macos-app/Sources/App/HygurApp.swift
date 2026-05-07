@@ -183,6 +183,7 @@ struct HygurApp: App {
             SettingsView()
                 .environment(supervisor)
                 .environment(updater)
+                .environment(voiceService)
         }
 
         // Menubar status — always visible. Drives a small status dot

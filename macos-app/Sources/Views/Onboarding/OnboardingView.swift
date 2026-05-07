@@ -40,6 +40,8 @@ struct OnboardingView: View {
             StepConnectMail()
         case .importFolder:
             StepImportFolder()
+        case .enableVoice:
+            StepEnableVoice()
         case .ready:
             StepReady()
         }

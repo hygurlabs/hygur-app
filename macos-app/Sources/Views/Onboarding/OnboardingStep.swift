@@ -5,6 +5,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     case connectModel
     case connectMail
     case importFolder
+    case enableVoice
     case ready
 
     var id: Int { rawValue }
@@ -15,6 +16,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
         case .connectModel:  return "Connect AI model"
         case .connectMail:   return "Connect mail"
         case .importFolder:  return "Import documents"
+        case .enableVoice:   return "Enable voice"
         case .ready:         return "All set"
         }
     }
@@ -23,9 +25,9 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     /// Welcome (entry) and Ready (recap) are always non-skippable.
     var isSkippable: Bool {
         switch self {
-        case .welcome, .ready:                       return false
-        case .connectModel:                          return true
-        case .connectMail, .importFolder:            return true
+        case .welcome, .ready:                          return false
+        case .connectModel:                             return true
+        case .connectMail, .importFolder, .enableVoice: return true
         }
     }
 

@@ -890,6 +890,7 @@ private struct LabeledTextField: View {
 
 private struct ModelTab: View {
     @ObservedObject var settings: AppPreferences
+    @Environment(VoiceService.self) private var voiceService
 
     var body: some View {
         TabScrollContainer {
@@ -933,7 +934,55 @@ private struct ModelTab: View {
                     }
                     .padding(HygurSpacing.lg)
                 }
+
+                SettingsSectionHeader(title: "Voice input")
+                    .padding(.top, HygurSpacing.md)
+                SettingsCard {
+                    VoicePackStatusRow(voiceService: voiceService)
+                }
             }
+        }
+    }
+}
+
+/// On-device speech availability + deeplink to System Settings.
+/// Mirrors the onboarding step's logic so users who skipped it (or whose
+/// preferred language changed since) can still see the same actionable
+/// status from one place.
+private struct VoicePackStatusRow: View {
+    let voiceService: VoiceService
+
+    var body: some View {
+        let available = voiceService.isOnDeviceAvailable
+        let title = available ? "On-device speech is ready" : "On-device speech pack not installed"
+        let subtitle: String = {
+            if available, let locale = voiceService.resolvedLocale {
+                let name = locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+                return "Recognizing \(name) on-device. Audio never leaves this Mac."
+            }
+            return "Hygur uses Apple's on-device recognition for privacy. Install a language pack in Dictation settings."
+        }()
+
+        CardRow(
+            icon: available ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+            iconColor: available ? HygurColors.success : HygurColors.warning,
+            title: title,
+            subtitle: subtitle
+        ) {
+            if !available {
+                Button("Open Dictation Settings", action: openDictationSettings)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// Refresh on return from Settings — `prepare()` is idempotent and picks
+    /// up a freshly installed pack without restarting the app.
+    private func openDictationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Dictation") {
+            NSWorkspace.shared.open(url)
+            Task { await voiceService.prepare() }
         }
     }
 }
@@ -1010,10 +1059,18 @@ private struct SystemTab: View {
     @Binding var resetMessage: String
 
     @Environment(SidecarSupervisor.self) private var supervisor
+    @AppStorage("hygur.shortcut.quickLook") private var quickLookShortcutRaw: String = QuickLookShortcut.space.rawValue
     @State private var showingBackupExport = false
     @State private var showingBackupRestore = false
     @State private var backupMessage: String = ""
     @State private var backupSuccess: Bool = false
+
+    private var quickLookShortcutBinding: Binding<QuickLookShortcut> {
+        Binding(
+            get: { QuickLookShortcut(rawValue: quickLookShortcutRaw) ?? .space },
+            set: { quickLookShortcutRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         TabScrollContainer {
@@ -1030,6 +1087,24 @@ private struct SystemTab: View {
                             }
                         ))
                         .toggleStyle(.switch).labelsHidden()
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Shortcuts")
+                SettingsCard {
+                    CardRow(icon: "eye",
+                            title: "QuickLook preview",
+                            subtitle: "Key that opens the document preview from list views") {
+                        Picker("", selection: quickLookShortcutBinding) {
+                            ForEach(QuickLookShortcut.allCases) { option in
+                                Text(option.label).tag(option)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 140)
                     }
                 }
             }
