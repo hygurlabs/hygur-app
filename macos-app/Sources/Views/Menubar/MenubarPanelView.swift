@@ -197,6 +197,9 @@ struct MenubarPanelView: View {
         case "lm_studio": return "cpu"
         case "connectors": return "puzzlepiece.extension"
         case "ingest": return "tray.and.arrow.down"
+        case "sidecar_restart": return "arrow.clockwise.circle.fill"
+        case "chat_failed": return "exclamationmark.bubble.fill"
+        case "embedding_failed": return "waveform.slash"
         default: return "circle.fill"
         }
     }

@@ -80,6 +80,7 @@ struct ProjectListView: View {
 struct ProjectRow: View {
     let project: Project
     @ObservedObject var viewModel: ProjectListViewModel
+    @Environment(FavoritesStore.self) private var favorites
     @State private var showingEditSheet = false
     @State private var showingDeleteConfirmation = false
     @State private var showingDetailSheet = false
@@ -135,6 +136,18 @@ struct ProjectRow: View {
 
             Spacer()
 
+            // Favorite star
+            Button {
+                favorites.toggleProject(project.id)
+            } label: {
+                let isFav = favorites.isFavorite(projectId: project.id)
+                Image(systemName: isFav ? "star.fill" : "star")
+                    .foregroundStyle(isFav ? HygurColors.brandGold : HygurColors.textTertiary)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help(favorites.isFavorite(projectId: project.id) ? "Remove from favorites" : "Add to favorites")
+
             // Item count badge
             Text("\(project.itemCount)")
                 .font(HygurTypography.caption)
@@ -179,6 +192,17 @@ struct ProjectRow: View {
 
     @ViewBuilder
     private var contextMenuItems: some View {
+        Button {
+            favorites.toggleProject(project.id)
+        } label: {
+            Label(
+                favorites.isFavorite(projectId: project.id) ? "Remove from Favorites" : "Add to Favorites",
+                systemImage: favorites.isFavorite(projectId: project.id) ? "star.slash" : "star"
+            )
+        }
+
+        Divider()
+
         Button {
             showingDetailSheet = true
         } label: {

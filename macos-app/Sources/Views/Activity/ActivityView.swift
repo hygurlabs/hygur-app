@@ -213,6 +213,9 @@ private struct ActivityRow: View {
         case "ingest_complete": return "tray.and.arrow.down.fill"
         case "mail": return "envelope"
         case "sync": return "arrow.triangle.2.circlepath"
+        case "sidecar_restart": return "arrow.clockwise.circle.fill"
+        case "chat_failed": return "exclamationmark.bubble.fill"
+        case "embedding_failed": return "waveform.slash"
         default: return "circle.fill"
         }
     }

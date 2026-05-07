@@ -1390,6 +1390,11 @@ private struct SystemTab: View {
     @State private var showingBackupRestore = false
     @State private var backupMessage: String = ""
     @State private var backupSuccess: Bool = false
+    @State private var diagnosticsMessage: String = ""
+    @State private var isCollectingDiagnostics: Bool = false
+    @State private var showingResetAllConfirm: Bool = false
+    @State private var resetAlsoCredentials: Bool = false
+    @State private var resetAllMessage: String = ""
 
     private var quickLookShortcutBinding: Binding<QuickLookShortcut> {
         Binding(
@@ -1521,6 +1526,85 @@ private struct SystemTab: View {
                     }
                 }
             }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Support")
+                SettingsCard {
+                    CardRow(icon: "doc.on.clipboard",
+                            title: "Copy diagnostics",
+                            subtitle: "App version, sidecar status, permissions, storage size — no logs or content") {
+                        Button {
+                            Task { await copyDiagnostics() }
+                        } label: {
+                            if isCollectingDiagnostics { LoadingIndicator(style: .small) }
+                            else { Text("Copy") }
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(isCollectingDiagnostics)
+                    }
+                    CardDivider()
+                    CardRow(icon: "ladybug",
+                            title: "Report an issue on GitHub",
+                            subtitle: "Opens a prefilled issue with the diagnostics report — review before submitting") {
+                        Button {
+                            Task { await openIssueOnGitHub() }
+                        } label: {
+                            Text("Report…")
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(isCollectingDiagnostics)
+                    }
+                    if !diagnosticsMessage.isEmpty {
+                        CardDivider()
+                        Text(diagnosticsMessage)
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.textSecondary)
+                            .padding(.horizontal, HygurSpacing.lg)
+                            .padding(.vertical, HygurSpacing.md)
+                    }
+                }
+                Text("Diagnostics never include log file contents, document text, or credentials.")
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.textTertiary)
+                    .padding(.horizontal, HygurSpacing.xs)
+            }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Danger zone")
+                SettingsCard {
+                    CardRow(icon: "arrow.counterclockwise.circle",
+                            iconColor: HygurColors.danger,
+                            title: "Reset all settings",
+                            subtitle: "Restore preferences to defaults. Notes, knowledge base, and conversations are kept.") {
+                        Button(role: .destructive) {
+                            resetAllMessage = ""
+                            showingResetAllConfirm = true
+                        } label: {
+                            Text("Reset…")
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    }
+                    CardDivider()
+                    CardRow(icon: "key.slash",
+                            title: "Also forget credentials",
+                            subtitle: "Clears the sidecar API token and connector secrets stored in Keychain.") {
+                        Toggle("", isOn: $resetAlsoCredentials)
+                            .toggleStyle(.switch).labelsHidden()
+                    }
+                    if !resetAllMessage.isEmpty {
+                        CardDivider()
+                        Text(resetAllMessage)
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.success)
+                            .padding(.horizontal, HygurSpacing.lg)
+                            .padding(.vertical, HygurSpacing.md)
+                    }
+                }
+                Text("If something is stuck (wrong runtime URL, broken hotkey…), reset gives you a clean slate without reinstalling.")
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(HygurColors.textTertiary)
+                    .padding(.horizontal, HygurSpacing.xs)
+            }
         }
         .sheet(isPresented: $showingBackupExport) {
             BackupExportSheet { msg, ok in
@@ -1533,6 +1617,45 @@ private struct SystemTab: View {
                 backupMessage = msg
                 backupSuccess = ok
             }
+        }
+        .alert("Reset all settings?", isPresented: $showingResetAllConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                performResetAll()
+            }
+        } message: {
+            Text("This restores preferences to defaults. Your notes, knowledge base, conversations and backups are NOT deleted.\n\nCredentials \(resetAlsoCredentials ? "will" : "will NOT") be removed.")
+        }
+    }
+
+    private func performResetAll() {
+        Task { @MainActor in
+            let outcome = SettingsResetService.reset(forgetCredentials: resetAlsoCredentials)
+            var parts = ["\(outcome.preferenceKeysCleared) preference\(outcome.preferenceKeysCleared == 1 ? "" : "s") cleared"]
+            if outcome.credentialsCleared { parts.append("credentials forgotten") }
+            resetAllMessage = "Done — " + parts.joined(separator: ", ") + "."
+        }
+    }
+
+    @MainActor
+    private func copyDiagnostics() async {
+        isCollectingDiagnostics = true
+        defer { isCollectingDiagnostics = false }
+        let result = await DiagnosticsService.copyToClipboard()
+        let kb = max(1, result.byteCount / 1024)
+        diagnosticsMessage = "Copied \(kb) KB to clipboard. Paste into the GitHub issue and add what you were doing when it broke."
+    }
+
+    @MainActor
+    private func openIssueOnGitHub() async {
+        isCollectingDiagnostics = true
+        defer { isCollectingDiagnostics = false }
+        let result = await DiagnosticsService.copyToClipboard()
+        if let url = DiagnosticsService.makeIssueURL(report: result.text) {
+            NSWorkspace.shared.open(url)
+            diagnosticsMessage = "Opened GitHub. The full report is also in your clipboard in case the URL got truncated."
+        } else {
+            diagnosticsMessage = "Could not open the GitHub issue URL. The diagnostics report is still in your clipboard."
         }
     }
 }

@@ -33,7 +33,7 @@ enum MenubarStatus {
     /// users. The symbols are also readable at the 16pt menu bar size.
     var systemImage: String {
         switch self {
-        case .allOK:           return "circle.fill"
+        case .allOK:           return "sparkles"
         case .runtimeUnknown:  return "circle.dashed"
         case .runtimeOffline:  return "cpu"
         case .sidecarOffline:  return "exclamationmark.triangle.fill"

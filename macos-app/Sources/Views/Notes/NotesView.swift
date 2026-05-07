@@ -9,11 +9,20 @@ struct NotesView: View {
     @State private var searchText = ""
     @State private var selectedNote: Note?
     @State private var errorMessage: String?
+    @AppStorage("hygur.layout.notes") private var layoutModeRaw: String = ViewLayoutMode.list.rawValue
+
+    private var layoutMode: Binding<ViewLayoutMode> {
+        Binding(
+            get: { ViewLayoutMode(rawValue: layoutModeRaw) ?? .list },
+            set: { layoutModeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             // Header
             FeatureHeader(title: "Notes", count: viewModel.notes.count) {
+                ViewLayoutToggle(mode: layoutMode)
                 IconButton(systemImage: "arrow.clockwise", label: "Refresh") {
                     Task { await viewModel.loadNotes() }
                 }
@@ -34,7 +43,11 @@ struct NotesView: View {
                 noteList
             }
         }
-        .searchable(text: $searchText, prompt: "Search notes...")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                ToolbarSearchField(text: $searchText, prompt: "Search notes")
+            }
+        }
         .task {
             await viewModel.loadNotes()
         }
@@ -77,13 +90,32 @@ struct NotesView: View {
 
     // MARK: - Note List
 
+    @ViewBuilder
     private var noteList: some View {
-        List {
-            ForEach(viewModel.filteredNotes(searchText: searchText)) { note in
-                NoteRow(note: note, viewModel: viewModel)
+        let notes = viewModel.filteredNotes(searchText: searchText)
+        switch layoutMode.wrappedValue {
+        case .list:
+            List {
+                ForEach(notes) { note in
+                    NoteRow(note: note, viewModel: viewModel)
+                }
+            }
+            .listStyle(.inset)
+        case .grid:
+            ScrollView {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 220), spacing: HygurSpacing.sm)],
+                    spacing: HygurSpacing.sm
+                ) {
+                    ForEach(notes) { note in
+                        NoteRow(note: note, viewModel: viewModel, fillContainer: true)
+                            .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 140, alignment: .top)
+                            .clipped()
+                    }
+                }
+                .padding(HygurSpacing.md)
             }
         }
-        .listStyle(.inset)
     }
 }
 
@@ -93,52 +125,29 @@ struct NotesView: View {
 struct NoteRow: View {
     let note: Note
     @ObservedObject var viewModel: NotesViewModel
+    var fillContainer: Bool = false
+    @Environment(FavoritesStore.self) private var favorites
+    @Environment(InspectorSelection.self) private var inspector
     @State private var showingDeleteConfirmation = false
     @State private var showingEditSheet = false
     @State private var exportError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-            // Title
-            Text(note.title)
-                .font(HygurTypography.headline)
-
-            // Content preview
-            Text(note.content)
-                .font(HygurTypography.subheadline)
-                .foregroundStyle(HygurColors.textSecondary)
-                .lineLimit(2)
-
-            // Tags and metadata
-            HStack(spacing: HygurSpacing.sm) {
-                // Tags
-                if !note.tags.isEmpty {
-                    ForEach(note.tags.prefix(3)) { tag in
-                        TagPillView(tag: tag)
-                    }
-                    if note.tags.count > 3 {
-                        Text("+\(note.tags.count - 3)")
-                            .font(HygurTypography.caption)
-                            .foregroundStyle(HygurColors.textSecondary)
-                    }
-                }
-
-                Spacer()
-
-                // Date
-                Text(formattedDate(note.updatedAt))
-                    .font(HygurTypography.caption)
-                    .foregroundStyle(HygurColors.textTertiary)
+        NoteCard(note: note, fillContainer: fillContainer)
+            .padding(.vertical, HygurSpacing.xxs)
+            .contentShape(Rectangle())
+            // Double-tap is registered before single-tap so SwiftUI gives it
+            // recognition priority (otherwise the single-tap fires first and
+            // swallows the double-click open-editor gesture).
+            .onTapGesture(count: 2) {
+                showingEditSheet = true
             }
-        }
-        .padding(.vertical, HygurSpacing.xs)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            showingEditSheet = true
-        }
-        .contextMenu {
-            contextMenuItems
-        }
+            .onTapGesture {
+                inspector.current = .note(note.id)
+            }
+            .contextMenu {
+                contextMenuItems
+            }
         .confirmationDialog(
             "Delete Note",
             isPresented: $showingDeleteConfirmation,
@@ -168,10 +177,36 @@ struct NoteRow: View {
         }
     }
 
+    // MARK: - Favorite
+
+    private var favoriteButton: some View {
+        let isFav = favorites.isFavorite(noteId: note.id)
+        return Button {
+            favorites.toggleNote(note.id)
+        } label: {
+            Image(systemName: isFav ? "star.fill" : "star")
+                .foregroundStyle(isFav ? HygurColors.brandGold : HygurColors.textTertiary)
+                .font(.system(size: 13, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .help(isFav ? "Remove from favorites" : "Add to favorites")
+    }
+
     // MARK: - Context Menu
 
     @ViewBuilder
     private var contextMenuItems: some View {
+        Button {
+            favorites.toggleNote(note.id)
+        } label: {
+            Label(
+                favorites.isFavorite(noteId: note.id) ? "Remove from Favorites" : "Add to Favorites",
+                systemImage: favorites.isFavorite(noteId: note.id) ? "star.slash" : "star"
+            )
+        }
+
+        Divider()
+
         Button {
             showingEditSheet = true
         } label: {

@@ -33,6 +33,13 @@ final class SidecarSupervisor {
     private var stableTimer: Timer?
     private var intentionalStop = false
 
+    /// Hook called once per unexpected child exit (i.e. not via `stop()` or
+    /// `restart()`). HygurApp wires this to `EventStreamService.recordLocalIncident`
+    /// so the user sees the failure in Activity instead of the sidecar
+    /// quietly respawning on backoff. The string passed in describes the
+    /// exit reason for the activity row's `message`.
+    var onUnexpectedExit: ((String) -> Void)?
+
     /// Path to the sidecar binary.
     ///
     /// Resolution order:
@@ -280,15 +287,33 @@ final class SidecarSupervisor {
     }
 
     private func handleTermination(_ terminated: Process) {
+        let exitCode = terminated.terminationStatus
+        let reason: TerminationReason
+        switch terminated.terminationReason {
+        case .uncaughtSignal: reason = .signal(Int(exitCode))
+        case .exit:           reason = .exit(Int(exitCode))
+        @unknown default:     reason = .exit(Int(exitCode))
+        }
         cleanup()
         if intentionalStop { return }
 
-        // Unexpected exit — schedule a respawn after backoff.
         let wait = backoff[min(backoffIndex, backoff.count - 1)]
         backoffIndex = min(backoffIndex + 1, backoff.count - 1)
+        onUnexpectedExit?("Sidecar exited (\(reason.label)). Restarting in \(Int(wait))s.")
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             self?.start()
+        }
+    }
+
+    private enum TerminationReason {
+        case exit(Int)
+        case signal(Int)
+        var label: String {
+            switch self {
+            case .exit(let c): return "exit \(c)"
+            case .signal(let c): return "signal \(c)"
+            }
         }
     }
 

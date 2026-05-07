@@ -86,6 +86,24 @@ struct MarkdownMessageView: View {
                 configuration.label
                     .markdownMargin(top: .zero, bottom: .em(0.5))
             }
+            .table { configuration in
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .markdownMargin(top: .em(0.6), bottom: .em(0.6))
+            }
+            .tableCell { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontSize(.em(0.9))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+            }
+            .thematicBreak {
+                Divider()
+                    .overlay(Color.secondary.opacity(0.3))
+                    .markdownMargin(top: .em(0.6), bottom: .em(0.6))
+            }
     }
 
     // MARK: - Code Block View

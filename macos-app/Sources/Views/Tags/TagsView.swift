@@ -30,7 +30,11 @@ struct TagsView: View {
                 tagList
             }
         }
-        .searchable(text: $searchText, prompt: "Search tags...")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                ToolbarSearchField(text: $searchText, prompt: "Search tags")
+            }
+        }
         .sheet(isPresented: $showingNewTag) {
             NewTagSheet(viewModel: viewModel)
         }

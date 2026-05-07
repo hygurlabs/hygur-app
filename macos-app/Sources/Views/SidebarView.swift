@@ -14,6 +14,12 @@ enum SidebarItem: Hashable {
     case activity
     case memories
     case marketplace
+    /// Direct deep-link to a favorited note. The sidebar surfaces these
+    /// under "Favorites"; selection routes via `ColumnRouter` into the
+    /// Notes flow with the note pre-selected for editing.
+    case note(String)
+    /// Direct deep-link to a favorited project (same idea as `.note`).
+    case project(String)
 }
 
 struct SidebarView: View {
@@ -32,6 +38,10 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
+            // MARK: Favorites — surfaces FavoritesStore IDs at the top so
+            // pinned notes/projects are one click away. Hidden when empty.
+            FavoritesSidebarSection()
+
             // MARK: Chat
 
             Section(isExpanded: $chatExpanded) {

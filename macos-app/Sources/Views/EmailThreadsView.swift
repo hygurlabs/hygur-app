@@ -5,6 +5,15 @@ struct EmailThreadsView: View {
     @State private var selectedThread: EmailThread?
     @State private var searchText = ""
     @State private var syncStartedAt: Date? = nil
+    @AppStorage("hygur.layout.mail") private var layoutModeRaw: String = ViewLayoutMode.list.rawValue
+    @Environment(InspectorSelection.self) private var inspector
+
+    private var layoutMode: Binding<ViewLayoutMode> {
+        Binding(
+            get: { ViewLayoutMode(rawValue: layoutModeRaw) ?? .list },
+            set: { layoutModeRaw = $0.rawValue }
+        )
+    }
 
     private var filteredThreads: [EmailThread] {
         viewModel.threads.filter { thread in
@@ -44,7 +53,11 @@ struct EmailThreadsView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.isSyncing)
-        .searchable(text: $searchText, prompt: "Search threads")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                ToolbarSearchField(text: $searchText, prompt: "Search threads")
+            }
+        }
         .sheet(item: $selectedThread) { thread in
             ThreadDetailSheet(thread: thread, viewModel: viewModel)
         }
@@ -172,6 +185,8 @@ struct EmailThreadsView: View {
                 LoadingIndicator(style: .small)
             }
 
+            ViewLayoutToggle(mode: layoutMode)
+
             // Arrow next to the dropdown: triggers a full async sync of the
             // selected account (folders + labels + emails). Disabled while a
             // sync is in flight or before any account is selected.
@@ -246,22 +261,36 @@ struct EmailThreadsView: View {
 
     // MARK: - Thread List
 
+    @ViewBuilder
     private var threadList: some View {
-        List(selection: Binding(
-            get: { selectedThread?.id },
-            set: { newId in
-                selectedThread = filteredThreads.first { $0.id == newId }
+        switch layoutMode.wrappedValue {
+        case .list:
+            List {
+                ForEach(filteredThreads) { thread in
+                    EmailThreadRow(thread: thread)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { selectedThread = thread }
+                        .onTapGesture { inspector.current = .mailThread(thread) }
+                }
             }
-        )) {
-            ForEach(filteredThreads) { thread in
-                EmailThreadRow(thread: thread)
-                    .tag(thread.id)
-                    .onTapGesture(count: 2) {
-                        selectedThread = thread
+            .listStyle(.inset)
+        case .grid:
+            ScrollView {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 220), spacing: HygurSpacing.sm)],
+                    spacing: HygurSpacing.sm
+                ) {
+                    ForEach(filteredThreads) { thread in
+                        MailCard(thread: thread, fillContainer: true)
+                            .frame(maxWidth: .infinity, minHeight: 110, maxHeight: 110, alignment: .top)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) { selectedThread = thread }
+                            .onTapGesture { inspector.current = .mailThread(thread) }
                     }
+                }
+                .padding(HygurSpacing.md)
             }
         }
-        .listStyle(.inset)
     }
 }
 
@@ -271,78 +300,8 @@ struct EmailThreadRow: View {
     let thread: EmailThread
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: HygurSpacing.xs) {
-                HStack {
-                    Text(thread.subject)
-                        .font(HygurTypography.body)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-
-                    if thread.hasAttachments {
-                        Image(systemName: "paperclip")
-                            .font(HygurTypography.caption)
-                            .foregroundStyle(HygurColors.textSecondary)
-                            .accessibilityHidden(true)
-                    }
-                }
-
-                HStack(spacing: HygurSpacing.sm) {
-                    Text(participantsText)
-                        .font(HygurTypography.caption)
-                        .foregroundStyle(HygurColors.textSecondary)
-                        .lineLimit(1)
-
-                    BadgeView(
-                        text: "\(thread.messageCount) messages",
-                        color: HygurColors.accent,
-                        style: .rounded
-                    )
-                }
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: HygurSpacing.xxs) {
-                Text(formatDate(thread.dateEnd))
-                    .font(HygurTypography.caption)
-                    .foregroundStyle(HygurColors.textSecondary)
-
-                if thread.dateStart != thread.dateEnd {
-                    Text("from \(formatDate(thread.dateStart))")
-                        .font(HygurTypography.caption)
-                        .foregroundStyle(HygurColors.textTertiary)
-                }
-            }
-        }
-        .padding(.vertical, HygurSpacing.xs)
-    }
-
-    private var participantsText: String {
-        thread.participants.prefix(3).joined(separator: ", ")
-            + (thread.participants.count > 3 ? " +\(thread.participants.count - 3)" : "")
-    }
-
-    private func formatDate(_ dateString: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        if let date = formatter.date(from: dateString) {
-            let displayFormatter = DateFormatter()
-            displayFormatter.dateStyle = .short
-            displayFormatter.timeStyle = .none
-            return displayFormatter.string(from: date)
-        }
-
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: dateString) {
-            let displayFormatter = DateFormatter()
-            displayFormatter.dateStyle = .short
-            displayFormatter.timeStyle = .none
-            return displayFormatter.string(from: date)
-        }
-
-        return dateString
+        MailCard(thread: thread)
+            .padding(.vertical, HygurSpacing.xxs)
     }
 }
 

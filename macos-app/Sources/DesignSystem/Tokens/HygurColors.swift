@@ -36,13 +36,35 @@ private extension NSColor {
 /// `.primary`/`.secondary`/`.tertiary` so they keep respecting accessibility
 /// preferences (increased contrast, reduce transparency).
 enum HygurColors {
+    // MARK: Brand
+
+    /// Hygur primary brand blue — used for accents, selection, links, primary CTAs.
+    static var brandBlue: Color {
+        .dynamic(lightHex: 0x1D4ED8, darkHex: 0x60A5FA)
+    }
+    /// Subtle tint of brand blue — for selected row backgrounds, badges, hover.
+    static var brandBlueSubtle: Color {
+        .dynamic(light: NSColor(hex: 0x1D4ED8, alpha: 0.10),
+                 dark:  NSColor(hex: 0x60A5FA, alpha: 0.18))
+    }
+    /// Hygur secondary brand gold — used for favorites, highlights, warm accents.
+    static var brandGold: Color {
+        .dynamic(lightHex: 0xC99A3F, darkHex: 0xF4C45F)
+    }
+    /// Subtle tint of brand gold — for favorite row backgrounds, soft highlights.
+    static var brandGoldSubtle: Color {
+        .dynamic(light: NSColor(hex: 0xC99A3F, alpha: 0.12),
+                 dark:  NSColor(hex: 0xF4C45F, alpha: 0.18))
+    }
+
     // MARK: Surfaces
 
-    /// Window background — the deepest layer.
-    static var background: Color {
-        .dynamic(lightHex: 0xF7F7F8, darkHex: 0x111114)
-    }
-    /// Default card / panel surface (sits on top of `background`).
+    /// Window canvas — clear so the window's Liquid Glass material shows through.
+    /// Views that need an opaque fallback (snapshots, exports) should use
+    /// `surface` instead.
+    static var background: Color { .clear }
+    /// Default card / panel surface — sits on top of the window glass.
+    /// Solid white / raised dark so card text stays legible against translucent chrome.
     static var surface: Color {
         .dynamic(lightHex: 0xFFFFFF, darkHex: 0x1B1B20)
     }
@@ -50,10 +72,19 @@ enum HygurColors {
     static var surfaceElevated: Color {
         .dynamic(lightHex: 0xFAFAFB, darkHex: 0x24242B)
     }
+    /// Sidebar background — clear so the native macOS sidebar Material renders.
+    /// Painting an opaque color here would defeat Liquid Glass on macOS 26.
+    static var sidebarBackground: Color { .clear }
+    /// Status bar background — clear so the consumer can layer a `.thinMaterial`.
+    static var statusBarBackground: Color { .clear }
 
     /// Layered surface aliases — useful when stacking three depths in one
     /// view (e.g. timeline cards inside a panel inside the window).
-    static var surface1: Color { background }
+    /// `surface1` is opaque (vs. clear `background`) so views relying on a
+    /// solid base — diff snapshots, export rendering — keep working.
+    static var surface1: Color {
+        .dynamic(lightHex: 0xFAFAFA, darkHex: 0x111114)
+    }
     static var surface2: Color { surface }
     static var surface3: Color { surfaceElevated }
 
@@ -63,6 +94,8 @@ enum HygurColors {
         .dynamic(light: NSColor.black.withAlphaComponent(0.10),
                  dark:  NSColor.white.withAlphaComponent(0.12))
     }
+    /// Alias for `border` — preferred at call sites that mean "section divider".
+    static var divider: Color { border }
 
     // MARK: Content
 
@@ -72,8 +105,9 @@ enum HygurColors {
 
     // MARK: Brand & semantic
 
-    /// System accent — respects the user's accent picked in System Settings.
-    static var accent: Color { .accentColor }
+    /// Hygur accent — brand blue. Replaces the previous system-accent default
+    /// so the app has a stable identity regardless of the user's macOS accent.
+    static var accent: Color { brandBlue }
 
     static var success: Color {
         .dynamic(lightHex: 0x1B873F, darkHex: 0x4ADE80)
@@ -92,12 +126,12 @@ enum HygurColors {
     /// surfaces. Unknown types fall back to `.secondary`.
     static func sourceTypeColor(_ type: String) -> Color {
         switch type {
-        case "markdown":               return .dynamic(lightHex: 0x1D4ED8, darkHex: 0x60A5FA)
+        case "markdown":               return brandBlue
         case "pdf":                    return .dynamic(lightHex: 0xB91C1C, darkHex: 0xF87171)
         case "docx", "doc":            return .dynamic(lightHex: 0x4338CA, darkHex: 0x818CF8)
         case "txt":                    return .dynamic(lightHex: 0x4B5563, darkHex: 0x9CA3AF)
         case "html":                   return .dynamic(lightHex: 0xC2410C, darkHex: 0xFB923C)
-        case "note":                   return .dynamic(lightHex: 0xA16207, darkHex: 0xFBBF24)
+        case "note":                   return brandGold
         case "email", "thread", "mail":return .dynamic(lightHex: 0x0E7490, darkHex: 0x22D3EE)
         case "image":                  return .dynamic(lightHex: 0x7C3AED, darkHex: 0xA78BFA)
         case "audio":                  return .dynamic(lightHex: 0x0369A1, darkHex: 0x38BDF8)

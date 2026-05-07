@@ -9,6 +9,20 @@ struct KnowledgeBaseView: View {
     @State private var searchText = ""
     @State private var quickLookItem: IdentifiableString?
     @State private var itemToDelete: KnowledgeItemResponse?
+    @AppStorage("hygur.layout.knowledge") private var layoutModeRaw: String = ViewLayoutMode.list.rawValue
+    @AppStorage("hygur.shortcut.quickLook") private var quickLookShortcutRaw: String = QuickLookShortcut.space.rawValue
+    @Environment(InspectorSelection.self) private var inspector
+
+    private var quickLookShortcut: QuickLookShortcut {
+        QuickLookShortcut(rawValue: quickLookShortcutRaw) ?? .space
+    }
+
+    private var layoutMode: Binding<ViewLayoutMode> {
+        Binding(
+            get: { ViewLayoutMode(rawValue: layoutModeRaw) ?? .list },
+            set: { layoutModeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,7 +43,11 @@ struct KnowledgeBaseView: View {
                 itemsList
             }
         }
-        .searchable(text: $searchText, prompt: "Search documents")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                ToolbarSearchField(text: $searchText, prompt: "Search documents")
+            }
+        }
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: Self.supportedContentTypes,
@@ -60,6 +78,11 @@ struct KnowledgeBaseView: View {
         .onChange(of: searchText) { _, newValue in
             viewModel.searchDebounced(query: newValue)
         }
+        .onChange(of: selectedItemId) { _, newId in
+            if let id = newId {
+                inspector.current = .knowledgeItem(id)
+            }
+        }
     }
 
     // MARK: - Subviews
@@ -76,6 +99,8 @@ struct KnowledgeBaseView: View {
             } else if viewModel.isLoading {
                 LoadingIndicator(style: .small)
             }
+
+            ViewLayoutToggle(mode: layoutMode)
 
             IconButton(systemImage: "arrow.clockwise", label: "Refresh", action: {
                 Task { await viewModel.loadItems() }
@@ -123,7 +148,17 @@ struct KnowledgeBaseView: View {
         )
     }
 
+    @ViewBuilder
     private var itemsList: some View {
+        switch layoutMode.wrappedValue {
+        case .list:
+            listLayout
+        case .grid:
+            gridLayout
+        }
+    }
+
+    private var listLayout: some View {
         List(selection: $selectedItemId) {
             ForEach(viewModel.items) { item in
                 KnowledgeItemRow(item: item, projectName: viewModel.projectName(for: item.projectId))
@@ -142,18 +177,22 @@ struct KnowledgeBaseView: View {
             }
         }
         .listStyle(.inset)
-        // Space and Return both open QuickLook for the selected item — Return
-        // is the macOS convention for "open" in Finder-like lists, Space is
-        // the QuickLook shortcut.
-        .onKeyPress(.space) {
+        // QuickLook shortcut is user-configurable in Settings → System.
+        // Return is also accepted as the Finder-style "open" convention,
+        // independent of the QuickLook shortcut setting.
+        .onKeyPress(keys: Set([quickLookShortcut.keyEquivalent, .return])) { keyPress in
             guard let id = selectedItemId else { return .ignored }
-            quickLookItem = IdentifiableString(id)
-            return .handled
-        }
-        .onKeyPress(.return) {
-            guard let id = selectedItemId else { return .ignored }
-            quickLookItem = IdentifiableString(id)
-            return .handled
+            if keyPress.key == .return {
+                quickLookItem = IdentifiableString(id)
+                return .handled
+            }
+            if keyPress.key == quickLookShortcut.keyEquivalent {
+                let hasShift = keyPress.modifiers.contains(.shift)
+                if quickLookShortcut.requiresShift != hasShift { return .ignored }
+                quickLookItem = IdentifiableString(id)
+                return .handled
+            }
+            return .ignored
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
@@ -163,6 +202,49 @@ struct KnowledgeBaseView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openDocument)) { notification in
             guard let id = notification.object as? String, !id.isEmpty else { return }
             selectedItemId = id
+            quickLookItem = IdentifiableString(id)
+        }
+    }
+
+    private var gridLayout: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 240), spacing: HygurSpacing.sm)],
+                spacing: HygurSpacing.sm
+            ) {
+                ForEach(viewModel.items) { item in
+                    KnowledgeCard(
+                        item: item,
+                        projectName: viewModel.projectName(for: item.projectId),
+                        fillContainer: true
+                    )
+                        .frame(maxWidth: .infinity, minHeight: 190, maxHeight: 190, alignment: .top)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            quickLookItem = IdentifiableString(item.id)
+                        }
+                        .onTapGesture {
+                            inspector.current = .knowledgeItem(item.id)
+                        }
+                        .contextMenu {
+                            contextMenuContent(for: item)
+                        }
+                }
+
+                if viewModel.hasMore {
+                    loadMoreRow
+                        .gridCellColumns(.max)
+                        .onAppear { Task { await viewModel.loadNextPage() } }
+                }
+            }
+            .padding(HygurSpacing.md)
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            handleDrop(providers)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openDocument)) { notification in
+            guard let id = notification.object as? String, !id.isEmpty else { return }
             quickLookItem = IdentifiableString(id)
         }
     }
@@ -314,116 +396,10 @@ struct KnowledgeItemRow: View {
     let item: KnowledgeItemResponse
     var projectName: String?
 
-    /// Maximum number of tags to display before showing "+N"
-    private let maxVisibleTags = 3
-
-    @State private var isHovered = false
-
     var body: some View {
-        HStack {
-            sourceTypeLeadingView
-                .frame(width: 40, height: 40)
-
-            VStack(alignment: .leading, spacing: HygurSpacing.xs) {
-                Text(item.title)
-                    .lineLimit(1)
-
-                HStack(spacing: HygurSpacing.sm) {
-                    BadgeView(
-                        text: item.sourceType.uppercased(),
-                        color: HygurColors.sourceTypeColor(item.sourceType),
-                        style: .rounded
-                    )
-
-                    Text("\(item.chunkCount) chunks")
-                        .font(HygurTypography.caption)
-                        .foregroundStyle(HygurColors.textSecondary)
-
-                    // Project badge
-                    if let projectName = projectName {
-                        BadgeView(
-                            text: projectName,
-                            color: .purple,
-                            style: .rounded,
-                            icon: "folder.fill"
-                        )
-                    }
-
-                    // Tags (limit to maxVisibleTags, show +N for more)
-                    if !item.tags.isEmpty {
-                        tagsView
-                    }
-                }
-            }
-
-            Spacer()
-
-            Text(item.documentDate, style: .date)
-                .font(HygurTypography.caption)
-                .foregroundStyle(HygurColors.textSecondary)
-        }
-        .padding(.vertical, HygurSpacing.xs)
-        .padding(.horizontal, HygurSpacing.xs)
-        .background(
-            RoundedRectangle(cornerRadius: HygurRadius.sm)
-                .fill(isHovered ? HygurColors.accent.opacity(0.07) : Color.clear)
-        )
-        .onHover { hovering in
-            isHovered = hovering
-        }
+        KnowledgeCard(item: item, projectName: projectName)
+            .padding(.vertical, HygurSpacing.xxs)
     }
-
-    /// Leading visual for a row: thumbnail for images, waveform icon for audio,
-    /// standard SF symbol for all other source types.
-    @ViewBuilder
-    private var sourceTypeLeadingView: some View {
-        if item.sourceType == "image" {
-            if let path = item.sourcePath, let nsImage = NSImage(contentsOfFile: path) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 40, height: 40)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(HygurColors.sourceTypeColor(item.sourceType))
-                    .font(.system(size: 20))
-            }
-        } else if item.sourceType == "audio" {
-            Image(systemName: "waveform")
-                .foregroundStyle(HygurColors.sourceTypeColor(item.sourceType))
-                .font(.system(size: 20))
-        } else {
-            Image(systemName: HygurColors.sourceTypeIcon(item.sourceType))
-                .foregroundStyle(HygurColors.sourceTypeColor(item.sourceType))
-                .font(.system(size: 16))
-        }
-    }
-
-    @ViewBuilder
-    private var tagsView: some View {
-        let visibleTagSummaries = Array(item.tags.prefix(maxVisibleTags))
-        let visibleTags = visibleTagSummaries.map { Tag(id: $0.id, name: $0.name, color: $0.color, usageCount: 0) }
-        let remainingCount = item.tags.count - maxVisibleTags
-
-        HStack(spacing: 4) {
-            ForEach(visibleTags) { tag in
-                TagPillView(tag: tag)
-            }
-
-            if remainingCount > 0 {
-                Text("+\(remainingCount)")
-                    .font(.caption2)
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(Color.secondary.opacity(0.15))
-                    .foregroundStyle(.secondary)
-                    .clipShape(Capsule())
-            }
-        }
-    }
-
 }
 
 // MARK: - Preview

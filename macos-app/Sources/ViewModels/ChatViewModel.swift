@@ -289,6 +289,7 @@ final class ChatViewModel {
 
                 case .error(let errorMessage):
                     self.error = errorMessage
+                    reportIncident(type: "chat_failed", message: errorMessage)
                     if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty && !messages[assistantIndex].hasToolCalls {
                         messages.remove(at: assistantIndex)
                         if let sessionId = sessionId {
@@ -300,6 +301,7 @@ final class ChatViewModel {
             }
         } catch {
             self.error = error.localizedDescription
+            reportIncident(type: "chat_failed", message: error.localizedDescription)
             if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty {
                 messages.remove(at: assistantIndex)
                 if let sessionId = sessionId {
@@ -441,6 +443,7 @@ final class ChatViewModel {
 
                     case .error(let errorMessage):
                         self.error = errorMessage
+                        reportIncident(type: "chat_failed", message: errorMessage)
                         if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty && !messages[assistantIndex].hasToolCalls {
                             messages.remove(at: assistantIndex)
                             if let sessionId = sessionId {
@@ -453,6 +456,7 @@ final class ChatViewModel {
             } catch {
                 if !Task.isCancelled {
                     self.error = error.localizedDescription
+                    reportIncident(type: "chat_failed", message: error.localizedDescription)
                     if assistantIndex < messages.count && messages[assistantIndex].content.isEmpty {
                         messages.remove(at: assistantIndex)
                         if let sessionId = sessionId {
@@ -637,5 +641,18 @@ final class ChatViewModel {
         messages.removeAll()
         pendingAttachments = []
         error = nil
+    }
+
+    /// Surface a chat-side failure into the global Activity feed so the user
+    /// notices a one-off failure even if they're not looking at the input
+    /// banner. Decoupled via NotificationCenter to avoid threading
+    /// EventStreamService through every call site that constructs a
+    /// ChatViewModel (e.g. SwiftUI previews).
+    private func reportIncident(type: String, message: String) {
+        NotificationCenter.default.post(
+            name: .appIncident,
+            object: message,
+            userInfo: ["type": type]
+        )
     }
 }

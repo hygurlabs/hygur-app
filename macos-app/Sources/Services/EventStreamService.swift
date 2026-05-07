@@ -49,6 +49,12 @@ struct ActivityEvent: Identifiable, Sendable {
             return "Ingest — \(status)"
         case "sync":
             return "Sync — \(status)"
+        case "sidecar_restart":
+            return raw.message ?? "Sidecar restarted unexpectedly"
+        case "chat_failed":
+            return raw.message ?? "Chat reply failed"
+        case "embedding_failed":
+            return raw.message ?? "Embedding failed"
         default:
             return raw.message ?? "\(type) — \(status)"
         }
@@ -73,6 +79,11 @@ final class EventStreamService {
     private(set) var lmStudioStatus: LMStudioStatus = .unknown
     /// True while the SSE connection is open; toggles the menubar dot when off.
     private(set) var sidecarConnected: Bool = false
+    /// Wall-clock of the last app-side incident (sidecar restart, chat failure,
+    /// embedding failure). The menu bar icon observes this to flash briefly so
+    /// the user notices the failure even if they're not looking at the
+    /// Activity panel. Reset to nil after the flash window expires.
+    private(set) var lastIncidentAt: Date?
 
     /// External listeners (NotificationsService) subscribe via this closure
     /// hook — invoked once per received event on the main actor.
@@ -169,5 +180,35 @@ final class EventStreamService {
             recentEvents.removeLast(recentEvents.count - maxEvents)
         }
         onEvent?(activityEvent)
+    }
+
+    /// Record an app-side incident (sidecar restart, chat failure, embedding
+    /// failure) into the Activity feed. Use this from places that catch a
+    /// failure path the sidecar doesn't itself report — the user shouldn't
+    /// have to dig into Console.app to know that something broke.
+    ///
+    /// Also bumps `lastIncidentAt` so the menu bar icon can flash briefly.
+    /// The flash window is short (3 s) on purpose: incidents that persist
+    /// already get a sticky banner (`RuntimeUnreachableBanner`) — this is
+    /// just for the transient ones the user might otherwise miss.
+    func recordLocalIncident(type: String, message: String, source: String = "app") {
+        let raw = SidecarEvent(
+            type: type,
+            source: source,
+            status: "failed",
+            message: message
+        )
+        handle(raw)
+        lastIncidentAt = Date()
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await self?.clearIncidentFlashIfStale()
+        }
+    }
+
+    private func clearIncidentFlashIfStale() {
+        guard let at = lastIncidentAt,
+              Date().timeIntervalSince(at) >= 3 else { return }
+        lastIncidentAt = nil
     }
 }

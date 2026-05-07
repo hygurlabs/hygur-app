@@ -9,6 +9,9 @@ final class AppPreferences: ObservableObject {
     @AppStorage("defaultModel") var defaultModel: String = ""
     @AppStorage("timeout") var timeout: Double = 120.0
     @AppStorage("theme") var theme: String = "system"
+    /// Stored as the raw value of `QuickLookShortcut`. Read via
+    /// `quickLookShortcut` for the typed accessor.
+    @AppStorage("hygur.shortcut.quickLook") var quickLookShortcutRaw: String = QuickLookShortcut.space.rawValue
 
     private init() {}
 
@@ -24,6 +27,37 @@ final class AppPreferences: ObservableObject {
         guard isValidURL else { return nil }
         return URL(string: sidecarURL)
     }
+}
+
+// MARK: - QuickLook Shortcut
+
+/// User-configurable keyboard shortcut for opening the QuickLook preview from
+/// list views (KB, Notes, etc.). Persisted via `AppPreferences`.
+enum QuickLookShortcut: String, CaseIterable, Identifiable {
+    case space
+    case `return`
+    case shiftSpace
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .space:      return "Space"
+        case .return:     return "Return"
+        case .shiftSpace: return "⇧ Space"
+        }
+    }
+
+    /// Matches the `KeyEquivalent` reported by `.onKeyPress`.
+    var keyEquivalent: KeyEquivalent {
+        switch self {
+        case .space, .shiftSpace: return .space
+        case .return:             return .return
+        }
+    }
+
+    /// When true, the matcher requires the Shift modifier alongside the key.
+    var requiresShift: Bool { self == .shiftSpace }
 }
 
 // MARK: - Bundle Extension

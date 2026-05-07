@@ -137,7 +137,7 @@ enum BriefReason: String, Sendable {
 
 // MARK: - Email Thread
 
-struct EmailThread: Identifiable, Codable, Sendable {
+struct EmailThread: Identifiable, Codable, Sendable, Equatable, Hashable {
     let id: String
     let subject: String
     let participants: [String]

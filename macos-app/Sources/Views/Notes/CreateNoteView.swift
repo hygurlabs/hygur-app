@@ -95,16 +95,7 @@ struct CreateNoteView: View {
                     .font(HygurTypography.caption)
                     .foregroundStyle(HygurColors.textTertiary)
             }
-            TextEditor(text: $viewModel.content)
-                .font(HygurTypography.body)
-                .frame(minHeight: 200)
-                .padding(HygurSpacing.sm)
-                .background(HygurColors.surface)
-                .cornerRadius(HygurRadius.md)
-                .overlay(
-                    RoundedRectangle(cornerRadius: HygurRadius.md)
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                )
+            MarkdownEditorView(text: $viewModel.content, minHeight: 280)
         }
     }
 

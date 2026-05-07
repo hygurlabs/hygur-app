@@ -377,6 +377,24 @@ struct SidecarEvent: Codable, Sendable {
         data      = try? c.decodeIfPresent([String: SidecarEventValue].self, forKey: .data)
     }
 
+    /// Memberwise init for synthesizing app-side events (e.g. sidecar restart,
+    /// chat failure) that aren't actually emitted by the sidecar over SSE.
+    /// Lets us push those into the same Activity feed users already trust as
+    /// the source of truth for what's happening.
+    init(type: String,
+         source: String = "app",
+         status: String = "failed",
+         message: String? = nil,
+         createdAt: String? = nil,
+         data: [String: SidecarEventValue]? = nil) {
+        self.type = type
+        self.source = source
+        self.status = status
+        self.message = message
+        self.createdAt = createdAt
+        self.data = data
+    }
+
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)

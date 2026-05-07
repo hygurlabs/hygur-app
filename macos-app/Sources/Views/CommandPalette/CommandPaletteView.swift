@@ -39,13 +39,13 @@ struct CommandPaletteView: View {
                 resultsList
             }
             .frame(width: 600, height: 420)
-            .background(.ultraThinMaterial)
+            .background(HygurColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: HygurRadius.lg))
             .overlay(
                 RoundedRectangle(cornerRadius: HygurRadius.lg)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    .strokeBorder(HygurColors.brandBlue.opacity(0.18), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.30), radius: 24, x: 0, y: 8)
+            .shadow(color: .black.opacity(0.35), radius: 32, x: 0, y: 12)
             // Block backdrop taps from passing through the palette itself.
             .contentShape(RoundedRectangle(cornerRadius: HygurRadius.lg))
             .onTapGesture { /* swallow */ }

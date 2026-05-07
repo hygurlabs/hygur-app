@@ -238,12 +238,9 @@ struct ChatView: View {
     // MARK: - Empty State
 
     private var emptyStateView: some View {
-        EmptyStateView(
-            icon: "bubble.left.and.bubble.right",
-            title: "Welcome to Hygur",
-            subtitle: "Ask questions about your knowledge base"
-        )
-        .padding(.top, 100)
+        ChatEmptyState { prompt in
+            viewModel.inputText = prompt
+        }
     }
 
     // MARK: - Input Area

@@ -5,13 +5,17 @@ import SwiftUI
 /// Sheet/modal for editing existing notes.
 struct EditNoteView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(FavoritesStore.self) private var favorites
     @StateObject private var viewModel: EditNoteViewModel
     var onNoteUpdated: ((Note) -> Void)?
     @State private var errorMessage: String?
 
+    private let noteId: String
+
     init(note: Note, onNoteUpdated: ((Note) -> Void)? = nil) {
         _viewModel = StateObject(wrappedValue: EditNoteViewModel(note: note))
         self.onNoteUpdated = onNoteUpdated
+        self.noteId = note.id
     }
 
     var body: some View {
@@ -63,10 +67,20 @@ struct EditNoteView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack {
+        HStack(spacing: HygurSpacing.md) {
             Text("Edit Note")
                 .font(HygurTypography.headline)
             Spacer()
+            Button {
+                favorites.toggleNote(noteId)
+            } label: {
+                Image(systemName: favorites.isFavorite(noteId: noteId) ? "star.fill" : "star")
+                    .foregroundStyle(favorites.isFavorite(noteId: noteId) ? HygurColors.brandGold : HygurColors.textTertiary)
+                    .font(.system(size: 15, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help(favorites.isFavorite(noteId: noteId) ? "Remove from favorites" : "Add to favorites")
+
             IconButton(systemImage: "xmark.circle.fill", label: "Close") {
                 dismiss()
             }
@@ -100,16 +114,7 @@ struct EditNoteView: View {
                     .font(HygurTypography.caption)
                     .foregroundStyle(HygurColors.textTertiary)
             }
-            TextEditor(text: $viewModel.content)
-                .font(HygurTypography.body)
-                .frame(minHeight: 200)
-                .padding(HygurSpacing.sm)
-                .background(HygurColors.surface)
-                .cornerRadius(HygurRadius.md)
-                .overlay(
-                    RoundedRectangle(cornerRadius: HygurRadius.md)
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                )
+            MarkdownEditorView(text: $viewModel.content, minHeight: 280)
         }
     }
 

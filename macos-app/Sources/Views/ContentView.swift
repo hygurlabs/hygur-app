@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var sidebarSelection: SidebarItem? = .newChat
     @State private var showingNewNote = false
     @State private var showingCommandPalette = false
+    @State private var showingShortcuts = false
     @State private var sessionManager = ChatSessionManager()
     @State private var chatViewModel = ChatViewModel()
     @Environment(InspectorSelection.self) private var inspector
@@ -82,6 +83,9 @@ struct ContentView: View {
                 .sheet(isPresented: $showingNewNote) {
                     CreateNoteView()
                 }
+                .sheet(isPresented: $showingShortcuts) {
+                    KeyboardShortcutsSheet()
+                }
 
                 HygurStatusBar()
             }
@@ -117,6 +121,9 @@ struct ContentView: View {
             // Toggle: pressing Cmd+K twice closes the palette instead of
             // re-presenting an already-visible sheet (which macOS just ignores).
             showingCommandPalette.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showKeyboardShortcuts)) { _ in
+            showingShortcuts = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToSection)) { notification in
             guard let sectionKey = notification.object as? String else { return }
