@@ -71,8 +71,16 @@ targets:
         NSCalendarsFullAccessUsageDescription: "Hygur reads upcoming events to surface them in your agenda and creates new events on your behalf — only after you confirm each one."
         NSMicrophoneUsageDescription: "Hygur uses the microphone for push-to-talk voice input in the chat."
         NSSpeechRecognitionUsageDescription: "Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages."
-        # We don't expose AppleScript scripting; the Services menu is the
-        # supported automation surface (App Intents will be added in 2.2).
+        # App Intents discovery is driven by Metadata.appintents (auto-built by Xcode).
+        # NSUserActivityTypes is kept for legacy NSUserActivity hand-off compatibility
+        # with intent identifiers; modern AppIntents auto-discover the types regardless.
+        NSUserActivityTypes:
+          - AskHygurIntent
+          - SaveToHygurIntent
+          - WhatsOnMyAgendaIntent
+          - CreateNoteInHygurIntent
+        # We don't expose AppleScript scripting; App Intents and the
+        # Services menu are the supported automation surfaces.
         NSAppleScriptEnabled: false
         CFBundleURLTypes:
           - CFBundleURLName: com.hygur.app.url

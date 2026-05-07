@@ -68,5 +68,12 @@
 	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>AskHygurIntent</string>
+		<string>SaveToHygurIntent</string>
+		<string>WhatsOnMyAgendaIntent</string>
+		<string>CreateNoteInHygurIntent</string>
+	</array>
 </dict>
 </plist>
