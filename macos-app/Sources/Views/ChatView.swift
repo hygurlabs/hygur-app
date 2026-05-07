@@ -5,15 +5,14 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
-    @FocusState private var isInputFocused: Bool
     @State private var scrolledID: Message.ID?
     @State private var agendaViewModel = AgendaViewModel()
     @State private var showingAgendaSheet = false
-    @State private var voiceService = VoiceService()
-    /// Captured value of inputText at the moment recording starts, so the
-    /// live transcript appends rather than wiping anything the user already
-    /// typed. Reset on stop.
-    @State private var voiceBaseline: String = ""
+    /// VoiceService is owned by HygurApp and injected via Environment —
+    /// using a per-ChatView @State instance caused a multi-instance race
+    /// where prepare() pre-warmed instance A but the click landed on
+    /// instance B, triggering the synchronous Speech framework load.
+    @Environment(VoiceService.self) private var voiceService
     @State private var speechService = SpeechService()
     @AppStorage("voice.autoSpeak") private var autoSpeakResponses: Bool = false
     /// How many characters of the streaming assistant message we've already
@@ -178,6 +177,9 @@ struct ChatView: View {
         }
         .task {
             await agendaViewModel.refresh()
+            // VoiceService.prepare() runs at HygurApp level — no need to
+            // re-trigger here, and doing so on a per-ChatView .task
+            // caused races (see HygurApp's voiceService comment).
         }
     }
 
@@ -246,19 +248,29 @@ struct ChatView: View {
                 .disabled(viewModel.isStreaming)
                 .help("Attach an image or audio file")
 
-                micButton
+                MicButton(
+                    voiceService: voiceService,
+                    inputText: $viewModel.inputText,
+                    error: $viewModel.error,
+                    isStreaming: viewModel.isStreaming
+                )
 
-                TextField("Message...", text: $viewModel.inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .padding(HygurSpacing.md)
-                    .background(HygurColors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: HygurRadius.md))
-                    .focused($isInputFocused)
-                    .onSubmit {
+                MarkdownEditorView(
+                    text: $viewModel.inputText,
+                    prompt: "Message... (Shift+Return for newline)",
+                    showToolbar: false,
+                    bordered: false,
+                    minHeight: 36,
+                    insets: NSSize(width: 8, height: 8),
+                    font: .systemFont(ofSize: 13),
+                    onSubmit: {
                         Task { await viewModel.send() }
                     }
-                    .disabled(viewModel.isStreaming)
+                )
+                .frame(maxHeight: 120)
+                .background(HygurColors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: HygurRadius.md))
+                .disabled(viewModel.isStreaming)
 
                 if viewModel.isStreaming {
                     LoadingIndicator(style: viewModel.isThinking ? .thinking : .streaming)
@@ -288,45 +300,6 @@ struct ChatView: View {
         .onPasteCommand(of: [UTType.image.identifier]) { providers in
             ingestProviders(providers)
         }
-    }
-
-    /// Hold-to-talk button. Pressing starts on-device speech recognition;
-    /// releasing stops it and leaves the transcript in the input field for
-    /// the user to edit before sending. The DragGesture with zero distance
-    /// is the only SwiftUI primitive that gives us mouseDown/mouseUp on a
-    /// stationary touch — Button's action fires only on click.
-    private var micButton: some View {
-        let isOn = voiceService.isRecording
-        return Image(systemName: isOn ? "mic.fill" : "mic")
-            .font(.title3)
-            .foregroundStyle(isOn ? Color.red : HygurColors.textSecondary)
-            .frame(width: 24, height: 24)
-            .contentShape(Rectangle())
-            .help(isOn ? "Release to stop recording" : "Hold to talk")
-            .opacity(viewModel.isStreaming ? 0.4 : 1)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !viewModel.isStreaming, !voiceService.isRecording else { return }
-                        voiceBaseline = viewModel.inputText
-                        Task { await voiceService.start() }
-                    }
-                    .onEnded { _ in
-                        guard voiceService.isRecording else { return }
-                        voiceService.stop()
-                    }
-            )
-            .onChange(of: voiceService.transcript) { _, newValue in
-                guard voiceService.isRecording else { return }
-                let glue = voiceBaseline.isEmpty || newValue.isEmpty ? "" : " "
-                viewModel.inputText = voiceBaseline + glue + newValue
-            }
-            .onChange(of: voiceService.error) { _, newError in
-                if let newError {
-                    viewModel.error = newError
-                    voiceService.error = nil
-                }
-            }
     }
 
     /// Send is enabled when either typed text or a queued attachment is
@@ -572,6 +545,65 @@ struct ChatView: View {
         s = s.replacingOccurrences(of: "`", with: "")
         s = s.replacingOccurrences(of: "#", with: "")
         return s
+    }
+}
+
+/// Click-to-toggle mic button. First click starts recording, second click
+/// stops. Standard pattern (Whisper, Otter, ChatGPT iOS) — push-to-talk
+/// turned out to interfere with SwiftUI layout next to the
+/// `MarkdownEditorView`, and click-to-toggle is just as ergonomic.
+///
+/// Extracted as its own `View` so observation of `voiceService.isRecording`
+/// only re-evaluates this subtree, not the whole chat layout.
+private struct MicButton: View {
+    let voiceService: VoiceService
+    @Binding var inputText: String
+    @Binding var error: String?
+    let isStreaming: Bool
+    /// Snapshot of `inputText` when recording starts so the live transcript
+    /// appends instead of wiping any text the user already typed.
+    @State private var voiceBaseline: String = ""
+
+    var body: some View {
+        let isOn = voiceService.isRecording
+        let unavailable = !voiceService.isOnDeviceAvailable
+        return Button {
+            if isOn {
+                voiceService.stop()
+            } else {
+                guard !isStreaming else { return }
+                voiceBaseline = inputText
+                Task { await voiceService.start() }
+            }
+        } label: {
+            Image(systemName: isOn ? "mic.fill" : "mic")
+                .font(.title3)
+                .foregroundStyle(
+                    isOn
+                        ? Color.red
+                        : (unavailable ? HygurColors.textTertiary : HygurColors.textSecondary)
+                )
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isStreaming || unavailable)
+        .help(
+            unavailable
+                ? "On-device speech recognition isn't installed for any of your preferred languages. Open System Settings → Keyboard → Dictation to install one."
+                : (isOn ? "Click to stop recording" : "Click to record")
+        )
+        .onChange(of: voiceService.transcript) { _, newValue in
+            guard voiceService.isRecording else { return }
+            let glue = voiceBaseline.isEmpty || newValue.isEmpty ? "" : " "
+            inputText = voiceBaseline + glue + newValue
+        }
+        .onChange(of: voiceService.error) { _, newError in
+            if let newError {
+                error = newError
+                voiceService.error = nil
+            }
+        }
     }
 }
 

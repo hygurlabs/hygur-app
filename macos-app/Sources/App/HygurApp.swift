@@ -21,6 +21,21 @@ struct HygurApp: App {
     // download/install state machine.
     @State private var updater = Updater()
 
+    // Local favorites store — backs the new "Favorites" sidebar section
+    // until the sidecar gains a real `is_favorite` column.
+    @State private var favoritesStore = FavoritesStore()
+
+    // Cross-view selection that drives the right-hand Properties panel.
+    // Single-click a note / KB item / mail thread → entity flows here.
+    @State private var inspectorSelection = InspectorSelection()
+
+    // App-level singleton. Per-ChatView ownership raced because the
+    // sidebar swap (.newChat ↔ .chatSession) creates a fresh ChatView,
+    // and SFSpeechRecognizer's first instantiation on the user-tap
+    // frame triggered a window-level layout reflow on macOS 26.
+    // Pre-warm once at launch, before any ChatView appears.
+    @State private var voiceService = VoiceService()
+
     @State private var showOnboarding: Bool = false
 
     var body: some Scene {
@@ -29,6 +44,9 @@ struct HygurApp: App {
                 .environment(eventStream)
                 .environment(supervisor)
                 .environment(updater)
+                .environment(favoritesStore)
+                .environment(inspectorSelection)
+                .environment(voiceService)
                 .sheet(isPresented: $showOnboarding) {
                     OnboardingView(onComplete: {
                         onboardingCompleted = true
@@ -56,6 +74,12 @@ struct HygurApp: App {
                     handleHygurURL(url)
                 }
                 .task {
+                    // Pre-warm the speech recognizer in the background so the
+                    // first user-tap on the mic doesn't synchronously load
+                    // the Speech framework on the tap frame (which on
+                    // macOS 26 cascades into a window-level layout reflow).
+                    Task { await voiceService.prepare() }
+
                     // Spawn the supervised sidecar child process if the binary
                     // is installed. Errors are surfaced via `supervisor.lastError`
                     // in the Settings view; the rest of the app continues to
