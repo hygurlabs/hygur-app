@@ -188,6 +188,17 @@ struct ChatView: View {
             // re-trigger here, and doing so on a per-ChatView .task
             // caused races (see HygurApp's voiceService comment).
         }
+        .onReceive(NotificationCenter.default.publisher(for: .focusChatInput)) { note in
+            // Triggered by the global summon hotkey and the menu bar Ask
+            // Hygur action. When the notification carries a String we
+            // prefill the input so the user can hit Send right away.
+            if let prefill = note.object as? String, !prefill.isEmpty {
+                viewModel.inputText = prefill
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openAgendaSheet)) { _ in
+            showingAgendaSheet = true
+        }
     }
 
     // MARK: - Focus Pill

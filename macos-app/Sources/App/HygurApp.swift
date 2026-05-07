@@ -50,6 +50,11 @@ struct HygurApp: App {
 
     @State private var showOnboarding: Bool = false
 
+    /// Master switch for the global summon hotkey (default Cmd+Shift+H).
+    /// Stored in UserDefaults so power users can disable it from Settings if
+    /// it clashes with another app's binding.
+    @AppStorage("hotkey.summon.enabled") private var summonHotkeyEnabled: Bool = true
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -168,6 +173,30 @@ struct HygurApp: App {
                     // Background update check (no-op if checked in last 24h or
                     // if the user disabled auto-check).
                     await updater.checkAtLaunchIfDue()
+
+                    // Register the global summon hotkey last so a launch
+                    // failure earlier doesn't silently leave the binding
+                    // installed without a working app behind it.
+                    if summonHotkeyEnabled {
+                        HotkeyManager.shared.register(
+                            keyCode: HotkeyManager.defaultKeyCode,
+                            modifiers: HotkeyManager.defaultModifiers
+                        ) {
+                            summonHygur()
+                        }
+                    }
+                }
+                .onChange(of: summonHotkeyEnabled) { _, enabled in
+                    if enabled {
+                        HotkeyManager.shared.register(
+                            keyCode: HotkeyManager.defaultKeyCode,
+                            modifiers: HotkeyManager.defaultModifiers
+                        ) {
+                            summonHygur()
+                        }
+                    } else {
+                        HotkeyManager.shared.unregister()
+                    }
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -263,6 +292,22 @@ struct HygurApp: App {
     }
 }
 
+// MARK: - Summon
+
+/// Brings the main window to the foreground and asks the chat to focus its
+/// input field. Used by both the global hotkey and the menu bar "Ask Hygur"
+/// quick action so the activation path is identical regardless of trigger.
+@MainActor
+func summonHygur(prefill: String? = nil) {
+    NSApp.activate(ignoringOtherApps: true)
+    for window in NSApp.windows where window.canBecomeMain {
+        window.makeKeyAndOrderFront(nil)
+        break
+    }
+    NotificationCenter.default.post(name: .navigateToSection, object: "chat")
+    NotificationCenter.default.post(name: .focusChatInput, object: prefill)
+}
+
 // MARK: - URL Routing
 
 /// Routes `hygur://session/<uuid>` and `hygur://note/<id>` deep links —
@@ -315,4 +360,13 @@ extension Notification.Name {
     /// Opens the Settings window and focuses the "About" tab where the
     /// update controls live. Posted by the "Check for Updates…" menu item.
     static let openUpdatesPane = Notification.Name("openUpdatesPane")
+    /// Brings the chat surface forward and focuses the input field. Posted
+    /// by the global summon hotkey and the menu bar Ask Hygur action.
+    /// `object` is an optional `String` — when non-nil, prefills the input
+    /// with that text so the user can hit Send immediately.
+    static let focusChatInput = Notification.Name("focusChatInput")
+    /// Opens the AgendaSheet from any chat surface. Posted by the menu bar
+    /// "Today's agenda" action so the user can see events without opening
+    /// the main window first.
+    static let openAgendaSheet = Notification.Name("openAgendaSheet")
 }

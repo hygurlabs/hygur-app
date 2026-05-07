@@ -1171,6 +1171,7 @@ private struct SystemTab: View {
 
     @Environment(SidecarSupervisor.self) private var supervisor
     @AppStorage("hygur.shortcut.quickLook") private var quickLookShortcutRaw: String = QuickLookShortcut.space.rawValue
+    @AppStorage("hotkey.summon.enabled") private var summonHotkeyEnabled: Bool = true
     @State private var showingBackupExport = false
     @State private var showingBackupRestore = false
     @State private var backupMessage: String = ""
@@ -1216,6 +1217,13 @@ private struct SystemTab: View {
                         .labelsHidden()
                         .pickerStyle(.menu)
                         .frame(width: 140)
+                    }
+                    CardDivider()
+                    CardRow(icon: "command",
+                            title: "Global summon (⌘⇧H)",
+                            subtitle: "Bring Hygur forward and focus the chat input from anywhere") {
+                        Toggle("", isOn: $summonHotkeyEnabled)
+                            .toggleStyle(.switch).labelsHidden()
                     }
                 }
             }

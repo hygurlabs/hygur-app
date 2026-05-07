@@ -12,6 +12,8 @@ struct MenubarPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             statusHeader
             Divider()
+            askHygurField
+            Divider()
             eventsSection
             Divider()
             quickActions
@@ -23,6 +25,44 @@ struct MenubarPanelView: View {
         .onChange(of: events.recentEvents.count) { _, _ in
             handleEventStreamUpdate()
         }
+    }
+
+    // MARK: - Ask Hygur
+
+    @State private var askText: String = ""
+
+    /// Inline prompt for the menu bar — Send pushes the text into the chat
+    /// input and brings the main window forward. Pre-Enter the user can
+    /// edit before submission; we never auto-send because the menu bar is
+    /// a "type fast and review" surface, not a one-shot terminal.
+    private var askHygurField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Ask Hygur")
+                .font(.caption.smallCaps())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+            HStack(spacing: 6) {
+                TextField("What do you want to know?", text: $askText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { submitAsk() }
+                Button("Send") { submitAsk() }
+                    .controlSize(.small)
+                    .disabled(askText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+        }
+    }
+
+    private func submitAsk() {
+        let trimmed = askText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        askText = ""
+        // Reuse the same summon path as the global hotkey so both surfaces
+        // produce identical state transitions (foreground + chat tab +
+        // prefilled input).
+        summonHygur(prefill: trimmed)
     }
 
     // MARK: - Header
@@ -144,6 +184,11 @@ struct MenubarPanelView: View {
             actionRow("Activity", systemImage: "bell.badge") {
                 openMainWindow()
                 NotificationCenter.default.post(name: .navigateToSection, object: "activity")
+            }
+            actionRow("Today's agenda", systemImage: "calendar") {
+                openMainWindow()
+                NotificationCenter.default.post(name: .navigateToSection, object: "chat")
+                NotificationCenter.default.post(name: .openAgendaSheet, object: nil)
             }
 
             // Run brief now — fires the daily brief on demand. The UI shows
