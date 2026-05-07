@@ -7,6 +7,8 @@ import AppKit
 /// quit).
 struct MenubarPanelView: View {
     @Environment(EventStreamService.self) private var events
+    @Environment(SidecarSupervisor.self) private var supervisor
+    @State private var isReconnecting: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,6 +26,20 @@ struct MenubarPanelView: View {
         .frame(width: 320)
         .onChange(of: events.recentEvents.count) { _, _ in
             handleEventStreamUpdate()
+        }
+    }
+
+    // MARK: - Header status mapping
+
+    /// Mirror the menu bar icon status enum so the panel header and the
+    /// glyph never disagree. Computed once per redraw — both tooltip and
+    /// header subtitle pull from here.
+    private var status: MenubarStatus {
+        if !events.sidecarConnected { return .sidecarOffline }
+        switch events.lmStudioStatus {
+        case .up:      return .allOK
+        case .down:    return .runtimeOffline
+        case .unknown: return .runtimeUnknown
         }
     }
 
@@ -68,37 +84,69 @@ struct MenubarPanelView: View {
     // MARK: - Header
 
     private var statusHeader: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "circle.fill")
-                .foregroundStyle(headerColor)
-                .font(.title3)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Hygur").font(.headline)
-                Text(headerSubtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: status.systemImage)
+                    .foregroundStyle(status.color)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hygur").font(.headline)
+                    Text(headerSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
-            Spacer()
+            // Surface a Reconnect button only when the sidecar is the
+            // problem — runtime issues are out of scope here (the user fixes
+            // those in their vLLM/LM Studio process, not by tapping Hygur).
+            if status == .sidecarOffline {
+                Button {
+                    reconnectSidecar()
+                } label: {
+                    HStack(spacing: 6) {
+                        if isReconnecting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        Text(isReconnecting ? "Reconnecting…" : "Reconnect now")
+                            .font(.callout)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isReconnecting)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
 
-    private var headerColor: Color {
-        if !events.sidecarConnected { return HygurColors.danger }
-        switch events.lmStudioStatus {
-        case .up: return HygurColors.success
-        case .down: return HygurColors.danger
-        case .unknown: return HygurColors.warning
+    /// Header subtitle. Slightly more verbose than the menu bar tooltip
+    /// because the panel has the room and the user clicked through to find
+    /// out what's going on.
+    private var headerSubtitle: String {
+        switch status {
+        case .allOK:           return "Sidecar OK · AI runtime connected"
+        case .runtimeUnknown:  return "Sidecar OK · checking AI runtime…"
+        case .runtimeOffline:  return "Sidecar OK · AI runtime offline"
+        case .sidecarOffline:  return "Sidecar offline — retrying"
         }
     }
 
-    private var headerSubtitle: String {
-        if !events.sidecarConnected { return "Sidecar offline" }
-        switch events.lmStudioStatus {
-        case .up: return "Sidecar OK · LM Studio connected"
-        case .down: return "Sidecar OK · LM Studio offline"
-        case .unknown: return "Sidecar OK · checking LM Studio…"
+    /// Restart the bundled sidecar process. We don't try to fix runtime
+    /// issues from here — that's an external process under the user's own
+    /// control, and silently kicking it would surprise them.
+    private func reconnectSidecar() {
+        guard !isReconnecting else { return }
+        isReconnecting = true
+        Task {
+            await supervisor.restart()
+            // Give the SSE loop a moment to flip back to connected before we
+            // re-enable the button — otherwise repeated taps spam restarts.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            isReconnecting = false
         }
     }
 
