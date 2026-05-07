@@ -1560,6 +1560,92 @@ actor SidecarService {
         try validateResponse(response)
     }
 
+    // MARK: - Memories (Phase 3.3 long-term)
+
+    /// List memories whose source is `extracted` and whose `accepted_at` is
+    /// NULL — the queue the user reviews in the "Pending review" section of
+    /// `MemoriesView`. Until accepted, these candidates are NEVER injected
+    /// into chat (`SearchAccepted` filters them out).
+    func listPendingMemories() async throws -> [MemoryItem] {
+        let url = baseURL.appendingPathComponent("memory/pending")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        addAuthHeader(&request)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(MemoryListResponse.self, from: data).memories
+    }
+
+    /// Mark a pending memory as accepted. After this call the memory is
+    /// eligible for cosine ranking and chat injection. Returns 204.
+    func acceptMemory(id: String) async throws {
+        let url = baseURL.appendingPathComponent("memory")
+            .appendingPathComponent(id)
+            .appendingPathComponent("accept")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        addAuthHeader(&request)
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
+    /// Discard a pending memory. The sidecar deletes it outright (the user
+    /// has rejected it). Returns 204. Manual memories should use
+    /// `deleteMemory` instead — discard is for the pending review flow.
+    func discardMemory(id: String) async throws {
+        let url = baseURL.appendingPathComponent("memory")
+            .appendingPathComponent(id)
+            .appendingPathComponent("discard")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        addAuthHeader(&request)
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
+    /// Trigger session-level memory extraction. The macOS app sends the
+    /// transcript because the sidecar's session store is in-memory only and
+    /// may not hold the full chat history at call time. Newly extracted
+    /// candidates land as `source=extracted, accepted_at=NULL`.
+    @discardableResult
+    func extractMemories(sessionId: String, messages: [MemoryExtractMessage]) async throws -> MemoryExtractResponse {
+        let url = baseURL.appendingPathComponent("memory/extract")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuthHeader(&request)
+        request.httpBody = try JSONEncoder().encode(MemoryExtractRequest(sessionId: sessionId, messages: messages))
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(MemoryExtractResponse.self, from: data)
+    }
+
+    /// Counts the sidecar reports for the Settings UI: manual / extracted /
+    /// pending. Cheap — single COUNT-by-source SQL query under the hood.
+    func memoryStats() async throws -> MemoryStatsResponse {
+        let url = baseURL.appendingPathComponent("memory/stats")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        addAuthHeader(&request)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(MemoryStatsResponse.self, from: data)
+    }
+
+    /// Wipe every `source=extracted` memory, including those already
+    /// accepted. Manual memories are preserved. Used by the Settings panic
+    /// switch. Returns the count actually deleted.
+    @discardableResult
+    func clearExtractedMemories() async throws -> Int {
+        let url = baseURL.appendingPathComponent("memory/extracted")
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        addAuthHeader(&request)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(MemoryClearExtractedResponse.self, from: data).deleted
+    }
+
     // MARK: - Agenda
 
     /// Fetch the agenda context: upcoming actions and deadlines extracted from

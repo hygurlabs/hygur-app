@@ -38,7 +38,9 @@ type StoreResult struct {
 	MemoryID string
 }
 
-// Store saves a new memory to the database with a default 90-day TTL.
+// Store saves a new manual memory to the database with a default 90-day TTL.
+// Manual memories are auto-accepted: they bypass the pending-review queue and
+// become eligible for system-prompt injection immediately.
 func (t *MemoryStoreTool) Store(content string, memoryType string, contextID string) (string, error) {
 	if content == "" {
 		return "", fmt.Errorf("content cannot be empty")
@@ -46,15 +48,21 @@ func (t *MemoryStoreTool) Store(content string, memoryType string, contextID str
 
 	memoryID := uuid.New().String()
 	expiresAt := time.Now().Add(90 * 24 * time.Hour)
+	now := time.Now()
+	embedding := t.embedContent(content)
 
 	err := t.store.InsertMemory(&store.Memory{
-		MemoryID:  memoryID,
-		Type:      store.MemoryType(memoryType),
-		Content:   content,
-		ContextID: contextID,
-		CreatedAt: time.Now(),
-		ExpiresAt: &expiresAt,
-		Score:     0.0,
+		MemoryID:   memoryID,
+		Type:       store.MemoryType(memoryType),
+		Content:    content,
+		ContextID:  contextID,
+		CreatedAt:  now,
+		ExpiresAt:  &expiresAt,
+		Score:      0.0,
+		Source:     store.MemorySourceManual,
+		AcceptedAt: &now,
+		Embedding:  embedding,
+		SessionID:  contextID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to store memory: %w", err)
@@ -63,26 +71,49 @@ func (t *MemoryStoreTool) Store(content string, memoryType string, contextID str
 	return memoryID, nil
 }
 
-// StoreWithExpiry saves a memory with an explicit expiration time. Pass nil
-// for `expiresAt` to keep the memory forever.
+// StoreWithExpiry saves a manual memory with an explicit expiration time. Pass
+// nil for `expiresAt` to keep the memory forever. As with Store, manual rows
+// are auto-accepted.
 func (t *MemoryStoreTool) StoreWithExpiry(content, memoryType, contextID string, expiresAt *time.Time) (string, error) {
 	if content == "" {
 		return "", fmt.Errorf("content cannot be empty")
 	}
 	memoryID := uuid.New().String()
+	now := time.Now()
+	embedding := t.embedContent(content)
 	err := t.store.InsertMemory(&store.Memory{
-		MemoryID:  memoryID,
-		Type:      store.MemoryType(memoryType),
-		Content:   content,
-		ContextID: contextID,
-		CreatedAt: time.Now(),
-		ExpiresAt: expiresAt,
-		Score:     0.0,
+		MemoryID:   memoryID,
+		Type:       store.MemoryType(memoryType),
+		Content:    content,
+		ContextID:  contextID,
+		CreatedAt:  now,
+		ExpiresAt:  expiresAt,
+		Score:      0.0,
+		Source:     store.MemorySourceManual,
+		AcceptedAt: &now,
+		Embedding:  embedding,
+		SessionID:  contextID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to store memory: %w", err)
 	}
 	return memoryID, nil
+}
+
+// embedContent returns the embedding for `content`, or nil when the LLM client
+// is missing/embedding fails. Phase 3.3 injection still works without
+// embeddings (it falls back to "skip injection") so this is best-effort.
+func (t *MemoryStoreTool) embedContent(content string) []float32 {
+	if t.llm == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	vec, err := t.llm.GenerateEmbedding(ctx, content)
+	if err != nil {
+		return nil
+	}
+	return vec
 }
 
 // ExtractedMemory is the typed output of the LLM extractor. Type maps to
@@ -207,10 +238,12 @@ func validateExtracted(in []ExtractedMemory) []ExtractedMemory {
 	return out
 }
 
-// PersistExtracted saves the extractor output. Returns the count of rows
-// stored and the first row-level error encountered (if any) so callers can
-// distinguish "nothing memorable" from "DB rejected every insert".
-func (t *MemoryStoreTool) PersistExtracted(memories []ExtractedMemory, contextID string) (int, error) {
+// PersistExtracted saves the extractor output as PENDING (Phase 3.3). Each
+// memory lands with source='extracted' and accepted_at=NULL, so they will not
+// be injected into chats until the user explicitly accepts them via the
+// /memory/{id}/accept endpoint. Returns the count of rows stored and the
+// first row-level error encountered.
+func (t *MemoryStoreTool) PersistExtracted(memories []ExtractedMemory, sessionID string) (int, error) {
 	stored := 0
 	var firstErr error
 	for _, m := range memories {
@@ -220,24 +253,131 @@ func (t *MemoryStoreTool) PersistExtracted(memories []ExtractedMemory, contextID
 				expiry = &d
 			}
 		}
-		var (
-			id  string
-			err error
-		)
-		if expiry != nil {
-			id, err = t.StoreWithExpiry(m.Content, m.Type, contextID, expiry)
-		} else {
-			id, err = t.Store(m.Content, m.Type, contextID)
+		// Default 90-day TTL for extracted memories without an explicit deadline.
+		if expiry == nil {
+			fallback := time.Now().Add(90 * 24 * time.Hour)
+			expiry = &fallback
 		}
+		memoryID := uuid.New().String()
+		embedding := t.embedContent(m.Content)
+		err := t.store.InsertMemory(&store.Memory{
+			MemoryID:   memoryID,
+			Type:       store.MemoryType(m.Type),
+			Content:    m.Content,
+			ContextID:  sessionID,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  expiry,
+			Score:      0.0,
+			Source:     store.MemorySourceExtracted,
+			AcceptedAt: nil, // pending review
+			Embedding:  embedding,
+			SessionID:  sessionID,
+		})
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		if id != "" {
-			stored++
-		}
+		stored++
 	}
 	return stored, firstErr
+}
+
+// sessionExtractorSystemPrompt is the prompt used by ExtractMemoriesFromSession.
+// Identical contract to extractorSystemPrompt but loosened the cap to 5 because
+// a full conversation typically holds more memorable signals than a single turn.
+const sessionExtractorSystemPrompt = `You distill durable user-specific facts from a full conversation transcript. Output a strict JSON array (no prose, no markdown).
+
+Rules:
+- Each item: {"type": "fact" | "preference" | "action", "content": "<≤140 chars>", "expires_at"?: "YYYY-MM-DD"}
+- "fact": durable identity / relationship / config (e.g. "Comptable: Pierre Dupont chez Acme Compta").
+- "preference": stated user preference (e.g. "Préfère les réponses en français").
+- "action": something the user committed to doing with a deadline (set expires_at to the deadline).
+- Skip greetings, acknowledgements, jokes, transient task details, anything ephemeral.
+- Skip information that is not specifically about the user or their world.
+- Quality over quantity: prefer 0 items to a weak item.
+- If the transcript contains nothing memorable, return [].
+- Maximum 5 items. Output ONLY the JSON array.`
+
+// ExtractMemoriesFromSession analyses a full chat transcript (alternating user
+// and assistant messages) and proposes durable memories for the user to review.
+// Returns an empty slice when the conversation carries nothing memorable.
+//
+// The caller is expected to invoke this *after* a conversation ends rather
+// than per-turn — that's what makes the candidates broad enough to be worth
+// reviewing as a batch in the Memories tab.
+func (t *MemoryStoreTool) ExtractMemoriesFromSession(ctx context.Context, transcript []TranscriptMessage) ([]ExtractedMemory, error) {
+	if t.llm == nil {
+		return nil, fmt.Errorf("LLM client not configured")
+	}
+	rendered := renderTranscript(transcript)
+	if strings.TrimSpace(rendered) == "" {
+		return nil, nil
+	}
+	// Cheap pre-filter: a transcript under ~80 combined chars is essentially
+	// pleasantries. Mirrors the per-turn extractor's threshold but a bit more
+	// permissive because session-level we have multiple turns to combine.
+	if len(strings.TrimSpace(rendered)) < 80 {
+		return nil, nil
+	}
+
+	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: "system", Content: sessionExtractorSystemPrompt},
+			{Role: "user", Content: rendered},
+		},
+		Stream:      false,
+		Temperature: 0,
+		MaxTokens:   600,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("extract session memory: %w", err)
+	}
+	if resp == nil || len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
+		return nil, nil
+	}
+	memories, err := parseExtractorOutput(resp.Choices[0].Message.Content)
+	if err != nil {
+		return nil, err
+	}
+	// Cap session-level extraction at 5 (extends the per-turn cap of 3).
+	if len(memories) > 5 {
+		memories = memories[:5]
+	}
+	return memories, nil
+}
+
+// TranscriptMessage is the minimal shape ExtractMemoriesFromSession needs from
+// a chat transcript. We don't reuse llm.Message here because we don't want
+// attachments / tool calls polluting the extractor input — they add noise
+// without informing the durable-memory decision.
+type TranscriptMessage struct {
+	Role    string // "user" | "assistant" | other (skipped)
+	Content string
+}
+
+// renderTranscript turns a list of transcript messages into a readable
+// "User: ...\n\nAssistant: ..." block. Empty content is skipped; tool/system
+// messages are dropped because they don't represent user-relevant signal.
+func renderTranscript(msgs []TranscriptMessage) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		content := strings.TrimSpace(m.Content)
+		if content == "" {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		switch role {
+		case "user":
+			b.WriteString("User: ")
+		case "assistant":
+			b.WriteString("Assistant: ")
+		default:
+			continue
+		}
+		b.WriteString(content)
+		b.WriteString("\n\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

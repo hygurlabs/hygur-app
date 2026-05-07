@@ -41,6 +41,17 @@ final class ChatViewModel {
     private let sidecarService: SidecarService
     private var streamTask: Task<Void, Never>?
     private var focusLabelTask: Task<Void, Never>?
+    /// Detached task that asks the sidecar to distill long-term memories from
+    /// the current session. Runs after the assistant finishes streaming so it
+    /// never blocks the chat UI. We hold a reference so a fresh send can
+    /// supersede a still-running extraction (cheap — the latest state always
+    /// wins; the sidecar handles the duplicate-content case).
+    private var memoryExtractTask: Task<Void, Never>?
+
+    /// Minimum number of user/assistant turns required before we bother the
+    /// LLM with extraction. Below this threshold the sidecar's pre-filter
+    /// would drop the transcript anyway — we save a round-trip.
+    private static let memoryExtractMinTurns = 2
 
     init(sidecarService: SidecarService = .fromSettings()) {
         self.sidecarService = sidecarService
@@ -299,6 +310,10 @@ final class ChatViewModel {
         if let sessionId = sessionId {
             sessionManager?.saveCurrentState(for: sessionId)
         }
+
+        // Phase 3.3 — distill long-term memories from the regenerated turn.
+        // No-op when the transcript is too short or no session is bound.
+        triggerMemoryExtraction()
     }
 
     /// Highlight a specific source in the context panel
@@ -449,6 +464,12 @@ final class ChatViewModel {
             if let sessionId = sessionId {
                 sessionManager?.saveCurrentState(for: sessionId)
             }
+
+            // Phase 3.3 — distill long-term memories from the just-completed
+            // turn. Detached task; never blocks the chat UI. See
+            // `triggerMemoryExtraction()` for the privacy contract (extracted
+            // memories land as pending and require user review).
+            triggerMemoryExtraction()
         }
 
         // Wait for completion
@@ -513,6 +534,43 @@ final class ChatViewModel {
         streamTask = nil
         isStreaming = false
         isThinking = false
+    }
+
+    /// Fire-and-forget request to `/memory/extract` after a chat turn. The
+    /// sidecar runs the LLM extractor on the transcript and persists any
+    /// candidates with `source=extracted, accepted_at=NULL` — they appear in
+    /// the "Pending review" section of `MemoriesView` but are NEVER injected
+    /// into chat until the user clicks Accept. We send the transcript from
+    /// the app because the sidecar's session store is in-memory and may not
+    /// hold the full history when the call lands.
+    ///
+    /// Errors are swallowed: extraction is best-effort and an offline LM
+    /// Studio shouldn't break the chat UX. Cancellation supersedes a
+    /// still-running extraction so a fast follow-up turn doesn't pile work.
+    private func triggerMemoryExtraction() {
+        guard let sessionId else { return }
+        // Pre-filter cheaply: < 2 turns has nothing extractable. Mirrors
+        // the server-side guard in `ExtractMemoriesFromSession`.
+        let conversational = messages.filter { $0.role == .user || $0.role == .assistant }
+        guard conversational.count >= Self.memoryExtractMinTurns else { return }
+
+        let payload = conversational.map {
+            MemoryExtractMessage(role: $0.role.rawValue, content: $0.content)
+        }
+        let sid = sessionId.uuidString
+        memoryExtractTask?.cancel()
+        memoryExtractTask = Task { [sidecarService] in
+            do {
+                _ = try await sidecarService.extractMemories(sessionId: sid, messages: payload)
+            } catch {
+                // Best-effort — log via stderr but never surface to the chat
+                // error banner. Failed extractions just mean no new pending
+                // candidates this turn.
+                #if DEBUG
+                print("memory extract failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
     }
 
     func clearMessages() {

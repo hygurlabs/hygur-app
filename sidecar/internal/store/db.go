@@ -1645,35 +1645,86 @@ func (d *DB) ResetKnowledge(ctx context.Context) error {
 	return nil
 }
 
-// InsertMemory inserts a new memory into the database.
+// memorySelectColumns is the canonical column list for SELECT queries against
+// the memories table. Centralised so adding a new column only requires editing
+// one place plus the matching scanMemoryRow helper.
+const memorySelectColumns = `memory_id, type, content, context_id, created_at, expires_at, score, source, accepted_at, embedding, session_id`
+
+// scanMemoryRow scans a single memories row using the column order produced
+// by memorySelectColumns. It deserialises the embedding BLOB and defaults
+// Source to "manual" for legacy rows that pre-date the migration.
+func scanMemoryRow(scanner interface {
+	Scan(dest ...interface{}) error
+}) (*Memory, error) {
+	var (
+		m         Memory
+		source    sql.NullString
+		embedRaw  []byte
+		sessionID sql.NullString
+	)
+	if err := scanner.Scan(
+		&m.MemoryID, &m.Type, &m.Content, &m.ContextID,
+		&m.CreatedAt, &m.ExpiresAt, &m.Score,
+		&source, &m.AcceptedAt, &embedRaw, &sessionID,
+	); err != nil {
+		return nil, err
+	}
+	if source.Valid && source.String != "" {
+		m.Source = MemorySource(source.String)
+	} else {
+		m.Source = MemorySourceManual
+	}
+	if sessionID.Valid {
+		m.SessionID = sessionID.String
+	}
+	if len(embedRaw) > 0 {
+		vec, err := DeserializeVector(embedRaw)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize memory embedding: %w", err)
+		}
+		m.Embedding = vec
+	}
+	return &m, nil
+}
+
+// InsertMemory inserts a new memory into the database. Source defaults to
+// MemorySourceManual when blank to preserve pre-Phase-3.3 callers.
 func (d *DB) InsertMemory(m *Memory) error {
+	source := m.Source
+	if source == "" {
+		source = MemorySourceManual
+	}
+	var embed []byte
+	if len(m.Embedding) > 0 {
+		embed = SerializeVector(m.Embedding)
+	}
+	var sessionID sql.NullString
+	if m.SessionID != "" {
+		sessionID = sql.NullString{String: m.SessionID, Valid: true}
+	}
 	_, err := d.db.ExecContext(
 		context.Background(),
-		`INSERT INTO memories (memory_id, type, content, context_id, created_at, expires_at, score)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO memories (memory_id, type, content, context_id, created_at, expires_at, score, source, accepted_at, embedding, session_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.MemoryID, m.Type, m.Content, m.ContextID, m.CreatedAt, m.ExpiresAt, m.Score,
+		string(source), m.AcceptedAt, embed, sessionID,
 	)
 	return err
 }
 
 // GetMemory retrieves a memory by its ID.
 func (d *DB) GetMemory(ctx context.Context, memoryID string) (*Memory, error) {
-	var m Memory
-	err := d.db.QueryRowContext(ctx,
-		`SELECT memory_id, type, content, context_id, created_at, expires_at, score
-		 FROM memories WHERE memory_id = ?`, memoryID).Scan(
-		&m.MemoryID, &m.Type, &m.Content, &m.ContextID, &m.CreatedAt, &m.ExpiresAt, &m.Score,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &m, nil
+	row := d.db.QueryRowContext(ctx,
+		`SELECT `+memorySelectColumns+` FROM memories WHERE memory_id = ?`, memoryID)
+	return scanMemoryRow(row)
 }
 
-// SearchMemories searches memories by querying content.
+// SearchMemories searches memories by querying content (substring LIKE).
+// Kept for the existing /memory/search endpoint and the search tool. For
+// embedding-based retrieval, see SearchAcceptedMemoriesByVector.
 func (d *DB) SearchMemories(ctx context.Context, query string, limit int) ([]*Memory, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT memory_id, type, content, context_id, created_at, expires_at, score
+		`SELECT `+memorySelectColumns+`
 		 FROM memories
 		 WHERE content LIKE ?
 		 LIMIT ?`,
@@ -1686,11 +1737,11 @@ func (d *DB) SearchMemories(ctx context.Context, query string, limit int) ([]*Me
 
 	var results []*Memory
 	for rows.Next() {
-		var m Memory
-		if err := rows.Scan(&m.MemoryID, &m.Type, &m.Content, &m.ContextID, &m.CreatedAt, &m.ExpiresAt, &m.Score); err != nil {
+		m, err := scanMemoryRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan memory: %w", err)
 		}
-		results = append(results, &m)
+		results = append(results, m)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1701,7 +1752,7 @@ func (d *DB) SearchMemories(ctx context.Context, query string, limit int) ([]*Me
 // ListMemoriesAfter returns all memories created after a given time.
 func (d *DB) ListMemoriesAfter(ctx context.Context, since time.Time) ([]*Memory, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT memory_id, type, content, context_id, created_at, expires_at, score
+		`SELECT `+memorySelectColumns+`
 		 FROM memories
 		 WHERE created_at > ?`,
 		since.Format(time.RFC3339),
@@ -1713,11 +1764,11 @@ func (d *DB) ListMemoriesAfter(ctx context.Context, since time.Time) ([]*Memory,
 
 	var results []*Memory
 	for rows.Next() {
-		var m Memory
-		if err := rows.Scan(&m.MemoryID, &m.Type, &m.Content, &m.ContextID, &m.CreatedAt, &m.ExpiresAt, &m.Score); err != nil {
+		m, err := scanMemoryRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan memory: %w", err)
 		}
-		results = append(results, &m)
+		results = append(results, m)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1730,6 +1781,104 @@ func (d *DB) DeleteMemory(ctx context.Context, memoryID string) error {
 	_, err := d.db.ExecContext(ctx,
 		`DELETE FROM memories WHERE memory_id = ?`, memoryID)
 	return err
+}
+
+// ListPendingMemories returns extracted memories awaiting user review,
+// ordered most-recent-first so the review UI surfaces fresh candidates first.
+func (d *DB) ListPendingMemories(ctx context.Context) ([]*Memory, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT `+memorySelectColumns+`
+		 FROM memories
+		 WHERE source = 'extracted' AND accepted_at IS NULL
+		 ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*Memory
+	for rows.Next() {
+		m, err := scanMemoryRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan pending memory: %w", err)
+		}
+		results = append(results, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// ListAcceptedMemories returns all accepted memories (manual + accepted
+// extracted), ordered oldest-first. Used by the cosine-injection path so
+// every accepted memory is in scope when ranking against the user query.
+func (d *DB) ListAcceptedMemories(ctx context.Context) ([]*Memory, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT `+memorySelectColumns+`
+		 FROM memories
+		 WHERE accepted_at IS NOT NULL
+		   AND (expires_at IS NULL OR expires_at > ?)`,
+		time.Now().Format(time.RFC3339),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*Memory
+	for rows.Next() {
+		m, err := scanMemoryRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan accepted memory: %w", err)
+		}
+		results = append(results, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// AcceptMemory stamps accepted_at on the given memory. Idempotent: re-accepting
+// an already accepted memory leaves the original timestamp in place.
+func (d *DB) AcceptMemory(ctx context.Context, memoryID string, at time.Time) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE memories SET accepted_at = ? WHERE memory_id = ? AND accepted_at IS NULL`,
+		at.Format(time.RFC3339), memoryID,
+	)
+	return err
+}
+
+// CountMemoriesBySource returns the number of memories with the given source.
+// Used by the Settings UI to surface "Extracted memories: N".
+func (d *DB) CountMemoriesBySource(ctx context.Context, source MemorySource) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memories WHERE source = ?`, string(source),
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count memories by source: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteMemoriesBySource removes every memory with the given source. Returns
+// the number of rows deleted. Manual memories are untouched when source is
+// MemorySourceExtracted, and vice-versa, so the caller can wipe just the
+// LLM-distilled candidates without losing user-pinned facts.
+func (d *DB) DeleteMemoriesBySource(ctx context.Context, source MemorySource) (int, error) {
+	res, err := d.db.ExecContext(ctx,
+		`DELETE FROM memories WHERE source = ?`, string(source),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete memories by source: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return int(n), nil
 }
 
 // GetMaxEmbeddingDimension returns the maximum vector dimension currently stored

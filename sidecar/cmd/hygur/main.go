@@ -312,9 +312,11 @@ func main() {
 	tagHandler := handlers.NewTagHandler(db, logger)
 	graphHandler := handlers.NewGraphHandler(db, logger)
 
-	// Create memory handler
+	// Create memory handler. The search tool now needs the LLM client too —
+	// Phase 3.3 ranks accepted memories by cosine similarity to the user's
+	// last message, so it embeds the query before searching.
 	memoryStoreTool := tools.NewMemoryStoreTool(db, llmClient)
-	memorySearchTool := tools.NewMemorySearchTool(db)
+	memorySearchTool := tools.NewMemorySearchTool(db, llmClient)
 	memoryHandler := handlers.NewMemoryHandler(db, logger)
 	memoryHandler.SetTools(memoryStoreTool, memorySearchTool)
 

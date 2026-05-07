@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/hygur/sidecar/internal/tools"
 	"github.com/rs/zerolog"
@@ -41,12 +42,39 @@ type StoreRequest struct {
 	ExpiresIn  int    `json:"expires_in,omitempty"` // minutes, 0 = never expire
 }
 
-// StoreResponse represents the response for POST /memory/store.
+// StoreResponse represents the response shape for endpoints that return a
+// memory. Phase 3.3 adds the source/accepted_at/session_id fields so the
+// macOS app can distinguish manual vs extracted rows and surface pending
+// candidates for review without inferring state from heuristics.
 type StoreResponse struct {
-	MemoryID  string `json:"memory_id"`
-	Type      string `json:"type"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
+	MemoryID   string `json:"memory_id"`
+	Type       string `json:"type"`
+	Content    string `json:"content"`
+	CreatedAt  string `json:"created_at"`
+	Source     string `json:"source,omitempty"`      // "manual" | "extracted"
+	AcceptedAt string `json:"accepted_at,omitempty"` // RFC3339; "" = pending
+	SessionID  string `json:"session_id,omitempty"`
+}
+
+// memoryToResponse converts a *store.Memory to its wire shape, ensuring the
+// new fields are always populated.
+func memoryToResponse(m *store.Memory) StoreResponse {
+	source := string(m.Source)
+	if source == "" {
+		source = string(store.MemorySourceManual)
+	}
+	resp := StoreResponse{
+		MemoryID:  m.MemoryID,
+		Type:      string(m.Type),
+		Content:   m.Content,
+		CreatedAt: m.CreatedAt.Format(time.RFC3339),
+		Source:    source,
+		SessionID: m.SessionID,
+	}
+	if m.AcceptedAt != nil {
+		resp.AcceptedAt = m.AcceptedAt.Format(time.RFC3339)
+	}
+	return resp
 }
 
 // Store handles POST /memory/store - store a new memory.
@@ -83,11 +111,14 @@ func (h *MemoryHandler) Store(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().Format(time.RFC3339)
 	resp := StoreResponse{
-		MemoryID:  memoryID,
-		Type:      req.MemoryType,
-		Content:   req.Content,
-		CreatedAt: time.Now().Format(time.RFC3339),
+		MemoryID:   memoryID,
+		Type:       req.MemoryType,
+		Content:    req.Content,
+		CreatedAt:  now,
+		Source:     string(store.MemorySourceManual),
+		AcceptedAt: now, // manual memories are auto-accepted
 	}
 
 	writeMemoryJSON(w, http.StatusCreated, resp)
@@ -182,12 +213,7 @@ func (h *MemoryHandler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	var changes []StoreResponse
 	for _, m := range memories {
-		changes = append(changes, StoreResponse{
-			MemoryID:  m.MemoryID,
-			Type:      string(m.Type),
-			Content:   m.Content,
-			CreatedAt: m.CreatedAt.Format(time.RFC3339),
-		})
+		changes = append(changes, memoryToResponse(m))
 	}
 
 	writeMemoryJSON(w, http.StatusOK, SyncResponse{Changes: changes})
@@ -200,8 +226,10 @@ type ListResponse struct {
 	Total    int             `json:"total"`
 }
 
-// List handles GET /memory/list — returns every stored memory. Use the
-// existing /memory/sync endpoint when you only want recent changes.
+// List handles GET /memory/list — returns every stored memory (manual +
+// extracted, accepted or pending). The macOS app filters client-side using
+// the source/accepted_at fields. Use the existing /memory/sync endpoint when
+// you only want recent changes.
 func (h *MemoryHandler) List(w http.ResponseWriter, r *http.Request) {
 	memories, err := h.store.ListMemoriesAfter(r.Context(), time.Time{})
 	if err != nil {
@@ -211,14 +239,204 @@ func (h *MemoryHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]StoreResponse, 0, len(memories))
 	for _, m := range memories {
-		out = append(out, StoreResponse{
-			MemoryID:  m.MemoryID,
-			Type:      string(m.Type),
-			Content:   m.Content,
-			CreatedAt: m.CreatedAt.Format(time.RFC3339),
-		})
+		out = append(out, memoryToResponse(m))
 	}
 	writeMemoryJSON(w, http.StatusOK, ListResponse{Memories: out, Total: len(out)})
+}
+
+// Pending handles GET /memory/pending — returns extracted memories waiting on
+// user review. Drives the "Pending review" section in MemoriesView.
+func (h *MemoryHandler) Pending(w http.ResponseWriter, r *http.Request) {
+	memories, err := h.store.ListPendingMemories(r.Context())
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list pending memories")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list pending memories")
+		return
+	}
+	out := make([]StoreResponse, 0, len(memories))
+	for _, m := range memories {
+		out = append(out, memoryToResponse(m))
+	}
+	writeMemoryJSON(w, http.StatusOK, ListResponse{Memories: out, Total: len(out)})
+}
+
+// Accept handles POST /memory/{memory_id}/accept — flips accepted_at to now.
+// After acceptance the memory becomes eligible for cosine-injection into
+// future system prompts.
+func (h *MemoryHandler) Accept(w http.ResponseWriter, r *http.Request) {
+	memoryID := chi.URLParam(r, "memory_id")
+	if memoryID == "" {
+		writeMemoryError(w, http.StatusBadRequest, "BAD_REQUEST", "memory_id is required")
+		return
+	}
+	if err := h.store.AcceptMemory(r.Context(), memoryID, time.Now()); err != nil {
+		h.logger.Error().Err(err).Str("memory_id", memoryID).Msg("failed to accept memory")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to accept memory")
+		return
+	}
+	mem, err := h.store.GetMemory(r.Context(), memoryID)
+	if err != nil {
+		// Memory was just updated successfully but we can't fetch it back —
+		// surface a generic 200 so the client knows the accept happened.
+		writeMemoryJSON(w, http.StatusOK, map[string]string{"memory_id": memoryID})
+		return
+	}
+	writeMemoryJSON(w, http.StatusOK, memoryToResponse(mem))
+}
+
+// Discard handles POST /memory/{memory_id}/discard — deletes the candidate
+// outright. Discard and Delete are wire-distinct (discard is reserved for
+// pending candidates) so the UI can offer different copy and the server can
+// log the user's intent, but the underlying SQL is the same DELETE.
+func (h *MemoryHandler) Discard(w http.ResponseWriter, r *http.Request) {
+	memoryID := chi.URLParam(r, "memory_id")
+	if memoryID == "" {
+		writeMemoryError(w, http.StatusBadRequest, "BAD_REQUEST", "memory_id is required")
+		return
+	}
+	if err := h.store.DeleteMemory(r.Context(), memoryID); err != nil {
+		h.logger.Error().Err(err).Str("memory_id", memoryID).Msg("failed to discard memory")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to discard memory")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ExtractRequest is the body for POST /memory/extract. The macOS app sends
+// the conversation transcript because the sidecar's session.Store is
+// in-memory and may not hold the full transcript by the time the user
+// archives a chat.
+type ExtractRequest struct {
+	SessionID string                  `json:"session_id,omitempty"`
+	Messages  []ExtractMessagePayload `json:"messages"`
+}
+
+// ExtractMessagePayload mirrors tools.TranscriptMessage on the wire.
+type ExtractMessagePayload struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ExtractResponse summarises the outcome of an /memory/extract call.
+type ExtractResponse struct {
+	Extracted int             `json:"extracted"`
+	Stored    int             `json:"stored"`
+	Pending   []StoreResponse `json:"pending"`
+}
+
+// Extract handles POST /memory/extract — runs the LLM extractor over a
+// transcript and persists candidates as pending. Returns the freshly stored
+// candidates so the client can update its UI without round-tripping to
+// /memory/pending right after.
+func (h *MemoryHandler) Extract(w http.ResponseWriter, r *http.Request) {
+	if h.tool == nil {
+		writeMemoryError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "memory store tool not configured")
+		return
+	}
+	var req ExtractRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeMemoryError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
+		return
+	}
+	if len(req.Messages) == 0 {
+		writeMemoryError(w, http.StatusBadRequest, "VALIDATION_ERROR", "messages required")
+		return
+	}
+
+	transcript := make([]tools.TranscriptMessage, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		transcript = append(transcript, tools.TranscriptMessage{Role: m.Role, Content: m.Content})
+	}
+
+	extracted, err := h.tool.ExtractMemoriesFromSession(r.Context(), transcript)
+	if err != nil {
+		// Embedding endpoint flakiness or LLM unavailability should yield an
+		// empty extraction rather than 500; the caller often retries from a
+		// background task. We still log so misconfiguration is visible.
+		if err == llm.ErrEmbeddingModelUnavailable {
+			writeMemoryJSON(w, http.StatusOK, ExtractResponse{})
+			return
+		}
+		h.logger.Warn().Err(err).Msg("session memory extraction failed")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to extract memories")
+		return
+	}
+	if len(extracted) == 0 {
+		writeMemoryJSON(w, http.StatusOK, ExtractResponse{})
+		return
+	}
+	stored, persistErr := h.tool.PersistExtracted(extracted, req.SessionID)
+	if persistErr != nil {
+		h.logger.Warn().Err(persistErr).Msg("partial persistence of extracted memories")
+	}
+
+	pending, err := h.store.ListPendingMemories(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("failed to fetch pending memories after extract")
+	}
+	out := make([]StoreResponse, 0, len(pending))
+	for _, m := range pending {
+		out = append(out, memoryToResponse(m))
+	}
+
+	writeMemoryJSON(w, http.StatusOK, ExtractResponse{
+		Extracted: len(extracted),
+		Stored:    stored,
+		Pending:   out,
+	})
+}
+
+// StatsResponse exposes counts the Settings UI uses to surface memory state.
+type StatsResponse struct {
+	ManualCount    int `json:"manual_count"`
+	ExtractedCount int `json:"extracted_count"`
+	PendingCount   int `json:"pending_count"`
+}
+
+// Stats handles GET /memory/stats — counts grouped by source/state.
+func (h *MemoryHandler) Stats(w http.ResponseWriter, r *http.Request) {
+	manualCount, err := h.store.CountMemoriesBySource(r.Context(), store.MemorySourceManual)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to count manual memories")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to count memories")
+		return
+	}
+	extractedCount, err := h.store.CountMemoriesBySource(r.Context(), store.MemorySourceExtracted)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to count extracted memories")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to count memories")
+		return
+	}
+	pending, err := h.store.ListPendingMemories(r.Context())
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list pending memories")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to count memories")
+		return
+	}
+	writeMemoryJSON(w, http.StatusOK, StatsResponse{
+		ManualCount:    manualCount,
+		ExtractedCount: extractedCount,
+		PendingCount:   len(pending),
+	})
+}
+
+// ClearExtractedResponse reports how many rows the wipe removed.
+type ClearExtractedResponse struct {
+	Deleted int `json:"deleted"`
+}
+
+// ClearExtracted handles DELETE /memory/extracted — wipes every memory with
+// source='extracted', leaving manual entries untouched. Settings UI uses
+// this behind a confirmation dialog.
+func (h *MemoryHandler) ClearExtracted(w http.ResponseWriter, r *http.Request) {
+	deleted, err := h.store.DeleteMemoriesBySource(r.Context(), store.MemorySourceExtracted)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to clear extracted memories")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to clear extracted memories")
+		return
+	}
+	h.logger.Info().Int("deleted", deleted).Msg("cleared extracted memories")
+	writeMemoryJSON(w, http.StatusOK, ClearExtractedResponse{Deleted: deleted})
 }
 
 // Delete handles DELETE /memory/{memory_id}.

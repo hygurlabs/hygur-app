@@ -96,6 +96,12 @@ type RAGContextEvent struct {
 // indefinitely against a misbehaving tool.
 const maxToolRounds = 5
 
+// memoryInjectionTokenBudget caps the size of the "Faits durables" block we
+// prepend to the system prompt when injecting accepted memories. ~500 tokens
+// is enough for ~10 short facts (the Phase 3.3 spec's recommended ceiling)
+// without crowding out the actual conversation context.
+const memoryInjectionTokenBudget = 500
+
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
 	llmClient       *llm.Client
@@ -153,6 +159,38 @@ func (h *RAGChatHandler) SetAgendaExtractor(ext *agenda.Extractor, db *store.DB)
 // handler behaves exactly as it did before this method existed.
 func (h *RAGChatHandler) SetToolRegistry(registry *tools.Registry) {
 	h.toolRegistry = registry
+}
+
+// baseFormatGuidance is the persona/format hint prepended to every chat turn.
+// The macOS client renders assistant messages with MarkdownUI (headings,
+// fenced code, GFM tables, blockquotes, lists, hr), so we tell the model to
+// lean on Markdown when it helps comprehension. Kept short to avoid bloating
+// the prompt budget on small local models.
+const baseFormatGuidance = `Tu es Hygur, l'assistant personnel de l'utilisateur. ` +
+	`L'interface affiche tes réponses avec un rendu Markdown complet : titres (##, ###), ` +
+	`gras (**texte**), italique (*texte*), listes à puces et numérotées, ` +
+	"citations (>), blocs de code avec triple-backquote et indication de langage (```python …```), " +
+	`code inline avec backquotes, tableaux GFM (| col1 | col2 |\n| --- | --- |), ` +
+	`liens [texte](url), barres horizontales (---). ` +
+	`Utilise ces éléments quand ils améliorent la lisibilité, mais reste concis : ` +
+	`pas de Markdown pour les réponses très courtes (un mot, un nombre, oui/non).`
+
+// injectFormatGuidance ensures every chat turn carries the base persona +
+// markdown-rendering hint at the top of the system prompt. Subsequent
+// augmentations (agenda, memories, RAG context) merge into the same system
+// message so the LLM sees one unified system block.
+func injectFormatGuidance(messages []llm.Message) []llm.Message {
+	if len(messages) > 0 && messages[0].Role == "system" {
+		merged := baseFormatGuidance + "\n\n" + messages[0].Content
+		out := make([]llm.Message, len(messages))
+		out[0] = llm.Message{Role: "system", Content: merged}
+		copy(out[1:], messages[1:])
+		return out
+	}
+	out := make([]llm.Message, 0, len(messages)+1)
+	out = append(out, llm.Message{Role: "system", Content: baseFormatGuidance})
+	out = append(out, messages...)
+	return out
 }
 
 // injectAgendaIntoSystemPrompt prepends an urgency block to the system prompt
@@ -341,6 +379,11 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// is part of the context the LLM sees on this turn.
 	messages := h.resolveDocumentAttachments(r.Context(), req.Messages)
 
+	// Persona + Markdown-rendering hint goes first so all subsequent
+	// augmentations (agenda, memories, RAG context) merge into the same
+	// system block.
+	messages = injectFormatGuidance(messages)
+
 	// Direct-retrieval fast-path: when the latest user query is an entity
 	// follow-up ("et son IBAN ?") and we already know the relevant sources
 	// from the session, pre-inject them so the LLM doesn't need to call
@@ -382,12 +425,16 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Persistent-memory injection: prepend any durable user facts that match
-	// the current query so the LLM has them available even when the RAG
-	// pipeline didn't surface them. Best-effort — failure here must not
-	// break chat.
+	// Persistent-memory injection (Phase 3.3): prepend any accepted durable
+	// user facts most semantically similar to the current query. Only
+	// memories with accepted_at IS NOT NULL are eligible — pending candidates
+	// stay out of the LLM context until the user reviews them in the
+	// Memories tab. Best-effort — failure here must not break chat.
 	if h.memorySearch != nil && latestUserQuery != "" {
-		if hits, err := h.memorySearch.Search(latestUserQuery, 3, 0); err == nil && len(hits) > 0 {
+		searchCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		hits, err := h.memorySearch.SearchAccepted(searchCtx, latestUserQuery, 5, memoryInjectionTokenBudget)
+		cancel()
+		if err == nil && len(hits) > 0 {
 			messages = injectMemoriesIntoSystem(messages, hits)
 		}
 	}
@@ -634,16 +681,19 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		updateSessionPostSynthesis(sessionCtx, latestUserQuery, assistantBuf.String(), req.RecentSourceIDs)
 	}
 
-	// Fire-and-forget memory extraction. The extractor calls the LLM (1-3 s),
-	// so detach from the request context — we don't want to block returning
-	// to the client and we also want extraction to survive the client
-	// disconnecting once the stream ends. ContextID = SessionID when present
-	// so memories can later be traced back to the conversation that produced
-	// them.
+	// Fire-and-forget per-turn memory extraction. The extractor calls the LLM
+	// (1-3 s), so detach from the request context — we don't want to block
+	// returning to the client and we also want extraction to survive the
+	// client disconnecting once the stream ends. SessionID, when present,
+	// links candidates back to the conversation that produced them.
+	//
+	// Phase 3.3: PersistExtracted now stores rows as source='extracted' with
+	// accepted_at=NULL. They will NOT be injected into future chats until the
+	// user reviews and accepts them via the Memories tab.
 	if h.memoryStore != nil && assistantBuf.Len() > 0 && latestUserQuery != "" {
 		userMsg := latestUserQuery
 		assistantMsg := assistantBuf.String()
-		ctxID := req.SessionID
+		sessionID := req.SessionID
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -655,12 +705,14 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if len(extracted) == 0 {
 				return
 			}
-			stored, persistErr := h.memoryStore.PersistExtracted(extracted, ctxID)
+			stored, persistErr := h.memoryStore.PersistExtracted(extracted, sessionID)
 			evt := h.logger.Info()
 			if persistErr != nil {
 				evt = h.logger.Warn().Err(persistErr)
 			}
-			evt.Int("extracted", len(extracted)).Int("stored", stored).Msg("memories persisted from turn")
+			evt.Int("extracted", len(extracted)).Int("stored", stored).
+				Str("session_id", sessionID).
+				Msg("pending memory candidates persisted from turn")
 		}()
 	}
 }

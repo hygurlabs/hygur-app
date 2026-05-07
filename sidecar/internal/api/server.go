@@ -292,6 +292,60 @@ func (s *Server) handleMemoryDelete(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
 }
 
+// handleMemoryPending handles GET /memory/pending — Phase 3.3 long-term memory.
+func (s *Server) handleMemoryPending(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.Pending(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
+// handleMemoryAccept handles POST /memory/{memory_id}/accept.
+func (s *Server) handleMemoryAccept(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.Accept(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
+// handleMemoryDiscard handles POST /memory/{memory_id}/discard.
+func (s *Server) handleMemoryDiscard(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.Discard(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
+// handleMemoryExtract handles POST /memory/extract.
+func (s *Server) handleMemoryExtract(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.Extract(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
+// handleMemoryStats handles GET /memory/stats.
+func (s *Server) handleMemoryStats(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.Stats(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
+// handleMemoryClearExtracted handles DELETE /memory/extracted.
+func (s *Server) handleMemoryClearExtracted(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.ClearExtracted(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
 // SetEventsHandler sets the events handler for the server.
 func (s *Server) SetEventsHandler(handler *handlers.EventsHandler) {
 	s.eventsHandler = handler

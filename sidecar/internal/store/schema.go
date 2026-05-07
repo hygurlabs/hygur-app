@@ -88,11 +88,22 @@ CREATE TABLE IF NOT EXISTS memories (
     context_id TEXT,  -- conversation ID
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,
-    score FLOAT  -- relevance score for search
+    score FLOAT,  -- relevance score for search
+    -- Phase 3.3: long-term chat memory.
+    -- 'manual' = user-pinned (auto-accepted); 'extracted' = LLM-distilled candidate (must be accepted).
+    source TEXT NOT NULL DEFAULT 'manual',
+    -- NULL = pending user review. Set to RFC3339 timestamp on accept.
+    accepted_at DATETIME,
+    -- Cosine-search embedding (little-endian float32 BLOB) for top-K retrieval.
+    embedding BLOB,
+    -- Session that produced this memory; useful to trace back the conversation.
+    session_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_context_id ON memories(context_id);
+CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source);
+CREATE INDEX IF NOT EXISTS idx_memories_accepted_at ON memories(accepted_at);
 
 -- schema_version tracks applied migrations
 
@@ -123,4 +134,4 @@ CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 6
+const CurrentSchemaVersion = 7

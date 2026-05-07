@@ -114,6 +114,13 @@ func (s *Server) setupRoutes() {
 			r.Get("/search", s.handleMemorySearch)
 			r.Get("/sync", s.handleMemorySync)
 			r.Get("/list", s.handleMemoryList)
+			// Phase 3.3 long-term memory.
+			r.Get("/stats", s.handleMemoryStats)
+			r.Get("/pending", s.handleMemoryPending)
+			r.Post("/extract", s.handleMemoryExtract)
+			r.Delete("/extracted", s.handleMemoryClearExtracted)
+			r.Post("/{memory_id}/accept", s.handleMemoryAccept)
+			r.Post("/{memory_id}/discard", s.handleMemoryDiscard)
 			r.Delete("/{memory_id}", s.handleMemoryDelete)
 		})
 

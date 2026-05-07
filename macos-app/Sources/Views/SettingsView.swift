@@ -252,6 +252,117 @@ private struct CardRow<Trailing: View>: View {
     }
 }
 
+// MARK: - Memories Settings
+
+/// Surfaces long-term memory counts (manual / extracted / pending review)
+/// and offers a destructive "Clear extracted" panic switch. Manual
+/// memories are preserved by design — clearing only wipes auto-distilled
+/// rows so the user can reset the LLM's understanding without losing
+/// notes they explicitly pinned.
+///
+/// Self-contained because Settings does not own a long-running view model;
+/// loads on appear, refreshes after the wipe completes.
+private struct MemoriesSettingsRow: View {
+    @State private var stats: MemoryStatsResponse?
+    @State private var isLoading = true
+    @State private var isClearing = false
+    @State private var showClearConfirm = false
+    @State private var statusMessage: String = ""
+    @State private var statusIsError: Bool = false
+
+    private let service = SidecarService.fromSettings()
+
+    var body: some View {
+        // Wrap in a Group so we can attach .task / .confirmationDialog at
+        // the row level — `SettingsCard` collects loose CardRow children
+        // inside its TupleView, so we surface them as siblings of a hidden
+        // anchor view that owns the lifecycle modifiers.
+        Group {
+            CardRow(icon: "brain.head.profile",
+                    title: "Memory counts",
+                    subtitle: subtitleText) {
+                if isLoading {
+                    LoadingIndicator(style: .small)
+                } else {
+                    Button("Refresh") { Task { await refresh() } }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+
+            CardDivider()
+
+            CardRow(icon: "trash", iconColor: HygurColors.danger,
+                    title: "Clear extracted memories",
+                    subtitle: "Wipes auto-distilled memories (manual entries are kept).") {
+                Button(role: .destructive) {
+                    showClearConfirm = true
+                } label: {
+                    if isClearing { LoadingIndicator(style: .small) }
+                    else { Text("Clear…") }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isClearing || (stats?.extractedCount ?? 0) == 0)
+            }
+
+            if !statusMessage.isEmpty {
+                CardDivider()
+                Text(statusMessage)
+                    .font(HygurTypography.caption)
+                    .foregroundStyle(statusIsError ? HygurColors.danger : HygurColors.success)
+                    .padding(.horizontal, HygurSpacing.lg)
+                    .padding(.vertical, HygurSpacing.md)
+            }
+        }
+        .task { await refresh() }
+        .confirmationDialog(
+            "Clear all extracted memories?",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear", role: .destructive) {
+                Task { await runClear() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes every memory Hygur auto-extracted from chats, including those already accepted. Manual entries are kept. Cannot be undone.")
+        }
+    }
+
+    private var subtitleText: String {
+        guard let stats else { return "Loading…" }
+        return "\(stats.manualCount) manual · \(stats.extractedCount) extracted · \(stats.pendingCount) pending review"
+    }
+
+    private func refresh() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            stats = try await service.memoryStats()
+        } catch {
+            statusMessage = "Couldn't load memory stats: \(error.localizedDescription)"
+            statusIsError = true
+        }
+    }
+
+    private func runClear() async {
+        isClearing = true
+        defer { isClearing = false }
+        do {
+            let removed = try await service.clearExtractedMemories()
+            statusMessage = removed == 0
+                ? "Nothing to clear."
+                : "Cleared \(removed) extracted memor\(removed == 1 ? "y" : "ies"). Manual entries preserved."
+            statusIsError = false
+            await refresh()
+        } catch {
+            statusMessage = "Failed to clear: \(error.localizedDescription)"
+            statusIsError = true
+        }
+    }
+}
+
 // MARK: - Tab 1: Connexion
 
 private struct ConnectionTab: View {
@@ -1140,6 +1251,13 @@ private struct SystemTab: View {
                             .padding(.horizontal, HygurSpacing.lg)
                             .padding(.vertical, HygurSpacing.md)
                     }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
+                SettingsSectionHeader(title: "Memories")
+                SettingsCard {
+                    MemoriesSettingsRow()
                 }
             }
 

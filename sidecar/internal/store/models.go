@@ -75,6 +75,22 @@ const (
 	MemoryPreference MemoryType = "preference"
 )
 
+// MemorySource discriminates between user-pinned and LLM-distilled memories.
+// Phase 3.3 introduces 'extracted' for the long-term memory pipeline; 'manual'
+// is the default and matches every memory inserted before the feature shipped.
+type MemorySource string
+
+const (
+	// MemorySourceManual is for memories the user explicitly added (or that
+	// the older auto-extractor stored before Phase 3.3 introduced acceptance).
+	// Manual memories are auto-accepted on insert.
+	MemorySourceManual MemorySource = "manual"
+	// MemorySourceExtracted is for memories distilled by the LLM from a chat
+	// session. They land with AcceptedAt=nil (pending) and require explicit
+	// user acceptance before being eligible for prompt injection.
+	MemorySourceExtracted MemorySource = "extracted"
+)
+
 // Memory represents a persistent memory entry.
 type Memory struct {
 	MemoryID  string
@@ -84,4 +100,9 @@ type Memory struct {
 	CreatedAt time.Time
 	ExpiresAt *time.Time
 	Score     float64
+	// Phase 3.3 — long-term chat memory.
+	Source     MemorySource
+	AcceptedAt *time.Time // nil = pending review (only valid when Source = extracted)
+	Embedding  []float32  // nil when not embedded yet (e.g. legacy rows)
+	SessionID  string     // session that produced this memory; "" when unknown
 }

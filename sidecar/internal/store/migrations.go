@@ -100,6 +100,24 @@ CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_context_id ON memories(context_id);
 `,
 	},
+	// Migration 7 adds Phase 3.3 columns to memories: source, accepted_at,
+	// embedding, session_id. Existing rows are back-filled to source='manual'
+	// and accepted_at=created_at so prior auto-extracted memories continue to
+	// be injected (we can't ask the user to retroactively review them, and
+	// silently dropping established memories would surprise long-term users).
+	// Fresh extractions made after this migration apply will land with
+	// source='extracted' and accepted_at=NULL — i.e. require user review.
+	//
+	// Note: schemaSQL (v1) already declares these columns on fresh installs.
+	// Production DBs that pre-date v7 still need the ALTER TABLEs. We can't
+	// use "ADD COLUMN IF NOT EXISTS" (SQLite < 3.35), so the migration is
+	// applied through a per-statement runner (applyMemoriesV7Migration) that
+	// inspects PRAGMA table_info and only adds missing columns.
+	{
+		Version: 7,
+		Name:    "memories_long_term_columns",
+		SQL:     "", // handled by applyMigrations special-case below
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
@@ -131,10 +149,20 @@ func applyMigrations(db *sql.DB) error {
 			return fmt.Errorf("failed to begin transaction for migration %d: %w", m.Version, err)
 		}
 
-		_, err = tx.Exec(m.SQL)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
+		// Migration 7 needs to be idempotent on fresh installs (schemaSQL v1
+		// already declares the new memories columns). Older DBs that only
+		// hold the v6 schema still need the ALTER TABLEs. The custom runner
+		// handles both paths cleanly.
+		if m.Version == 7 {
+			if err := applyMemoriesV7Migration(tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
+			}
+		} else if m.SQL != "" {
+			if _, err := tx.Exec(m.SQL); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
+			}
 		}
 
 		_, err = tx.Exec("INSERT INTO schema_version (version) VALUES (?)", m.Version)
@@ -149,6 +177,78 @@ func applyMigrations(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// applyMemoriesV7Migration adds the Phase 3.3 columns to memories only when
+// they are missing. Fresh installs already see them via schemaSQL, so the
+// ALTERs would error with "duplicate column name". We inspect PRAGMA
+// table_info(memories) and add only what's missing, then back-fill
+// accepted_at = created_at for legacy rows.
+func applyMemoriesV7Migration(tx *sql.Tx) error {
+	existing, err := existingColumns(tx, "memories")
+	if err != nil {
+		return err
+	}
+	type colSpec struct {
+		name string
+		sql  string
+	}
+	wanted := []colSpec{
+		{name: "source", sql: "ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"},
+		{name: "accepted_at", sql: "ALTER TABLE memories ADD COLUMN accepted_at DATETIME"},
+		{name: "embedding", sql: "ALTER TABLE memories ADD COLUMN embedding BLOB"},
+		{name: "session_id", sql: "ALTER TABLE memories ADD COLUMN session_id TEXT"},
+	}
+	for _, c := range wanted {
+		if _, ok := existing[c.name]; ok {
+			continue
+		}
+		if _, err := tx.Exec(c.sql); err != nil {
+			return fmt.Errorf("add column %s: %w", c.name, err)
+		}
+	}
+	// Back-fill accepted_at for legacy rows that pre-date the column. New
+	// rows inserted after this migration can have NULL (= pending).
+	if _, err := tx.Exec(`UPDATE memories SET accepted_at = created_at WHERE accepted_at IS NULL`); err != nil {
+		return fmt.Errorf("backfill accepted_at: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source)`); err != nil {
+		return fmt.Errorf("index source: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_accepted_at ON memories(accepted_at)`); err != nil {
+		return fmt.Errorf("index accepted_at: %w", err)
+	}
+	return nil
+}
+
+// existingColumns returns the set of column names on `table`, derived from
+// PRAGMA table_info. Used by applyMemoriesV7Migration to make the migration
+// idempotent across fresh and upgraded installs.
+func existingColumns(tx *sql.Tx, table string) (map[string]struct{}, error) {
+	rows, err := tx.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return nil, fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("scan column info: %w", err)
+		}
+		out[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GetSchemaVersion returns the current schema version from the database.
