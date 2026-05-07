@@ -39,6 +39,8 @@
 	<string>26.0</string>
 	<key>NSAppleScriptEnabled</key>
 	<false/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Hygur reads upcoming events to surface them in your agenda and creates new events on your behalf — only after you confirm each one.</string>
 	<key>NSMainStoryboardFile</key>
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -66,12 +68,5 @@
 	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages.</string>
-	<key>NSUserActivityTypes</key>
-	<array>
-		<string>AskHygurIntent</string>
-		<string>SaveToHygurIntent</string>
-		<string>WhatsOnMyAgendaIntent</string>
-		<string>CreateNoteInHygurIntent</string>
-	</array>
 </dict>
 </plist>

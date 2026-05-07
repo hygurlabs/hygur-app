@@ -192,6 +192,12 @@ func main() {
 	// Create notes tool early — needed by both NotesHandler and plugin manager.
 	createNoteTool := tools.NewCreateNoteToolWithEmbeddings(db, embeddingService)
 
+	// Calendar tool — schema-only on the sidecar side. The actual EventKit
+	// write is performed by the macOS app after explicit user confirmation,
+	// so this tool merely validates and echoes the structured request that
+	// the Swift dispatcher unpacks into a CreateCalendarEventSheet.
+	createCalendarEventTool := tools.NewCreateCalendarEventTool()
+
 	// Plugin manager — registers connector adapters and loads saved configs.
 	pluginManager := plugin.NewManager(credStore, logger)
 
@@ -345,6 +351,7 @@ func main() {
 		ragConfig.MaxContextTokens,
 	)
 	toolRegistry.MustRegister(searchKBTool)
+	toolRegistry.MustRegister(createCalendarEventTool)
 	ragChatHandler.SetToolRegistry(toolRegistry)
 
 

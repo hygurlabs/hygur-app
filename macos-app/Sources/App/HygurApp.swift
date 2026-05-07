@@ -43,6 +43,11 @@ struct HygurApp: App {
     // Pre-warm once at launch, before any ChatView appears.
     @State private var voiceService = VoiceService()
 
+    // EventKit wrapper. Permission is requested lazily (the service is
+    // injected here so views can read it via `@Environment`, but no system
+    // prompt fires until the agenda or a tool-driven create touches the API).
+    @State private var calendar = CalendarService.shared
+
     @State private var showOnboarding: Bool = false
 
     var body: some Scene {
@@ -54,6 +59,7 @@ struct HygurApp: App {
                 .environment(favoritesStore)
                 .environment(inspectorSelection)
                 .environment(voiceService)
+                .environment(calendar)
                 .sheet(isPresented: $showOnboarding) {
                     OnboardingView(onComplete: {
                         onboardingCompleted = true
@@ -67,6 +73,7 @@ struct HygurApp: App {
                     .environment(eventStream)
                     .environment(supervisor)
                     .environment(updater)
+                    .environment(calendar)
                     .interactiveDismissDisabled()
                 }
                 .onAppear {
@@ -238,6 +245,7 @@ struct HygurApp: App {
                 .environment(supervisor)
                 .environment(updater)
                 .environment(voiceService)
+                .environment(calendar)
         }
 
         // Menubar status — always visible. Drives a small status dot

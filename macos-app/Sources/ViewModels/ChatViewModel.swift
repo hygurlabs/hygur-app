@@ -26,6 +26,11 @@ final class ChatViewModel {
     /// Whether the context panel is visible
     var isContextPanelVisible: Bool = false
 
+    /// Set when a `create_calendar_event` tool call has resolved with a valid
+    /// payload — ChatView observes this and presents `CreateCalendarEventSheet`
+    /// for explicit user confirmation. Cleared when the sheet dismisses.
+    var pendingCalendarEventProposal: CreateCalendarEventProposal?
+
     /// Current session ID (if bound to a session)
     private(set) var sessionId: UUID?
 
@@ -526,6 +531,61 @@ final class ChatViewModel {
                 content: messages[assistantIndex].content,
                 ragContext: messages[assistantIndex].ragContext
             )
+        }
+        dispatchToolCall(call)
+    }
+
+    /// Routes resolved tool calls to native macOS handlers. Today only
+    /// `create_calendar_event` needs a UI confirmation — other tools (notes,
+    /// search) are server-side and need no client follow-up. As more native
+    /// tools land, switch on `call.name` here rather than scattering logic
+    /// across the streaming code path.
+    private func dispatchToolCall(_ call: ToolCall) {
+        guard call.errorMessage == nil, let result = call.result else { return }
+        switch call.name {
+        case "create_calendar_event":
+            presentCalendarEvent(from: result)
+        default:
+            break
+        }
+    }
+
+    /// Decodes the sidecar's `CreateCalendarEventResponse` JSON and surfaces
+    /// the proposal to the view layer. Bails silently on decode failure or on
+    /// `requested == false` — the contract is "only present a sheet when the
+    /// sidecar explicitly asked for one".
+    private func presentCalendarEvent(from resultJSON: String) {
+        guard let data = resultJSON.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(CalendarEventToolResult.self, from: data),
+              payload.requested,
+              let proposal = CreateCalendarEventProposal.from(
+                  title: payload.title,
+                  startISO: payload.start,
+                  endISO: payload.end,
+                  notes: payload.notes,
+                  calendarName: payload.calendarName
+              )
+        else { return }
+        pendingCalendarEventProposal = proposal
+    }
+
+    /// Mirror of the sidecar's `CreateCalendarEventResponse`. Kept private so
+    /// the rest of the app doesn't reach into the wire format directly.
+    private struct CalendarEventToolResult: Decodable {
+        let requested: Bool
+        let title: String
+        let start: String
+        let end: String
+        let notes: String?
+        let calendarName: String?
+
+        enum CodingKeys: String, CodingKey {
+            case requested
+            case title
+            case start
+            case end
+            case notes
+            case calendarName = "calendar_name"
         }
     }
 

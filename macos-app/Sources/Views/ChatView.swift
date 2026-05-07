@@ -173,7 +173,14 @@ struct ChatView: View {
         .frame(minWidth: 400)
         .errorBannerOverlay($viewModel.error)
         .sheet(isPresented: $showingAgendaSheet) {
-            AgendaSheet(actions: agendaViewModel.actions)
+            AgendaSheet(viewModel: agendaViewModel)
+        }
+        .sheet(item: $viewModel.pendingCalendarEventProposal) { proposal in
+            CreateCalendarEventSheet(
+                initial: proposal,
+                onConfirm: { _ in viewModel.pendingCalendarEventProposal = nil },
+                onCancel: { viewModel.pendingCalendarEventProposal = nil }
+            )
         }
         .task {
             await agendaViewModel.refresh()
