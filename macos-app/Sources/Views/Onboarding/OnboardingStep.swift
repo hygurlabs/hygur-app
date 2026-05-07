@@ -2,6 +2,7 @@ import Foundation
 
 enum OnboardingStep: Int, CaseIterable, Identifiable {
     case welcome
+    case permissions
     case connectModel
     case connectMail
     case importFolder
@@ -13,6 +14,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .welcome:       return "Welcome"
+        case .permissions:   return "What Hygur may ask for"
         case .connectModel:  return "Connect AI model"
         case .connectMail:   return "Connect mail"
         case .importFolder:  return "Import documents"
@@ -22,10 +24,12 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     }
 
     /// True when the step is optional and a "Skip" button should be offered.
-    /// Welcome (entry) and Ready (recap) are always non-skippable.
+    /// Welcome (entry), Permissions (informational), and Ready (recap) are
+    /// non-skippable — the permissions screen is read-only so Continue is
+    /// the only path forward, but it must be seen.
     var isSkippable: Bool {
         switch self {
-        case .welcome, .ready:                          return false
+        case .welcome, .permissions, .ready:            return false
         case .connectModel:                             return true
         case .connectMail, .importFolder, .enableVoice: return true
         }

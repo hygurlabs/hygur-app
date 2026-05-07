@@ -34,6 +34,8 @@ struct OnboardingView: View {
         switch step {
         case .welcome:
             StepWelcome(onGetStarted: { advance() })
+        case .permissions:
+            StepPermissions()
         case .connectModel:
             StepConnectModel(onAdvance: { advance() })
         case .connectMail:
