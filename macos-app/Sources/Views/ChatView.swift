@@ -144,21 +144,21 @@ struct ChatView: View {
 
             Divider()
 
-            // Agenda badge — shown above the input when upcoming actions exist.
-            if agendaViewModel.actions.count > 0 {
+            // Agenda badge — surfaced above the input when actions OR
+            // calendar events exist, so users can always reach the sheet
+            // (events alone are enough; actions alone are enough; both is
+            // best). The label adapts to whichever signals are present.
+            if agendaViewModel.actions.count > 0 || agendaViewModel.calendarEvents.count > 0 {
                 HStack {
                     Button {
                         showingAgendaSheet = true
                     } label: {
-                        Label(
-                            "Focus: \(agendaViewModel.actions.count) action\(agendaViewModel.actions.count > 1 ? "s" : "")",
-                            systemImage: "target"
-                        )
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.orange.opacity(0.15), in: Capsule())
-                        .foregroundStyle(.orange)
+                        Label(agendaBadgeLabel, systemImage: agendaBadgeSymbol)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(agendaBadgeTint.opacity(0.15), in: Capsule())
+                            .foregroundStyle(agendaBadgeTint)
                     }
                     .buttonStyle(.plain)
                     Spacer()
@@ -315,6 +315,29 @@ struct ChatView: View {
     private var canSend: Bool {
         !viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty
             || !viewModel.pendingAttachments.isEmpty
+    }
+
+    /// Adapts the agenda badge to whichever signals exist. We bias toward
+    /// urgency when there are extracted actions (orange "Focus") and toward
+    /// neutrality when only calendar events are present (accent "Today").
+    private var agendaBadgeLabel: String {
+        let actionCount = agendaViewModel.actions.count
+        let eventCount = agendaViewModel.calendarEvents.count
+        if actionCount > 0 && eventCount > 0 {
+            return "Focus: \(actionCount) action\(actionCount > 1 ? "s" : "") · \(eventCount) event\(eventCount > 1 ? "s" : "")"
+        }
+        if actionCount > 0 {
+            return "Focus: \(actionCount) action\(actionCount > 1 ? "s" : "")"
+        }
+        return "Today: \(eventCount) event\(eventCount > 1 ? "s" : "")"
+    }
+
+    private var agendaBadgeSymbol: String {
+        agendaViewModel.actions.count > 0 ? "target" : "calendar"
+    }
+
+    private var agendaBadgeTint: Color {
+        agendaViewModel.actions.count > 0 ? .orange : HygurColors.accent
     }
 
     /// Horizontal strip of thumbnails for queued attachments. Each thumb has a

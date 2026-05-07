@@ -50,6 +50,11 @@ final class AgendaViewModel {
         self.calendarService = calendarService
     }
 
+    /// Default refresh used by ambient surfaces (chat view's badge). Pulls
+    /// actions and calendar events but does NOT prompt for calendar access —
+    /// users who haven't granted yet won't see a system dialog just for
+    /// opening the chat. The sheet itself uses `refreshCalendar(prompt:true)`
+    /// so the prompt only appears when the user explicitly opens "Agenda".
     func refresh() async {
         isLoading = true
         defer { isLoading = false }
@@ -59,18 +64,20 @@ final class AgendaViewModel {
         } catch {
             self.error = error.localizedDescription
         }
-        await refreshCalendar()
+        await refreshCalendar(prompt: false)
     }
 
     /// Pulls the next 48h of events from EventKit and converts them to
-    /// `Sendable` snapshots. Silently no-ops when permission hasn't been
-    /// granted; the sheet inspects `calendarAuthorizationStatus` to decide
-    /// whether to render the "Grant access" CTA.
-    func refreshCalendar() async {
-        // Trigger the lazy permission flow on first refresh. If the user
-        // declines we surface that via authorizationStatus; we don't surface
-        // a hard error because the agenda's primary content (extracted
-        // actions) still works without calendar access.
+    /// `Sendable` snapshots. When `prompt` is false, silently no-ops on
+    /// `.notDetermined` instead of triggering the system permission dialog.
+    /// Existing grants (`.fullAccess` / `.authorized`) are honoured in both
+    /// modes so a returning user still sees their calendar in the badge.
+    func refreshCalendar(prompt: Bool = true) async {
+        if !prompt && calendarService.authorizationStatus == .notDetermined {
+            calendarAuthorizationStatus = .notDetermined
+            calendarEvents = []
+            return
+        }
         let granted = await calendarService.ensureAuthorized()
         calendarAuthorizationStatus = calendarService.authorizationStatus
         guard granted else {
