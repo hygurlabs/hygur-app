@@ -98,6 +98,79 @@ func TestSkipsPastDeadlines(t *testing.T) {
 	}
 }
 
+// Regression — TVA quarterly declarations from April / July 2025 surfaced
+// as "upcoming focus" actions when running in May 2026 because tier-1 stores
+// raw regex captures ("30/04/2025", "31 juillet 2025") and the past-deadline
+// filter does a lex string compare against today's ISO date. Lex compare on
+// "30/04/2025" vs "2026-05-07" returns ">=" because '3' > '2'. Normalising
+// to ISO before the filter is the fix.
+func TestNormalisesNonISODueDatesBeforeFiltering(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"DD/MM/YYYY French", "30/04/2025"},
+		{"DD-MM-YYYY French", "30-04-2025"},
+		{"FR textual lowercase", "31 juillet 2025"},
+		{"FR textual with accents", "25 février 2025"},
+		{"EN textual full", "31 July 2025"},
+		{"EN textual abbreviated", "31 Jul 2025"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := makeItem("tva-"+tc.name, "Déclaration TVA", map[string]any{
+				"extracted_due_dates": []interface{}{tc.raw},
+			})
+			ext := NewExtractor(nil)
+			actions, err := ext.ExtractActions(context.Background(), []store.KnowledgeItem{item})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(actions) != 0 {
+				t.Errorf("expected 0 actions for past-deadline %q, got %d: %+v", tc.raw, len(actions), actions)
+			}
+		})
+	}
+}
+
+func TestNormaliseToISO(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		// Already-ISO short-circuit.
+		{"2026-04-30", "2026-04-30", true},
+		{" 2026-4-5 ", "2026-04-05", true},
+		// French numeric.
+		{"30/04/2026", "2026-04-30", true},
+		{"5-1-2026", "2026-01-05", true},
+		{"5.1.2026", "2026-01-05", true},
+		// French textual.
+		{"30 avril 2026", "2026-04-30", true},
+		{"25 février 2026", "2026-02-25", true},
+		{"1 août 2026", "2026-08-01", true},
+		// English textual (full + abbreviated).
+		{"30 April 2026", "2026-04-30", true},
+		{"30 Apr 2026", "2026-04-30", true},
+		{"30 Sept 2026", "2026-09-30", true},
+		// Garbage — must be rejected, not silently coerced.
+		{"Q1 2026", "", false},
+		{"avril 2026", "", false},
+		{"30/13/2026", "", false},
+		{"31/02/2026", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, ok := normalizeToISO(tc.raw)
+			if ok != tc.ok || got != tc.want {
+				t.Errorf("normalizeToISO(%q) = (%q, %v), want (%q, %v)", tc.raw, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestFailSoftWhenLLMErrors(t *testing.T) {
 	// Item with a templated due date plus an item without one.
 	// If LLM fails, we should still get the templated action and no panic.

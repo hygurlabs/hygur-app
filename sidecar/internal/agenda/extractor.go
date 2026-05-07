@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,9 +74,19 @@ func (e *Extractor) ExtractActions(ctx context.Context, items []store.KnowledgeI
 		if len(dueDates) > 0 {
 			priority := extractPriority(item)
 			for _, d := range dueDates {
+				// Tier-1 stores raw regex captures ("25 avril 2026",
+				// "25/04/2026", "25 April 2026"). Normalise to ISO before the
+				// past-deadline filter — the filter is a lex string compare
+				// against today's ISO date, so unnormalised values like
+				// "30/04/2025" silently pass it ('3' > '2'). Drop entries we
+				// can't parse rather than risk surfacing them as upcoming.
+				iso, ok := normalizeToISO(d)
+				if !ok {
+					continue
+				}
 				templated = append(templated, AgendaAction{
 					What:        item.Title,
-					DeadlineISO: d,
+					DeadlineISO: iso,
 					Priority:    priority,
 					SourceID:    item.ContentID,
 					Confidence:  1.0,
@@ -281,6 +293,106 @@ Si aucune deadline n'est trouvée, retourne [].`
 		})
 	}
 	return actions, nil
+}
+
+// frenchMonths / englishMonths map locale-specific names (lowercased,
+// accent-stripped for FR) to their month number. Tier-1 captures raw text
+// like "25 avril 2026" or "25 April 2026" — we keep the lookups separate so a
+// future locale addition is just a new map.
+var frenchMonths = map[string]int{
+	"janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+	"juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "decembre": 12,
+}
+
+var englishMonths = map[string]int{
+	"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+	"july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+	"jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
+	"jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+// reNumericDate matches DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (FR convention).
+// Anchored so the whole input must be a date.
+var reNumericDate = regexp.MustCompile(`^\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})\s*$`)
+
+// reISODate matches YYYY-MM-DD — used to short-circuit when the LLM (or the
+// occasional machine-readable mail header) already produced ISO.
+var reISODate = regexp.MustCompile(`^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$`)
+
+// reTextualDate matches "DD <month-name> YYYY" with the month name being a FR
+// or EN word. Stripped of accents and lowercased before lookup.
+var reTextualDate = regexp.MustCompile(`(?i)^\s*(\d{1,2})\s+([\p{L}.]+)\s+(\d{4})\s*$`)
+
+// normalizeToISO converts the raw deadline strings produced by tier-1 (FR/EN
+// month names, DD/MM/YYYY, DD-MM-YYYY) and by the LLM (already ISO) into a
+// canonical "YYYY-MM-DD". Returns ok=false when the input doesn't match any
+// known shape — the caller drops these rather than surfacing untrustworthy
+// dates.
+func normalizeToISO(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", false
+	}
+
+	// Already ISO — validate calendar bounds and re-emit zero-padded.
+	if m := reISODate.FindStringSubmatch(s); m != nil {
+		y, _ := strconv.Atoi(m[1])
+		mo, _ := strconv.Atoi(m[2])
+		d, _ := strconv.Atoi(m[3])
+		return composeISO(y, mo, d)
+	}
+
+	// DD/MM/YYYY family.
+	if m := reNumericDate.FindStringSubmatch(s); m != nil {
+		d, _ := strconv.Atoi(m[1])
+		mo, _ := strconv.Atoi(m[2])
+		y, _ := strconv.Atoi(m[3])
+		return composeISO(y, mo, d)
+	}
+
+	// "DD <month> YYYY" — try FR then EN.
+	if m := reTextualDate.FindStringSubmatch(s); m != nil {
+		d, _ := strconv.Atoi(m[1])
+		monthKey := stripAccents(strings.ToLower(strings.TrimSuffix(m[2], ".")))
+		y, _ := strconv.Atoi(m[3])
+		if mo, ok := frenchMonths[monthKey]; ok {
+			return composeISO(y, mo, d)
+		}
+		if mo, ok := englishMonths[monthKey]; ok {
+			return composeISO(y, mo, d)
+		}
+	}
+
+	return "", false
+}
+
+// composeISO validates the calendar fields and returns "YYYY-MM-DD". time.Date
+// would silently normalise impossible inputs (e.g. month=13 → next January);
+// we do the bounds check ourselves so callers can drop garbage.
+func composeISO(y, mo, d int) (string, bool) {
+	if y < 1900 || y > 2999 || mo < 1 || mo > 12 || d < 1 || d > 31 {
+		return "", false
+	}
+	t := time.Date(y, time.Month(mo), d, 0, 0, 0, 0, time.UTC)
+	if t.Year() != y || int(t.Month()) != mo || t.Day() != d {
+		return "", false
+	}
+	return t.Format("2006-01-02"), true
+}
+
+// stripAccents removes the few diacritics tier-1 captures leak into month
+// names ("février" → "fevrier", "août" → "aout"). Targeted replacement is
+// faster and clearer than dragging in golang.org/x/text just for this.
+func stripAccents(s string) string {
+	r := strings.NewReplacer(
+		"é", "e", "è", "e", "ê", "e", "ë", "e",
+		"à", "a", "â", "a", "ä", "a",
+		"î", "i", "ï", "i",
+		"ô", "o", "ö", "o",
+		"ù", "u", "û", "u", "ü", "u",
+		"ç", "c",
+	)
+	return r.Replace(s)
 }
 
 // buildCacheKey produces a sha1 hex of sorted content IDs.

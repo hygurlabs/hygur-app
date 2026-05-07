@@ -67,13 +67,26 @@ jobs:
             ".build/Hygur-${{ steps.version.outputs.VERSION }}.dmg" \
             ".build/Release/Hygur.app"
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.VERSION }}
+        # Idempotent: if the release was created manually before CI got here
+        # (or if a previous run already published the asset), upload+clobber
+        # rather than failing the whole workflow. v0.2.0 hit this — the manual
+        # `gh release create` happened before CI uploaded the DMG.
         run: |
-          gh release create "v${VERSION}" \
-            ".build/Hygur-${VERSION}.dmg" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Hygur ${VERSION}" \
-            --generate-notes
+          if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release v${VERSION} exists — uploading DMG with --clobber"
+            gh release upload "v${VERSION}" \
+              ".build/Hygur-${VERSION}.dmg" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+          else
+            echo "Release v${VERSION} does not exist — creating with DMG"
+            gh release create "v${VERSION}" \
+              ".build/Hygur-${VERSION}.dmg" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Hygur ${VERSION}" \
+              --generate-notes
+          fi
