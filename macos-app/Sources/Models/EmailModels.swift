@@ -15,7 +15,7 @@ struct EmailSource: Identifiable, Codable, Sendable {
 /// shape returned by `GET /mail/accounts`.
 struct MailAccount: Identifiable, Codable, Sendable, Hashable {
     let accountId: String
-    let provider: String       // "gmail" | "proton"
+    let provider: String       // "gmail" | "proton" | "mailapp"
     let email: String
     let status: String         // "connected" | "disconnected" | "error"
     let briefReason: String    // BriefReason raw code, e.g. "ok", "auth_issue"
@@ -101,6 +101,9 @@ enum BriefReason: String, Sendable {
     case networkIssue = "network_issue"
     case rateLimited = "rate_limited"
     case notConfigured = "not_configured"
+    case embeddingDown = "embedding_down"
+    case automationDenied = "automation_denied"
+    case appNotRunning = "app_not_running"
     case unknownIssue = "unknown_issue"
 
     init(rawValue: String) {
@@ -114,6 +117,9 @@ enum BriefReason: String, Sendable {
         case "network_issue": self = .networkIssue
         case "rate_limited": self = .rateLimited
         case "not_configured": self = .notConfigured
+        case "embedding_down": self = .embeddingDown
+        case "automation_denied": self = .automationDenied
+        case "app_not_running": self = .appNotRunning
         case "unknown_issue", "": self = .unknownIssue
         default: return nil
         }
@@ -127,6 +133,9 @@ enum BriefReason: String, Sendable {
         case .networkIssue: return "Network connection issue"
         case .rateLimited: return "Rate limit reached"
         case .notConfigured: return "Not configured"
+        case .embeddingDown: return "Embedding service unavailable"
+        case .automationDenied: return "Automation permission denied"
+        case .appNotRunning: return "Mail.app is not running"
         case .unknownIssue: return "Internal error"
         }
     }

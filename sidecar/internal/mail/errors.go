@@ -45,4 +45,14 @@ var (
 	// ErrEmbeddingFailed is returned by IndexThread when embedding generation fails.
 	// Callers should treat this as a transient infrastructure error, not a data error.
 	ErrEmbeddingFailed = errors.New("embedding failed")
+
+	// ErrAutomationDenied is returned when macOS denies the host process the
+	// right to send Apple Events to the target application (typically Mail.app).
+	// This corresponds to AppleScript error -1743.
+	ErrAutomationDenied = errors.New("automation permission denied")
+
+	// ErrMailAppNotRunning is returned when an Apple Events call requires
+	// Mail.app to be running but it is not, and the connector chose not to
+	// auto-launch it. Corresponds to AppleScript error -600.
+	ErrMailAppNotRunning = errors.New("mail.app not running")
 )

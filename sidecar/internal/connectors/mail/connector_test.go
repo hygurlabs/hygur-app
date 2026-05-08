@@ -178,7 +178,7 @@ func TestMailConnector_ConfigSchema(t *testing.T) {
 	assert.True(t, groupTitles["Gmail authentication"], "groupe 'Gmail authentication' attendu")
 	assert.True(t, groupTitles["Synchronization"], "groupe 'Synchronization' attendu")
 
-	// Verify the provider field is an enum with two options.
+	// Verify the provider field is an enum with proton, gmail, and mailapp.
 	var providerField *plugin.ConfigField
 	for _, g := range schema.Groups {
 		for i := range g.Fields {
@@ -190,7 +190,14 @@ func TestMailConnector_ConfigSchema(t *testing.T) {
 	}
 	require.NotNil(t, providerField, "champ 'provider' introuvable dans le schema")
 	assert.Equal(t, plugin.FieldEnum, providerField.Type)
-	assert.Len(t, providerField.Options, 2)
+	assert.Len(t, providerField.Options, 3)
+	providerValues := make(map[string]bool, len(providerField.Options))
+	for _, o := range providerField.Options {
+		providerValues[o.Value] = true
+	}
+	assert.True(t, providerValues["proton"], "option 'proton' attendue")
+	assert.True(t, providerValues["gmail"], "option 'gmail' attendue")
+	assert.True(t, providerValues["mailapp"], "option 'mailapp' attendue")
 
 	// Proton password field must be secret and conditional.
 	var passwordField *plugin.ConfigField

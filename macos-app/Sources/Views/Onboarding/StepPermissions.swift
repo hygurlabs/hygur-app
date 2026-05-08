@@ -48,6 +48,11 @@ struct StepPermissions: View {
                     title: "Notifications",
                     detail: "Daily briefs and priority alerts. Opt-in: nothing fires until you turn them on in Settings → Notifications."
                 )
+                permissionRow(
+                    icon: "envelope.fill",
+                    title: "Mail.app automation",
+                    detail: "Reads your local Mail.app emails via Apple Events. Asked the first time you add the Mail.app connector. Nothing leaves this Mac."
+                )
             }
             .frame(maxWidth: 560, alignment: .leading)
 

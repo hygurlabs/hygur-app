@@ -44,7 +44,7 @@ targets:
         INFOPLIST_FILE: Sources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/Hygur.entitlements
         PRODUCT_NAME: Hygur
-        MARKETING_VERSION: "0.2.1"
+        MARKETING_VERSION: "0.2.2"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
@@ -62,7 +62,7 @@ targets:
         CFBundleDisplayName: Hygur
         CFBundleIdentifier: com.hygur.app
         CFBundleVersion: "1"
-        CFBundleShortVersionString: "0.2.0"
+        CFBundleShortVersionString: "0.2.2"
         CFBundlePackageType: APPL
         CFBundleExecutable: Hygur
         LSMinimumSystemVersion: "26.0"
@@ -71,6 +71,7 @@ targets:
         NSCalendarsFullAccessUsageDescription: "Hygur reads upcoming events to surface them in your agenda and creates new events on your behalf — only after you confirm each one."
         NSMicrophoneUsageDescription: "Hygur uses the microphone for push-to-talk voice input in the chat."
         NSSpeechRecognitionUsageDescription: "Hygur transcribes your voice on-device with Apple Speech to turn spoken questions into chat messages."
+        NSAppleEventsUsageDescription: "Hygur sends Apple Events to Mail.app to read your local emails. No data is sent over the network — everything stays on this Mac."
         # App Intents discovery is driven by Metadata.appintents (auto-built by Xcode).
         # NSUserActivityTypes is kept for legacy NSUserActivity hand-off compatibility
         # with intent identifiers; modern AppIntents auto-discover the types regardless.
@@ -123,7 +124,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Share/HygurShare.entitlements
         PRODUCT_NAME: HygurShare
         PRODUCT_MODULE_NAME: HygurShare
-        MARKETING_VERSION: "0.2.1"
+        MARKETING_VERSION: "0.2.2"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual

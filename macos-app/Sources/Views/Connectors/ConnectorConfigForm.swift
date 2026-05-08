@@ -109,6 +109,8 @@ struct ConnectorConfigForm: View {
                 boolField(field)
             case "int":
                 intField(field)
+            case "permission_check":
+                permissionCheckField(field)
             default:
                 stringField(field)
             }
@@ -355,6 +357,37 @@ struct ConnectorConfigForm: View {
             )
         )
         .textFieldStyle(.roundedBorder)
+    }
+
+    // MARK: - Permission check field
+
+    /// Renders an info card with a button that opens a System Settings pane.
+    /// Stores no value — it is purely informational. The button label comes
+    /// from `field.default`; the destination URL is resolved by `field.key`.
+    private func permissionCheckField(_ field: ConnectorConfigField) -> some View {
+        let buttonLabel = field.default.isEmpty ? "Open System Settings" : field.default
+        let url = permissionCheckURL(forKey: field.key)
+        return Button {
+            if let url { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "lock.shield")
+                Text(buttonLabel)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(url == nil)
+    }
+
+    /// Maps a permission-check field key to the System Settings URL it should
+    /// open. Returns nil for unknown keys, which disables the button.
+    private func permissionCheckURL(forKey key: String) -> URL? {
+        switch key {
+        case "mailapp_automation":
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+        default:
+            return nil
+        }
     }
 
     // MARK: - Cron field

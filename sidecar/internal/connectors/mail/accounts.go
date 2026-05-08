@@ -11,6 +11,7 @@ import (
 	mailpkg "github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/mail/diag"
 	"github.com/hygur/sidecar/internal/mail/gmail"
+	"github.com/hygur/sidecar/internal/mail/mailapp"
 	"github.com/hygur/sidecar/internal/mail/proton"
 	"github.com/hygur/sidecar/internal/plugin"
 )
@@ -114,6 +115,19 @@ func buildAccountSession(cred *auth.MailAccountCredential) (*AccountSession, err
 		return &AccountSession{
 			AccountID:   cred.AccountID,
 			Provider:    "gmail",
+			Email:       fallbackEmail(cred),
+			Conn:        conn,
+			Health:      plugin.HealthStatus{Status: plugin.StatusUnconfigured},
+			BriefReason: diag.ReasonNotConfigured,
+		}, nil
+
+	case "mailapp":
+		// Mail.app native connector: no credentials needed, just the
+		// Mail.app account UUID stored in cred.AccountID.
+		conn := mailapp.NewConnector(cred.AccountID, fallbackEmail(cred))
+		return &AccountSession{
+			AccountID:   cred.AccountID,
+			Provider:    "mailapp",
 			Email:       fallbackEmail(cred),
 			Conn:        conn,
 			Health:      plugin.HealthStatus{Status: plugin.StatusUnconfigured},

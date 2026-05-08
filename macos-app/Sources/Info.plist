@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>0.2.2</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -37,6 +37,8 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Hygur sends Apple Events to Mail.app to read your local emails. No data is sent over the network — everything stays on this Mac.</string>
 	<key>NSAppleScriptEnabled</key>
 	<false/>
 	<key>NSCalendarsFullAccessUsageDescription</key>

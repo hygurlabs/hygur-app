@@ -93,6 +93,11 @@ const (
 	FieldPath      FieldType = "path"       // sélecteur de fichier/dossier côté macOS
 	FieldCron      FieldType = "cron"       // éditeur de planification
 	FieldMultiEnum FieldType = "multi_enum" // cases à cocher
+	// FieldPermissionCheck rends côté macOS un bloc info + bouton qui ouvre
+	// un panneau de Réglages système. Aucune valeur n'est stockée.
+	// La cible (URL `x-apple.systempreferences:...`) est passée via le champ
+	// Description ; le label du bouton via la Default value.
+	FieldPermissionCheck FieldType = "permission_check"
 )
 
 // Item unité de données universelle entre connecteurs et Knowledge Base.

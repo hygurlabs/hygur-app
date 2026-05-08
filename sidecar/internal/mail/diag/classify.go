@@ -28,6 +28,16 @@ const (
 	// ReasonEmbeddingDown is set when the embedding service is unavailable or
 	// returning dimension-mismatched vectors, causing > 50 % of a sync batch to fail.
 	ReasonEmbeddingDown BriefReason = "embedding_down"
+
+	// ReasonAutomationDenied is set when the user has not granted (or has
+	// revoked) Apple Events permission for the host process to control Mail.app.
+	// The macOS app surfaces this with a button to open
+	// System Settings → Privacy & Security → Automation.
+	ReasonAutomationDenied BriefReason = "automation_denied"
+
+	// ReasonAppNotRunning is set when the target application (Mail.app for the
+	// mailapp provider) is not running and could not be launched.
+	ReasonAppNotRunning BriefReason = "app_not_running"
 )
 
 // Classify maps an error returned by a mail connector into a BriefReason.
@@ -38,6 +48,12 @@ func Classify(err error) BriefReason {
 	}
 
 	switch {
+	case errors.Is(err, mailpkg.ErrAutomationDenied):
+		return ReasonAutomationDenied
+
+	case errors.Is(err, mailpkg.ErrMailAppNotRunning):
+		return ReasonAppNotRunning
+
 	case errors.Is(err, mailpkg.ErrAuthFailed),
 		errors.Is(err, mailpkg.ErrTokenExpired),
 		errors.Is(err, mailpkg.ErrInvalidCredentials):

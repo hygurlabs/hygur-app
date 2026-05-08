@@ -19,6 +19,7 @@ import (
 	mailpkg "github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/mail/diag"
 	"github.com/hygur/sidecar/internal/mail/gmail"
+	"github.com/hygur/sidecar/internal/mail/mailapp"
 	"github.com/hygur/sidecar/internal/mail/proton"
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/retrieval"
@@ -158,6 +159,7 @@ func (c *MailConnector) ConfigSchema() plugin.ConfigSchema {
 						Options: []plugin.ConfigOption{
 							{Value: "proton", Label: "Proton Mail (IMAP)", Icon: "lock.shield"},
 							{Value: "gmail", Label: "Gmail (OAuth2)", Icon: "envelope.badge"},
+							{Value: "mailapp", Label: "Mail.app (macOS, local)", Icon: "envelope.fill"},
 						},
 					},
 				},
@@ -190,6 +192,19 @@ func (c *MailConnector) ConfigSchema() plugin.ConfigSchema {
 						Label:     "Gmail connection",
 						Required:  true,
 						Condition: &plugin.ConfigCondition{Field: "provider", Value: "gmail"},
+					},
+				},
+			},
+			{
+				Title: "Mail.app authorization",
+				Fields: []plugin.ConfigField{
+					{
+						Key:         "mailapp_automation",
+						Type:        plugin.FieldPermissionCheck,
+						Label:       "Automation permission",
+						Description: "Hygur needs Automation permission for Mail.app to read your local emails. Nothing leaves this Mac.",
+						Default:     "Open System Settings",
+						Condition:   &plugin.ConfigCondition{Field: "provider", Value: "mailapp"},
 					},
 				},
 			},
@@ -345,10 +360,41 @@ func (c *MailConnector) Init(ctx context.Context, cfg plugin.ConnectorConfig) er
 			c.gmail.SetRefreshToken(refreshToken)
 		}
 
+	case "mailapp":
+		// Mail.app native: no credentials. Init triggers Apple Events
+		// discovery and seeds the multi-account registry. Subsequent sync
+		// operations always go through the AccountRegistry / SyncAccount
+		// path — there is no legacy single-source connector for mailapp.
+		if c.credStore == nil {
+			c.health.Status = plugin.StatusUnconfigured
+			c.health.Message = "credential store unavailable"
+			return fmt.Errorf("mail connector (mailapp): credential store unavailable")
+		}
+		accounts, err := mailapp.DiscoverAccounts(ctx)
+		if err != nil {
+			c.health.Status = plugin.StatusUnhealthy
+			c.health.Message = err.Error()
+			return fmt.Errorf("mail connector (mailapp): discover accounts: %w", err)
+		}
+		for _, acct := range accounts {
+			cred := auth.MailAccountCredential{
+				AccountID: acct.ID,
+				Provider:  "mailapp",
+				Email:     acct.PrimaryEmail(),
+			}
+			if err := c.credStore.SaveMailAccountCredential(cred); err != nil {
+				c.logger.Warn().Err(err).Str("account", acct.ID).Msg("mailapp: save credential failed")
+			}
+		}
+		if _, err := c.LoadAccountsFromCredStore(); err != nil {
+			c.logger.Warn().Err(err).Msg("mailapp: account registry reload failed")
+		}
+		c.logger.Info().Int("accounts", len(accounts)).Msg("mailapp: discovered accounts")
+
 	default:
 		c.health.Status = plugin.StatusUnconfigured
 		c.health.Message = fmt.Sprintf("unknown provider: %s", provider)
-		return fmt.Errorf("mail connector: unknown provider %q (accepted values: proton, gmail)", provider)
+		return fmt.Errorf("mail connector: unknown provider %q (accepted values: proton, gmail, mailapp)", provider)
 	}
 
 	c.health.Status = plugin.StatusConnecting
@@ -382,6 +428,10 @@ func (c *MailConnector) Start(ctx context.Context) error {
 		} else {
 			connErr = errors.New("gmail connector not initialised — call Init() first")
 		}
+	case "mailapp":
+		// No legacy single-source connector. Per-account Connect() calls are
+		// issued lazily by the multi-account path (SyncAccount / VerifyAccount).
+		connErr = nil
 	default:
 		connErr = fmt.Errorf("activeSource not set — call Init() first")
 	}
@@ -465,6 +515,14 @@ func (c *MailConnector) Sync(ctx context.Context, opts plugin.SyncOptions) (*plu
 	if opts.AccountID != "" {
 		return c.SyncAccount(ctx, opts.AccountID, opts)
 	}
+
+	c.mu.RLock()
+	activeSource := c.activeSource
+	c.mu.RUnlock()
+	if activeSource == "mailapp" {
+		return c.syncAllProvider(ctx, "mailapp", opts)
+	}
+
 	var (
 		result  *plugin.SyncResult
 		syncErr error
@@ -476,6 +534,37 @@ func (c *MailConnector) Sync(ctx context.Context, opts plugin.SyncOptions) (*plu
 		return err
 	})
 	return result, syncErr
+}
+
+// syncAllProvider iterates every registered account of the given provider
+// and syncs each through SyncAccount. Used by providers (e.g. mailapp) that
+// are intrinsically multi-account and have no legacy single-source path.
+func (c *MailConnector) syncAllProvider(ctx context.Context, provider string, opts plugin.SyncOptions) (*plugin.SyncResult, error) {
+	sessions := c.accounts.All()
+	start := time.Now()
+	var totalProcessed, totalSkipped, totalFailed int
+	for _, s := range sessions {
+		if s.Provider != provider {
+			continue
+		}
+		r, err := c.SyncAccount(ctx, s.AccountID, opts)
+		if err != nil {
+			c.logger.Error().Err(err).Str("provider", provider).Str("account", s.AccountID).Msg("account sync failed")
+			totalFailed++
+			continue
+		}
+		if r != nil {
+			totalProcessed += r.Processed
+			totalSkipped += r.Skipped
+			totalFailed += r.Failed
+		}
+	}
+	return &plugin.SyncResult{
+		Processed: totalProcessed,
+		Skipped:   totalSkipped,
+		Failed:    totalFailed,
+		Duration:  time.Since(start),
+	}, nil
 }
 
 // syncLegacy is the original Sync body, extracted so it can be wrapped by
@@ -895,6 +984,8 @@ func (c *MailConnector) List(ctx context.Context, opts plugin.ListOptions) ([]pl
 			}
 		}
 		threads, err = conn.ListThreads(ctx, mailOpts)
+	case "mailapp":
+		return nil, fmt.Errorf("mail connector List: mailapp uses the multi-account API; pass an account id")
 	default:
 		return nil, fmt.Errorf("mail connector List: activeSource not set")
 	}
@@ -971,6 +1062,8 @@ func (c *MailConnector) IndexBatch(ctx context.Context, itemIDs []string) (*plug
 		c.mu.RLock()
 		connector = c.gmail
 		c.mu.RUnlock()
+	case "mailapp":
+		return nil, fmt.Errorf("mail connector IndexBatch: mailapp uses the multi-account API; index per account via SyncAccount")
 	default:
 		return nil, fmt.Errorf("mail connector IndexBatch: activeSource not set")
 	}
@@ -1040,6 +1133,8 @@ func (c *MailConnector) Summarize(ctx context.Context, itemID string, modelID st
 		c.mu.RLock()
 		connector = c.gmail
 		c.mu.RUnlock()
+	case "mailapp":
+		return nil, fmt.Errorf("mail connector Summarize: mailapp uses the multi-account API; summarize per account via the registry")
 	default:
 		return nil, fmt.Errorf("mail connector Summarize: activeSource not set")
 	}
@@ -1409,6 +1504,16 @@ func (c *MailConnector) IsAuthenticated() bool {
 		return c.proton != nil && c.proton.IsConnected()
 	case "gmail":
 		return c.gmail != nil && c.gmail.IsConnected()
+	case "mailapp":
+		// Authenticated when at least one mailapp account has been
+		// discovered and registered. Per-account verification is handled
+		// independently via VerifyAccount.
+		for _, s := range c.accounts.All() {
+			if s.Provider == "mailapp" {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
