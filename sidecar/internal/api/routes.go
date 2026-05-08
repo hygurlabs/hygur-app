@@ -146,6 +146,10 @@ func (s *Server) setupRoutes() {
 		r.Get("/config", s.handleGetConfig)
 		r.Patch("/config", s.handlePatchConfig)
 
+		// Phase 1 (pair mode) — append-only interaction signals + learning gauge.
+		r.Post("/interactions", s.handleInteractionsAppend)
+		r.Get("/insights/learning-progress", s.handleLearningProgress)
+
 		// Marketplace endpoints
 		r.Route("/marketplace", func(r chi.Router) {
 			r.Get("/connectors", s.handleMarketplaceList)

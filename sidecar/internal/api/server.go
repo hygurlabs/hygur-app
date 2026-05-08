@@ -41,6 +41,8 @@ type Server struct {
 	timelineHandler  *handlers.TimelineHandler
 	agendaHandler    *handlers.AgendaHandler
 	configHandler    *handlers.ConfigHandler
+	interactionsHandler *handlers.InteractionsHandler
+	insightsHandler  *handlers.InsightsHandler
 	token            string // Authentication token for API access
 }
 
@@ -422,4 +424,32 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "config handler not configured")
+}
+
+// SetInteractionsHandler attaches the interactions ingestion handler.
+func (s *Server) SetInteractionsHandler(handler *handlers.InteractionsHandler) {
+	s.interactionsHandler = handler
+}
+
+// handleInteractionsAppend handles POST /interactions.
+func (s *Server) handleInteractionsAppend(w http.ResponseWriter, r *http.Request) {
+	if s.interactionsHandler != nil {
+		s.interactionsHandler.Append(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "interactions handler not configured")
+}
+
+// SetInsightsHandler attaches the learning-progress handler.
+func (s *Server) SetInsightsHandler(handler *handlers.InsightsHandler) {
+	s.insightsHandler = handler
+}
+
+// handleLearningProgress handles GET /insights/learning-progress.
+func (s *Server) handleLearningProgress(w http.ResponseWriter, r *http.Request) {
+	if s.insightsHandler != nil {
+		s.insightsHandler.LearningProgress(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "insights handler not configured")
 }

@@ -1646,6 +1646,45 @@ actor SidecarService {
         return try JSONDecoder().decode(MemoryClearExtractedResponse.self, from: data).deleted
     }
 
+    // MARK: - Interactions (Phase 1 pair mode)
+
+    /// Append an interaction event to the sidecar's append-only log. Errors
+    /// are propagated so the caller can decide whether to surface them — the
+    /// `InteractionLogger` service swallows them by design (fire-and-forget).
+    func logInteraction(
+        kind: String,
+        refKind: String? = nil,
+        refId: String? = nil,
+        payload: [String: String]? = nil,
+        sessionId: String? = nil
+    ) async throws {
+        let url = baseURL.appendingPathComponent("interactions")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuthHeader(&request)
+        var body: [String: Any] = ["kind": kind]
+        if let refKind, !refKind.isEmpty { body["ref_kind"] = refKind }
+        if let refId, !refId.isEmpty { body["ref_id"] = refId }
+        if let payload, !payload.isEmpty { body["payload"] = payload }
+        if let sessionId, !sessionId.isEmpty { body["session_id"] = sessionId }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
+    /// Fetch the current learning-progress payload powering the status bar
+    /// gauge. Read-only snapshot — recomputed server-side on every call.
+    func learningProgress() async throws -> LearningProgressResponse {
+        let url = baseURL.appendingPathComponent("insights/learning-progress")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        addAuthHeader(&request)
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(LearningProgressResponse.self, from: data)
+    }
+
     // MARK: - Agenda
 
     /// Fetch the agenda context: upcoming actions and deadlines extracted from

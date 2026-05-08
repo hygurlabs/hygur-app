@@ -101,6 +101,9 @@ struct BriefDetailView: View {
     private func load() async {
         loading = true
         loadError = nil
+        // Phase 1 (pair mode) signal: brief opened. Logged before the fetch
+        // so the metric reflects user intent even if the body fails to load.
+        InteractionLogger.shared.briefOpened(briefId: contentId)
         do {
             let svc = SidecarService.fromSettings()
             let resp = try await svc.getKnowledgeItemFull(contentId: contentId)

@@ -118,6 +118,28 @@ CREATE INDEX IF NOT EXISTS idx_memories_context_id ON memories(context_id);
 		Name:    "memories_long_term_columns",
 		SQL:     "", // handled by applyMigrations special-case below
 	},
+	// Migration 8 introduces interaction_log, the append-only signal stream
+	// that powers Phase 1 (learning progress bar) and unlocks phases 2-5
+	// (recap slot detection, ranking signals, contradiction prioritisation).
+	// Idempotent on fresh installs because schemaSQL v1 already declares
+	// the table.
+	{
+		Version: 8,
+		Name:    "interaction_log",
+		SQL: `
+CREATE TABLE IF NOT EXISTS interaction_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    ref_kind TEXT,
+    ref_id TEXT,
+    payload TEXT,
+    occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    session_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_interaction_log_kind_time ON interaction_log(kind, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_log_occurred_at ON interaction_log(occurred_at);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

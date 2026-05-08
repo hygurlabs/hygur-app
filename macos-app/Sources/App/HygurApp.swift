@@ -212,6 +212,15 @@ struct HygurApp: App {
                     // Start the event consumer once the sidecar URL is known.
                     eventStream.start(sidecar: SidecarService.fromSettings())
 
+                    // Phase 1 (pair mode) — wire the InteractionLogger so the
+                    // sidecar can record signals from chat / brief / memory /
+                    // connector flows. The provider closure resolves a fresh
+                    // SidecarService each time (cheap; same actor pattern as
+                    // every other call site) so a token rotation is picked
+                    // up automatically.
+                    InteractionLogger.shared.configure { SidecarService.fromSettings() }
+                    InteractionLogger.shared.appLaunched()
+
                     // Background update check (no-op if checked in last 24h or
                     // if the user disabled auto-check).
                     await updater.checkAtLaunchIfDue()

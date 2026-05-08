@@ -370,6 +370,9 @@ final class ChatViewModel {
             sessionManager?.addMessage(userMessage, to: sessionId)
         }
 
+        // Phase 1 (pair mode) signal: chat engagement pillar.
+        InteractionLogger.shared.chatMessageSent(sessionId: sessionId?.uuidString)
+
         inputText = ""
         pendingAttachments = []
         isStreaming = true
@@ -472,6 +475,15 @@ final class ChatViewModel {
 
             if let sessionId = sessionId {
                 sessionManager?.saveCurrentState(for: sessionId)
+            }
+
+            // Phase 1 (pair mode) signal: only count assistant turns that
+            // actually produced content. Cancelled / failed streams that
+            // removed the empty placeholder above must not log a received.
+            if !Task.isCancelled,
+               assistantIndex < messages.count,
+               !messages[assistantIndex].content.isEmpty {
+                InteractionLogger.shared.chatMessageReceived(sessionId: sessionId?.uuidString)
             }
 
             // Phase 3.3 — distill long-term memories from the just-completed

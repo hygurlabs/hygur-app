@@ -7,6 +7,13 @@ struct HygurStatusBar: View {
     @Environment(EventStreamService.self) private var events
     @Environment(\.openSettings) private var openSettings
 
+    /// Phase 1 (pair mode): polls `/insights/learning-progress` every 60s
+    /// and feeds the central capsule. Owned by the status bar so the polling
+    /// task starts/stops with the bar's lifecycle (the bar is always mounted
+    /// while the main window is up).
+    @State private var learningVM = LearningProgressViewModel()
+    @State private var showLearningSheet = false
+
     var body: some View {
         HStack(spacing: HygurSpacing.sm) {
             // Workspace label
@@ -65,6 +72,19 @@ struct HygurStatusBar: View {
 
             Spacer()
 
+            // Learning progress capsule — centered between left status block
+            // and right action block. Wrapping in `Spacer + bar + Spacer`
+            // guarantees the bar sits in the geometric centre regardless of
+            // what's pinned to either side (status pills can be variable width).
+            LearningProgressBar(
+                coverage: learningVM.coverage,
+                tooltip: learningVM.tooltip
+            ) {
+                showLearningSheet = true
+            }
+
+            Spacer()
+
             // Notifications bell — badge if there are unread events
             StatusBarItem(
                 systemImage: "bell",
@@ -92,6 +112,11 @@ struct HygurStatusBar: View {
             Rectangle()
                 .fill(HygurColors.divider)
                 .frame(height: 0.5)
+        }
+        .onAppear { learningVM.startPolling() }
+        .onDisappear { learningVM.stopPolling() }
+        .sheet(isPresented: $showLearningSheet) {
+            LearningInsightsView(viewModel: learningVM)
         }
     }
 

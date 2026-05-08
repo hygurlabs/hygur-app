@@ -26,6 +26,7 @@ import (
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/health"
 	"github.com/hygur/sidecar/internal/ingest"
+	"github.com/hygur/sidecar/internal/interactions"
 	"github.com/hygur/sidecar/internal/ingest/parsers"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/mail"
@@ -370,6 +371,12 @@ func main() {
 	server.SetConnectorHandler(connectorHandler)
 	server.SetMarketplaceHandler(marketplaceHandler)
 	server.SetConfigHandler(configHandler)
+
+	// Phase 1 (pair mode) — interaction logging + learning gauge.
+	interactionLogger := interactions.NewLogger(db)
+	learningCalculator := interactions.NewLearningCalculator(db)
+	server.SetInteractionsHandler(handlers.NewInteractionsHandler(interactionLogger, logger))
+	server.SetInsightsHandler(handlers.NewInsightsHandler(learningCalculator, logger))
 
 	// Timeline handler — consumes Phase 4 entity metadata to build a
 	// chaptered chronological view (POST /timeline/query).

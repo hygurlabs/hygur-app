@@ -96,6 +96,9 @@ final class MemoriesViewModel {
         acceptedMemories.insert(promoted, at: 0)
         do {
             try await service.acceptMemory(id: memory.memoryId)
+            // Phase 1 (pair mode) signal: counts toward memory diversity
+            // and volume pillars of the learning gauge.
+            InteractionLogger.shared.memoryAccepted(memoryId: memory.memoryId, type: memory.type)
         } catch {
             self.error = error.localizedDescription
             pendingMemories = pendingSnapshot
@@ -109,6 +112,10 @@ final class MemoriesViewModel {
         pendingMemories.removeAll { $0.memoryId == memory.memoryId }
         do {
             try await service.discardMemory(id: memory.memoryId)
+            // Phase 1 (pair mode) signal: rejection patterns inform
+            // future ranking (Phase 3) — log even though it doesn't
+            // affect the gauge today.
+            InteractionLogger.shared.memoryDiscarded(memoryId: memory.memoryId)
         } catch {
             self.error = error.localizedDescription
             pendingMemories = pendingSnapshot

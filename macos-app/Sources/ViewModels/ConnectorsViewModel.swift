@@ -69,6 +69,9 @@ final class ConnectorsViewModel {
 
     func sync(id: String) async throws {
         try await service.syncConnector(id)
+        // Phase 1 (pair mode) signal: connector breadth pillar uses
+        // distinct ref_ids of connector_synced events.
+        InteractionLogger.shared.connectorSynced(connectorId: id)
     }
 
     // MARK: - Config

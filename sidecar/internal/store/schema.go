@@ -131,7 +131,24 @@ CREATE TABLE IF NOT EXISTS item_tags (
 
 CREATE INDEX IF NOT EXISTS idx_item_tags_content_id ON item_tags(content_id);
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
+
+-- Phase 1 (pair mode): interaction_log captures every notable user action so
+-- downstream phases (weekly recap slot detection, learning-progress coverage,
+-- adaptive ranking signals) can reason about behaviour over time. Append-only
+-- by convention; no UPDATE paths exist in the codebase.
+CREATE TABLE IF NOT EXISTS interaction_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    ref_kind TEXT,
+    ref_id TEXT,
+    payload TEXT,
+    occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    session_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_interaction_log_kind_time ON interaction_log(kind, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_log_occurred_at ON interaction_log(occurred_at);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 7
+const CurrentSchemaVersion = 8

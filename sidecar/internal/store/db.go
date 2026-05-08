@@ -1906,3 +1906,142 @@ func (d *DB) CleanExpiredMemories(ctx context.Context) error {
 	)
 	return err
 }
+
+// AppendInteraction inserts a row into interaction_log. payload is an opaque
+// JSON string (caller responsibility); empty refKind/refID/payload/sessionID
+// are stored as NULL so phase 2 histograms and phase 3/4 joins can rely on
+// IS NOT NULL filters.
+func (d *DB) AppendInteraction(ctx context.Context, kind, refKind, refID, payload, sessionID string) error {
+	if kind == "" {
+		return fmt.Errorf("interaction kind is required")
+	}
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO interaction_log (kind, ref_kind, ref_id, payload, session_id)
+		 VALUES (?, ?, ?, ?, ?)`,
+		kind,
+		nullIfEmpty(refKind),
+		nullIfEmpty(refID),
+		nullIfEmpty(payload),
+		nullIfEmpty(sessionID),
+	)
+	if err != nil {
+		return fmt.Errorf("append interaction: %w", err)
+	}
+	return nil
+}
+
+// CountInteractionsByKind returns the number of interactions for the given
+// kind. Used by the learning-progress endpoint to gauge chat engagement.
+func (d *DB) CountInteractionsByKind(ctx context.Context, kind string) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM interaction_log WHERE kind = ?`, kind,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count interactions by kind: %w", err)
+	}
+	return n, nil
+}
+
+// CountDistinctMemoryTypesAccepted returns how many distinct memory types
+// (fact / action / preference) have at least one accepted memory. Drives
+// the "diversity" pillar of learning-progress coverage.
+func (d *DB) CountDistinctMemoryTypesAccepted(ctx context.Context) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT type) FROM memories WHERE accepted_at IS NOT NULL`,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count distinct accepted memory types: %w", err)
+	}
+	return n, nil
+}
+
+// CountAcceptedMemories returns the total number of accepted memories
+// (manual + accepted-extracted). Drives the "volume" pillar.
+func (d *DB) CountAcceptedMemories(ctx context.Context) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memories WHERE accepted_at IS NOT NULL`,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count accepted memories: %w", err)
+	}
+	return n, nil
+}
+
+// CountActiveConnectorDomains returns how many distinct *domains* of
+// connector have ingested at least one knowledge item: mail, notes, files,
+// (future: calendar, web, …). Drives the "connector breadth" pillar.
+//
+// Why domains instead of source_type: file connectors emit several source
+// types (markdown/pdf/docx/…) that all represent a single user-perceived
+// "Files" connector, while mail connectors share a single "mail" type
+// across Gmail/IMAP/Proton. Counting raw source_types would either
+// over-count files or under-count mail. Domains map to what the user sees
+// in the Connectors panel.
+//
+// Source-of-truth is `knowledge_items.source_type`, not the interaction log,
+// so the pillar reflects *actual ingested data* rather than how often the
+// user clicked the "Sync now" button.
+func (d *DB) CountActiveConnectorDomains(ctx context.Context) (int, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT source_type FROM knowledge_items WHERE source_type IS NOT NULL AND source_type != ''`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("count active connector domains: %w", err)
+	}
+	defer rows.Close()
+
+	domains := map[string]struct{}{}
+	for rows.Next() {
+		var st string
+		if err := rows.Scan(&st); err != nil {
+			return 0, fmt.Errorf("scan source_type: %w", err)
+		}
+		if d := connectorDomainFor(st); d != "" {
+			domains[d] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate source_types: %w", err)
+	}
+	return len(domains), nil
+}
+
+// connectorDomainFor maps a `knowledge_items.source_type` to the
+// user-visible connector domain. Returns "" for source_types that represent
+// internally-generated artifacts (briefs, recaps) so they don't inflate the
+// gauge — those aren't connectors.
+//
+// `mail` and `email` collapse to a single "mail" domain (different code
+// paths: imap connector vs legacy mail indexer for Gmail). All file
+// subtypes (markdown/pdf/…) collapse to a single "files" domain so a folder
+// with mixed contents counts as one connector, not seven.
+func connectorDomainFor(sourceType string) string {
+	switch sourceType {
+	case "mail", "email":
+		return "mail"
+	case "note":
+		return "notes"
+	case "markdown", "txt", "pdf", "docx", "image", "audio", "file", "files":
+		return "files"
+	case "brief", "":
+		// brief = Hygur-generated daily/weekly recap, not an external source.
+		return ""
+	default:
+		// Unknown but presumed external (calendar, web, …). Use the raw type
+		// as the domain key so two unknowns don't collapse into one bucket.
+		return "other:" + sourceType
+	}
+}
+
+// nullIfEmpty returns interface{}(nil) for empty strings so SQLite stores
+// NULL instead of an empty string — keeps histogram and IS NOT NULL filters
+// honest.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
