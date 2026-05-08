@@ -61,22 +61,18 @@ build-universal: build-arm64 build-amd64
 		$(BUILD_DIR)/$(BINARY_NAME)-arm64 \
 		$(BUILD_DIR)/$(BINARY_NAME)-amd64
 
-# Build universal binary and copy it into the macOS app bundle resources.
-# Called by the Xcode pre-build script in macos-app/project.yml.
-# Falls back to native-only if cross-compilation fails (e.g. missing Xcode cross tools).
-build-for-bundle:
-	@mkdir -p $(BUILD_DIR)
+# Build the arm64 sidecar slice and copy it into the macOS app bundle.
+# Called by the Xcode pre-build script in macos-app/Project.yml and by the
+# release workflow.
+#
+# Apple Silicon only — Hygur ships local LLM inference via MLX (and friends),
+# which has no path on Intel Macs. Universal binaries doubled the bundle size
+# for an audience we can't actually serve.
+build-for-bundle: build-arm64
 	@DEST="$$(cd ..; pwd)/macos-app/Resources/hygur-sidecar"; \
 	mkdir -p "$$(dirname $$DEST)"; \
-	if $(MAKE) build-universal 2>/dev/null; then \
-		cp $(BUILD_DIR)/$(BINARY_NAME)-universal "$$DEST"; \
-		echo "✅ Universal sidecar → $$DEST"; \
-	else \
-		echo "⚠️  Universal build failed, falling back to native arch"; \
-		$(MAKE) build-sidecar; \
-		cp $(BUILD_DIR)/$(BINARY_NAME) "$$DEST"; \
-		echo "✅ Native sidecar → $$DEST"; \
-	fi
+	cp $(BUILD_DIR)/$(BINARY_NAME)-arm64 "$$DEST"; \
+	echo "✅ arm64 sidecar → $$DEST"
 
 # Build the reindex CLI (Tier 1 entity backfill).
 build-reindex:
