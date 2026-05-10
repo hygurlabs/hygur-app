@@ -252,8 +252,12 @@ struct NewProjectSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var description = ""
-    @State private var tagsText = ""
+    @State private var availableTags: [Tag] = []
+    @State private var selectedTags: [Tag] = []
+    @State private var isLoadingTags = true
     @State private var isCreating = false
+
+    private let sidecar = SidecarService.fromSettings()
 
     var body: some View {
         VStack(spacing: HygurSpacing.xl) {
@@ -280,8 +284,22 @@ struct NewProjectSheet: View {
                 Text("Tags")
                     .font(HygurTypography.subheadline)
                     .foregroundStyle(HygurColors.textSecondary)
-                TextField("Tags (comma-separated)", text: $tagsText)
-                    .textFieldStyle(.roundedBorder)
+                if isLoadingTags {
+                    HStack(spacing: HygurSpacing.sm) {
+                        LoadingIndicator(style: .small)
+                        Text("Loading tags…")
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.textSecondary)
+                    }
+                } else {
+                    TagAutocompleteField(
+                        selectedTags: $selectedTags,
+                        availableTags: availableTags,
+                        onCreate: { rawName in
+                            Task { await createInlineTag(named: rawName) }
+                        }
+                    )
+                }
             }
 
             HStack {
@@ -300,15 +318,43 @@ struct NewProjectSheet: View {
         }
         .padding(HygurSpacing.lg)
         .frame(minWidth: 520, idealWidth: 560)
+        .task { await loadTags() }
+    }
+
+    private func loadTags() async {
+        do {
+            availableTags = try await sidecar.listTags()
+        } catch {
+            // Silently fail — tags are optional, autocomplete just stays empty.
+            print("NewProjectSheet failed to load tags: \(error)")
+        }
+        isLoadingTags = false
+    }
+
+    /// Create a brand-new tag from the autocomplete field and auto-select it.
+    /// Mirrors `CreateNoteViewModel.createTag(named:)` so both sheets share UX.
+    private func createInlineTag(named rawName: String) async {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let existing = availableTags.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            if !selectedTags.contains(where: { $0.id == existing.id }) {
+                selectedTags.append(existing)
+            }
+            return
+        }
+        do {
+            let newTag = try await sidecar.createTag(name: trimmed, color: "#5E5CE6")
+            availableTags.append(newTag)
+            selectedTags.append(newTag)
+        } catch {
+            print("NewProjectSheet failed to create tag '\(trimmed)': \(error)")
+        }
     }
 
     private func createProject() {
         guard !name.isEmpty else { return }
 
-        let tags = tagsText
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        let tags = selectedTags.map(\.name)
 
         isCreating = true
         Task {
@@ -331,15 +377,26 @@ struct EditProjectSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var description: String
-    @State private var tagsText: String
+    @State private var availableTags: [Tag] = []
+    @State private var selectedTags: [Tag]
+    @State private var isLoadingTags = true
     @State private var isSaving = false
+
+    private let sidecar = SidecarService.fromSettings()
 
     init(project: Project, viewModel: ProjectListViewModel) {
         self.project = project
         self.viewModel = viewModel
         _name = State(initialValue: project.name)
         _description = State(initialValue: project.description ?? "")
-        _tagsText = State(initialValue: project.tags.joined(separator: ", "))
+        // Seed the chip list from the project's stored tag names so the user
+        // sees them immediately. Stub Tag objects are replaced with the real
+        // records once `loadTags()` resolves; names that don't match any Tag
+        // record (legacy data, or tag was deleted from the tags table) keep
+        // their stub form so they survive the round-trip.
+        _selectedTags = State(initialValue: project.tags.map { name in
+            Tag(id: "stub:\(name.lowercased())", name: name, color: "#5E5CE6")
+        })
     }
 
     var body: some View {
@@ -367,8 +424,22 @@ struct EditProjectSheet: View {
                 Text("Tags")
                     .font(HygurTypography.subheadline)
                     .foregroundStyle(HygurColors.textSecondary)
-                TextField("Tags (comma-separated)", text: $tagsText)
-                    .textFieldStyle(.roundedBorder)
+                if isLoadingTags {
+                    HStack(spacing: HygurSpacing.sm) {
+                        LoadingIndicator(style: .small)
+                        Text("Loading tags…")
+                            .font(HygurTypography.caption)
+                            .foregroundStyle(HygurColors.textSecondary)
+                    }
+                } else {
+                    TagAutocompleteField(
+                        selectedTags: $selectedTags,
+                        availableTags: availableTags,
+                        onCreate: { rawName in
+                            Task { await createInlineTag(named: rawName) }
+                        }
+                    )
+                }
             }
 
             HStack {
@@ -387,15 +458,50 @@ struct EditProjectSheet: View {
         }
         .padding(HygurSpacing.lg)
         .frame(minWidth: 520, idealWidth: 560)
+        .task { await loadTags() }
+    }
+
+    private func loadTags() async {
+        do {
+            let loaded = try await sidecar.listTags()
+            availableTags = loaded
+            // Promote stub tags (seeded from project.tags names) to the real
+            // Tag records so the pills carry the right color/usage count and
+            // dedupe correctly with autocomplete suggestions.
+            selectedTags = selectedTags.map { current in
+                if let real = loaded.first(where: { $0.name.caseInsensitiveCompare(current.name) == .orderedSame }) {
+                    return real
+                }
+                return current
+            }
+        } catch {
+            print("EditProjectSheet failed to load tags: \(error)")
+        }
+        isLoadingTags = false
+    }
+
+    private func createInlineTag(named rawName: String) async {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let existing = availableTags.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            if !selectedTags.contains(where: { $0.id == existing.id }) {
+                selectedTags.append(existing)
+            }
+            return
+        }
+        do {
+            let newTag = try await sidecar.createTag(name: trimmed, color: "#5E5CE6")
+            availableTags.append(newTag)
+            selectedTags.append(newTag)
+        } catch {
+            print("EditProjectSheet failed to create tag '\(trimmed)': \(error)")
+        }
     }
 
     private func saveProject() {
         guard !name.isEmpty else { return }
 
-        let tags = tagsText
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        let tags = selectedTags.map(\.name)
 
         isSaving = true
         Task {
@@ -487,8 +593,11 @@ struct ProjectDetailView: View {
         .sheet(isPresented: $showingNewNote) {
             // CreateNoteView creates the note via the sidecar; we then
             // refresh items so the new note appears in this view without a
-            // round-trip through the parent list.
-            CreateNoteView { newNote in
+            // round-trip through the parent list. Passing initialProjectId
+            // pre-selects this project in the sheet so the user doesn't
+            // have to re-pick it (and its tags auto-apply via the modal's
+            // selectedProjectId observer).
+            CreateNoteView(initialProjectId: project.id) { newNote in
                 Task {
                     if newNote.projectId != project.id {
                         // The user explicitly picked a different project in

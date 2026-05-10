@@ -6,6 +6,10 @@ import SwiftUI
 struct CreateNoteView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel = CreateNoteViewModel()
+    /// Pre-selected project id when the sheet is opened from a project
+    /// context (e.g. ProjectDetailView's Add Note button). Applied once
+    /// the project list has loaded; the user can still change it.
+    var initialProjectId: String?
     var onNoteCreated: ((Note) -> Void)?
     @State private var errorMessage: String?
 
@@ -42,6 +46,12 @@ struct CreateNoteView: View {
         .frame(minWidth: 640, idealWidth: 720, minHeight: 620, idealHeight: 720)
         .task {
             await viewModel.loadData()
+            // Apply the caller-provided project pre-selection only after the
+            // project list has loaded, so the Picker has a matching tag and
+            // the onChange handler below picks up the auto-tag side-effect.
+            if viewModel.selectedProjectId == nil, let initialProjectId {
+                viewModel.selectedProjectId = initialProjectId
+            }
         }
         .onChange(of: viewModel.selectedProjectId) { _, _ in
             viewModel.applyProjectTagsIfAny()
