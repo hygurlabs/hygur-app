@@ -44,7 +44,7 @@ targets:
         INFOPLIST_FILE: Sources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/Hygur.entitlements
         PRODUCT_NAME: Hygur
-        MARKETING_VERSION: "0.2.2"
+        MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
@@ -62,7 +62,7 @@ targets:
         CFBundleDisplayName: Hygur
         CFBundleIdentifier: com.hygur.app
         CFBundleVersion: "1"
-        CFBundleShortVersionString: "0.2.2"
+        CFBundleShortVersionString: "0.3.0"
         CFBundlePackageType: APPL
         CFBundleExecutable: Hygur
         LSMinimumSystemVersion: "26.0"
@@ -124,7 +124,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Share/HygurShare.entitlements
         PRODUCT_NAME: HygurShare
         PRODUCT_MODULE_NAME: HygurShare
-        MARKETING_VERSION: "0.2.2"
+        MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
