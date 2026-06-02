@@ -118,6 +118,21 @@ type RunOptions struct {
 	// LookbackHours overrides cfg.LookbackHours for this run only. Ignored
 	// when ProjectID is set. 0 means use the configured default.
 	LookbackHours int
+
+	// --- On-demand custom briefing (WebUI "New briefing") ---
+	// ProjectIDs / ContentIDs explicitly scope the brief to those projects'
+	// items and/or those individual knowledge items. Instructions is a
+	// free-text focus injected into the prompt. When any is set the brief is
+	// "custom": it gets its own content_id (doesn't overwrite the daily brief).
+	ProjectIDs   []string
+	ContentIDs   []string
+	Instructions string
+}
+
+// isCustom reports whether the options describe an on-demand contextual brief
+// rather than the scheduled daily / single-project brief.
+func (o RunOptions) isCustom() bool {
+	return o.Instructions != "" || len(o.ContentIDs) > 0 || len(o.ProjectIDs) > 0
 }
 
 // Run executes a single brief immediately with the configured defaults.
@@ -140,12 +155,17 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 
 	dateLabel := time.Now().Format("2006-01-02")
 	briefKey := briefContentID(dateLabel, opts.ProjectID)
+	title := briefTitle(dateLabel, projectName)
+	if opts.isCustom() {
+		briefKey = customBriefContentID(dateLabel, opts)
+		title = customBriefTitle(dateLabel, opts)
+	}
 
 	if len(items) == 0 {
 		// Empty window — persist a placeholder and emit so the UI sees
 		// "Pas d'activité" instead of nothing at all.
 		placeholder := emptyPlaceholder(opts, projectName)
-		ci, _ := d.persistBrief(ctx, briefKey, briefTitle(dateLabel, projectName), placeholder, opts)
+		ci, _ := d.persistBrief(ctx, briefKey, title, placeholder, opts)
 		d.broker.Publish(events.NewBriefEvent(events.BriefPayload{
 			Date:      dateLabel,
 			ContentID: ci,
@@ -201,7 +221,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			Int("reasoning_len", reasoningLen).
 			Msg("LLM call failed or returned empty content, emitting placeholder brief")
 		fallback := fallbackBrief(items)
-		ci, _ := d.persistBrief(ctx, briefKey, briefTitle(dateLabel, projectName), fallback, opts)
+		ci, _ := d.persistBrief(ctx, briefKey, title, fallback, opts)
 		d.broker.Publish(events.NewBriefEvent(events.BriefPayload{
 			Date:      dateLabel,
 			ContentID: ci,
@@ -212,7 +232,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 		return nil
 	}
 
-	contentID, perr := d.persistBrief(ctx, briefKey, briefTitle(dateLabel, projectName), briefText, opts)
+	contentID, perr := d.persistBrief(ctx, briefKey, title, briefText, opts)
 	if perr != nil {
 		return fmt.Errorf("persist brief: %w", perr)
 	}
@@ -243,6 +263,41 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 //     `MaxItemAgeDays`. Without (2) a backfill of 2024 emails would land
 //     in today's brief because they were *indexed* yesterday.
 func (d *DailyBrief) gatherItems(ctx context.Context, opts RunOptions) ([]*store.KnowledgeItem, string, error) {
+	// Custom context: explicit projects + individual items the user picked.
+	// We do NOT drop-by-stale-date here — the user chose these deliberately.
+	if len(opts.ProjectIDs) > 0 || len(opts.ContentIDs) > 0 {
+		seen := map[string]struct{}{}
+		var items []*store.KnowledgeItem
+		for _, pid := range opts.ProjectIDs {
+			its, err := d.store.GetItemsForProject(ctx, pid)
+			if err != nil {
+				continue
+			}
+			for _, it := range its {
+				if _, ok := seen[it.ContentID]; ok {
+					continue
+				}
+				seen[it.ContentID] = struct{}{}
+				items = append(items, it)
+			}
+		}
+		for _, cid := range opts.ContentIDs {
+			if _, ok := seen[cid]; ok {
+				continue
+			}
+			it, err := d.store.GetKnowledgeItem(ctx, cid)
+			if err != nil || it == nil {
+				continue
+			}
+			seen[cid] = struct{}{}
+			items = append(items, it)
+		}
+		if len(items) > d.cfg.MaxItems {
+			items = items[:d.cfg.MaxItems]
+		}
+		return items, "", nil
+	}
+
 	if opts.ProjectID != "" {
 		project, err := d.store.GetProject(ctx, opts.ProjectID)
 		if err != nil || project == nil {
@@ -321,6 +376,31 @@ func briefTitle(dateLabel, projectName string) string {
 		return "Brief — " + projectName + " — " + dateLabel
 	}
 	return "Daily brief — " + dateLabel
+}
+
+// customBriefContentID derives a stable id for an on-demand contextual brief
+// from its inputs, so re-running the same request overwrites rather than
+// duplicates, while distinct requests each get their own entry.
+func customBriefContentID(dateLabel string, opts RunOptions) string {
+	h := sha256.New()
+	h.Write([]byte(opts.Instructions))
+	ids := append(append([]string{}, opts.ProjectIDs...), opts.ContentIDs...)
+	sort.Strings(ids)
+	for _, id := range ids {
+		h.Write([]byte("|" + id))
+	}
+	return "brief:custom:" + hex.EncodeToString(h.Sum(nil))[:12] + ":" + dateLabel
+}
+
+func customBriefTitle(dateLabel string, opts RunOptions) string {
+	if s := strings.TrimSpace(opts.Instructions); s != "" {
+		r := []rune(s)
+		if len(r) > 50 {
+			s = strings.TrimSpace(string(r[:50])) + "…"
+		}
+		return "Briefing : " + s
+	}
+	return "Briefing personnalisé — " + dateLabel
 }
 
 func emptyPlaceholder(opts RunOptions, projectName string) string {
@@ -426,6 +506,11 @@ func (d *DailyBrief) enrichItems(ctx context.Context, items []*store.KnowledgeIt
 // the brief.
 func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) string {
 	var sb strings.Builder
+	if opts.Instructions != "" {
+		sb.WriteString("Focus demandé par l'utilisateur : ")
+		sb.WriteString(opts.Instructions)
+		sb.WriteString("\nPriorise ce focus dans le brief ci-dessous.\n\n")
+	}
 	if projectName != "" {
 		sb.WriteString("Voici les éléments liés au projet « ")
 		sb.WriteString(projectName)

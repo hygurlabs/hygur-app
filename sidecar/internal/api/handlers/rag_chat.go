@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/agenda"
 	"github.com/hygur/sidecar/internal/intent"
 	"github.com/hygur/sidecar/internal/llm"
@@ -68,6 +69,10 @@ type RAGSource struct {
 	MailFrom    string `json:"mail_from,omitempty"`
 	MailDate    string `json:"mail_date,omitempty"`
 	MailSubject string `json:"mail_subject,omitempty"`
+	// Date is the document's canonical date (ISO 8601), always populated so the
+	// LLM can reason about "when" for pre-injected context (entity follow-ups),
+	// matching what the search_knowledge_base tool exposes.
+	Date string `json:"date,omitempty"`
 }
 
 // RAGContext holds the retrieved context for a RAG request.
@@ -111,6 +116,7 @@ type RAGChatHandler struct {
 	memorySearch    *tools.MemorySearchTool
 	agendaExtractor *agenda.Extractor
 	agendaStore     *store.DB
+	chatStore       *store.DB
 	toolRegistry    *tools.Registry
 	config          RAGConfig
 	logger          zerolog.Logger
@@ -150,6 +156,13 @@ func (h *RAGChatHandler) SetAgendaExtractor(ext *agenda.Extractor, db *store.DB)
 	h.agendaStore = db
 }
 
+// SetChatStore wires the persistent-transcript store so conversations are saved
+// (chat_sessions / chat_messages) as they happen. Passing nil keeps chat
+// stateless — exactly the prior behaviour.
+func (h *RAGChatHandler) SetChatStore(db *store.DB) {
+	h.chatStore = db
+}
+
 // SetToolRegistry wires the callable-tool registry into the handler. When
 // the registry holds at least one tool, the handler advertises them to the
 // LLM via the `tools` field of each request and will execute any tool_calls
@@ -173,22 +186,91 @@ const baseFormatGuidance = `Tu es Hygur, l'assistant personnel de l'utilisateur.
 	`code inline avec backquotes, tableaux GFM (| col1 | col2 |\n| --- | --- |), ` +
 	`liens [texte](url), barres horizontales (---). ` +
 	`Utilise ces éléments quand ils améliorent la lisibilité, mais reste concis : ` +
-	`pas de Markdown pour les réponses très courtes (un mot, un nombre, oui/non).`
+	`pas de Markdown pour les réponses très courtes (un mot, un nombre, oui/non).` +
+	"\n\n" +
+	`Désambiguïsation temporelle : une année ou une période dans une question ` +
+	`(ex. « TVA 2026 ») peut désigner soit un document REÇU à cette date, soit un document ` +
+	`dont le CONTENU concerne cet exercice ou cette échéance. Distingue les deux : appuie-toi ` +
+	`sur les échéances (champ due_dates), montants et périodes présents dans le contenu des ` +
+	`sources, pas seulement sur la date du message (mail_date). Pour une question de paiement ` +
+	`ou d'échéance, privilégie la source dont l'échéance (due_dates) correspond.` +
+	"\n\n" +
+	`CHERCHE AVANT DE DEMANDER : ne pose jamais une question de clarification sans avoir d'abord ` +
+	`appelé search_knowledge_base — les données tranchent presque toujours le doute (un sens qui ` +
+	`domine, une réponse présente). Une demande de TYPE/SENS (« quel type de recharges ? ») sans ` +
+	`recherche préalable est une erreur : lance la recherche, et si les sources convergent vers un ` +
+	`sens unique, réponds avec ce sens. ` +
+	`Quand trancher reste incertain APRÈS recherche — la demande admet plusieurs lectures plausibles ` +
+	`que les sources ne départagent pas, ou la réponse est absente/peu pertinente — pose UNE ` +
+	`question de clarification brève et ciblée au lieu de deviner. Ne fabrique jamais une date, un ` +
+	`montant, une référence ou un fait absent des sources : dis plutôt ce qui manque et propose la ` +
+	`prochaine étape.` +
+	"\n\n" +
+	`Sens des termes : si un mot de la requête a plusieurs sens plausibles (ex. « recharges » = ` +
+	`recharges de véhicule électrique, recharges mobiles/téléphone, crédit de compte), ANCRE-toi ` +
+	`sur le sens dominant dans les données réelles et RÉPONDS avec ce sens. Quand les sources ` +
+	`récupérées portent massivement sur un seul sens (p. ex. quasi toutes des factures Chargemap = ` +
+	`recharges de véhicule), ne demande PAS de clarification : traite ce sens directement. ` +
+	`N'élargis pas la recherche à un autre sens non demandé. Ne demande une clarification de sens ` +
+	`QUE si les sources se répartissent réellement entre plusieurs sens concurrents.` +
+	"\n\n" +
+	`Période d'un document : pour les documents périodiques (factures, relevés, récapitulatifs de ` +
+	`consommation ou de recharges), rattache les montants à la PÉRIODE indiquée DANS LE CONTENU ` +
+	`(mois de consommation / période facturée), PAS à la date de réception du message. Exemple : une ` +
+	`facture reçue début mai pour les recharges d'avril compte pour AVRIL, pas pour mai. Lis la ` +
+	`période dans le texte de la source ; si elle n'y figure pas, dis-le plutôt que de supposer ` +
+	`d'après la date de réception.` +
+	"\n\n" +
+	`Tri chronologique : quand tu présentes une liste ou un tableau d'éléments datés (recharges, ` +
+	`factures, événements, paiements…), classe-les par date CROISSANTE (du plus ancien au plus ` +
+	`récent), sauf si l'utilisateur demande explicitement l'ordre inverse.` +
+	"\n\n" +
+	`Vérification avant de chiffrer : un total ou un cumul se RECONSTITUE en additionnant les ` +
+	`éléments unitaires des sources — fais-le explicitement avant de l'annoncer. N'additionne ` +
+	`JAMAIS un agrégat (facture, relevé, total mensuel) AVEC les opérations qu'il récapitule déjà : ` +
+	`ce serait un double comptage. Distingue toujours une pièce récapitulative (souvent sans détail ` +
+	`unitaire : pas de quantité, de durée, de lieu) des opérations individuelles. Quand un agrégat ` +
+	`et la somme des unités devraient coïncider, sers-toi de l'un pour VALIDER l'autre et signale ` +
+	`tout écart, plutôt que d'avancer un chiffre non vérifié.`
 
 // injectFormatGuidance ensures every chat turn carries the base persona +
 // markdown-rendering hint at the top of the system prompt. Subsequent
 // augmentations (agenda, memories, RAG context) merge into the same system
 // message so the LLM sees one unified system block.
+// todayGuidance stamps the current date into the system prompt and tells the
+// model to anchor relative time expressions on it. Without this the model has
+// no "now" and silently computes periods from dates found in the retrieved
+// content (e.g. answering about 2025 when asked for the last two months of
+// 2026). Each retrieved source carries a `date` field, so the model can filter
+// to the requested window itself — no query-side date parsing needed.
+func todayGuidance() string {
+	return fmt.Sprintf(
+		"Date du jour : %s. Sers-toi de CETTE date comme référence pour toute expression "+
+			"temporelle relative (« ces deux derniers mois », « la semaine dernière », "+
+			"« récemment », « ce mois-ci »…) : calcule la période par rapport à aujourd'hui, "+
+			"jamais d'après les dates trouvées dans le contenu des documents. Chaque source "+
+			"porte un champ `date` (ISO 8601) — ne retiens que les documents dont la date tombe "+
+			"dans la période demandée ; si aucune source ne tombe dedans, dis-le clairement "+
+			"plutôt que de présenter des documents hors période comme s'ils y étaient. "+
+			"Pour une question qui couvre une PÉRIODE (récapitulatif, liste, total, « ces deux "+
+			"derniers mois », « en avril »…), calcule date_from/date_to à partir d'aujourd'hui et "+
+			"passe-les à l'outil search_knowledge_base : tu récupéreras TOUS les éléments de la "+
+			"fenêtre (pas seulement les plus proches), indispensable pour ne rien oublier dans une "+
+			"agrégation.",
+		time.Now().Format("2006-01-02"))
+}
+
 func injectFormatGuidance(messages []llm.Message) []llm.Message {
+	guidance := todayGuidance() + "\n\n" + baseFormatGuidance
 	if len(messages) > 0 && messages[0].Role == "system" {
-		merged := baseFormatGuidance + "\n\n" + messages[0].Content
+		merged := guidance + "\n\n" + messages[0].Content
 		out := make([]llm.Message, len(messages))
 		out[0] = llm.Message{Role: "system", Content: merged}
 		copy(out[1:], messages[1:])
 		return out
 	}
 	out := make([]llm.Message, 0, len(messages)+1)
-	out = append(out, llm.Message{Role: "system", Content: baseFormatGuidance})
+	out = append(out, llm.Message{Role: "system", Content: guidance})
 	out = append(out, messages...)
 	return out
 }
@@ -342,6 +424,16 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// post-synthesis session updates.
 	latestUserQuery := lastUserMessage(req.Messages)
 
+	// Persist the conversation transcript when a session id is supplied. The
+	// user turn is saved up-front so the question survives a mid-stream failure;
+	// the assistant turn is appended after streaming completes. turnSources
+	// accumulates the citations emitted this turn so they ride into the saved
+	// assistant message. Best-effort — persistence never breaks the chat.
+	var turnSources []RAGSource
+	if req.SessionID != "" && h.chatStore != nil {
+		h.persistUserTurn(r.Context(), req, latestUserQuery)
+	}
+
 	// Load session context (or a transient one when SessionID is empty).
 	var sessionCtx *session.SessionContext
 	if h.sessionStore != nil {
@@ -406,6 +498,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Sources: prefetchedContext.Sources,
 			Intent:  prefetchedContext.Intent,
 		}
+		turnSources = append(turnSources, prefetchedContext.Sources...)
 		if err := h.writeSSEEvent(w, flusher, contextEvent); err != nil {
 			h.logger.Debug().Err(err).Msg("failed to write rag_context event")
 			return
@@ -532,8 +625,13 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		assembler := llm.NewToolCallAssembler()
 
 		err := h.llmClient.StreamChatRich(r.Context(), llmReq, func(evt llm.StreamEvent) error {
-			stopOnce.Do(func() { close(stopKeepalive) })
-
+			// NOTE: do NOT stop the keepalive here. This callback first fires on
+			// the tool-call round; the long, SILENT phase is the NEXT round
+			// (the model reasoning over tool results before emitting the answer).
+			// Stopping now left that gap unguarded → the client idle-timed-out on
+			// big/slow answers ("Load failed"). The keepalive runs until the loop
+			// ends (final stopOnce below); its 20 s SSE comments interleave
+			// harmlessly with token data under the shared write lock.
 			select {
 			case <-r.Context().Done():
 				return r.Context().Err()
@@ -627,6 +725,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if tc.Function.Name == "search_knowledge_base" {
 					if ragSources := decodeSearchSources(result); ragSources != nil {
 						mergeSourcesIntoSession(sessionCtx, ragSources)
+						turnSources = append(turnSources, ragSources...)
 						_ = writeSSE(RAGContextEvent{
 							Type:    "rag_context",
 							Sources: ragSources,
@@ -674,6 +773,15 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = writeSSE(doneEvent)
 	}
 
+	// Persist the assistant answer + its citations to the durable transcript.
+	// Detached context so it survives a client disconnect after streaming. Even
+	// a partial answer (mid-stream failure) is worth keeping.
+	if req.SessionID != "" && h.chatStore != nil && assistantBuf.Len() > 0 {
+		pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		h.persistAssistantTurn(pctx, req.SessionID, assistantBuf.String(), turnSources)
+		pcancel()
+	}
+
 	// Post-stream: extract entities from the assistant answer and append a
 	// ResolvedQuery so the next turn's direct-answer check has fresh context.
 	// Skip when the session is transient (no SessionID) or the answer is empty.
@@ -715,6 +823,102 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Msg("pending memory candidates persisted from turn")
 		}()
 	}
+}
+
+// persistUserTurn ensures the session row exists (creating it with an
+// auto-title and, when the chat is focused on a single project, a project link)
+// then appends the user message. Best-effort: any error is logged and ignored.
+func (h *RAGChatHandler) persistUserTurn(ctx context.Context, req RAGChatRequest, userMsg string) {
+	if userMsg == "" {
+		return
+	}
+	exists, err := h.chatStore.ChatSessionExists(ctx, req.SessionID)
+	if err != nil {
+		h.logger.Debug().Err(err).Msg("chat persist: session exists check failed")
+		return
+	}
+	if !exists {
+		var projectID *string
+		if req.FocusScope != nil && len(req.FocusScope.ProjectIDs) == 1 {
+			pid := req.FocusScope.ProjectIDs[0]
+			projectID = &pid
+		}
+		now := time.Now()
+		if err := h.chatStore.CreateChatSession(ctx, &store.ChatSession{
+			SessionID: req.SessionID,
+			Title:     autoSessionTitle(userMsg),
+			ProjectID: projectID,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}); err != nil {
+			h.logger.Debug().Err(err).Msg("chat persist: create session failed")
+			return
+		}
+	}
+	if err := h.chatStore.AppendChatMessage(ctx, &store.ChatMessage{
+		MessageID: uuid.NewString(),
+		SessionID: req.SessionID,
+		Role:      "user",
+		Content:   userMsg,
+	}); err != nil {
+		h.logger.Debug().Err(err).Msg("chat persist: append user message failed")
+	}
+}
+
+// persistAssistantTurn appends the assistant answer and its (deduplicated)
+// cited sources to the transcript.
+func (h *RAGChatHandler) persistAssistantTurn(ctx context.Context, sessionID, content string, sources []RAGSource) {
+	var sourcesJSON string
+	if deduped := dedupSources(sources); len(deduped) > 0 {
+		if b, err := json.Marshal(deduped); err == nil {
+			sourcesJSON = string(b)
+		}
+	}
+	if err := h.chatStore.AppendChatMessage(ctx, &store.ChatMessage{
+		MessageID: uuid.NewString(),
+		SessionID: sessionID,
+		Role:      "assistant",
+		Content:   content,
+		Sources:   sourcesJSON,
+	}); err != nil {
+		h.logger.Debug().Err(err).Msg("chat persist: append assistant message failed")
+	}
+}
+
+// autoSessionTitle derives a short, single-line title from the first user
+// message of a conversation.
+func autoSessionTitle(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = strings.TrimSpace(msg[:i])
+	}
+	if msg == "" {
+		return "Conversation"
+	}
+	r := []rune(msg)
+	const max = 60
+	if len(r) > max {
+		return strings.TrimSpace(string(r[:max])) + "…"
+	}
+	return msg
+}
+
+// dedupSources removes duplicate citations (same content_id) accumulated across
+// tool rounds, preserving first-seen order.
+func dedupSources(sources []RAGSource) []RAGSource {
+	if len(sources) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(sources))
+	out := make([]RAGSource, 0, len(sources))
+	for _, s := range sources {
+		if _, ok := seen[s.ContentID]; ok {
+			continue
+		}
+		seen[s.ContentID] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // injectMemoriesIntoSystem prepends a "Faits durables" block to the system
@@ -858,6 +1062,7 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 			MailFrom:    r.MailFrom,
 			MailDate:    r.MailDate,
 			MailSubject: r.MailSubject,
+			Date:        r.Date,
 		})
 		totalChars += excerptChars
 	}
@@ -919,7 +1124,11 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 			sourceLabel = "Document"
 		}
 
-		contextBuilder.WriteString(fmt.Sprintf("[%s %d] %s\n", sourceLabel, i+1, source.Title))
+		header := fmt.Sprintf("[%s %d] %s", sourceLabel, i+1, source.Title)
+		if source.Date != "" {
+			header += " (date : " + source.Date + ")"
+		}
+		contextBuilder.WriteString(header + "\n")
 		contextBuilder.WriteString(source.Excerpt)
 		contextBuilder.WriteString("\n\n")
 	}
@@ -1052,6 +1261,7 @@ func decodeSearchSources(raw json.RawMessage) []RAGSource {
 			MailFrom:    s.MailFrom,
 			MailDate:    s.MailDate,
 			MailSubject: s.MailSubject,
+			Date:        s.Date,
 		})
 	}
 	return out

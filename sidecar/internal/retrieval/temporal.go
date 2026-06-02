@@ -3,6 +3,7 @@ package retrieval
 import (
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Scoring modes for the final blend of semantic similarity and recency.
@@ -43,6 +44,50 @@ func IsCurrentStateQuery(query string) bool {
 		}
 	}
 	return false
+}
+
+// monthTokens are month names (English + French, full + common abbreviations)
+// used by QueryHasExplicitPeriod to detect a subject-period reference.
+var monthTokens = map[string]struct{}{
+	"january": {}, "february": {}, "march": {}, "april": {}, "may": {}, "june": {},
+	"july": {}, "august": {}, "september": {}, "october": {}, "november": {}, "december": {},
+	"jan": {}, "feb": {}, "mar": {}, "apr": {}, "jun": {}, "jul": {}, "aug": {},
+	"sep": {}, "sept": {}, "oct": {}, "nov": {}, "dec": {},
+	"janvier": {}, "février": {}, "fevrier": {}, "mars": {}, "avril": {}, "mai": {},
+	"juin": {}, "juillet": {}, "août": {}, "aout": {}, "septembre": {}, "octobre": {},
+	"novembre": {}, "décembre": {}, "decembre": {},
+}
+
+// QueryHasExplicitPeriod reports whether the query names a concrete year
+// (2000-2099) or month. Such a token signals the user is asking about a SUBJECT
+// period ("recharges 2026", "facture avril") — which usually differs from the
+// document's RECEIVED date. When true, callers skip the received-date hard
+// pre-filter and soften recency weighting so older-but-relevant docs (a March
+// invoice received in March, asked about in June) stay retrievable.
+func QueryHasExplicitPeriod(query string) bool {
+	for _, f := range strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		if isYearToken(f) {
+			return true
+		}
+		if _, ok := monthTokens[f]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func isYearToken(f string) bool {
+	if len(f) != 4 {
+		return false
+	}
+	for _, r := range f {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return f >= "2000" && f <= "2099"
 }
 
 // recencyScore maps a document age into [0, 1]. Today → 1.0, infinity → 0.

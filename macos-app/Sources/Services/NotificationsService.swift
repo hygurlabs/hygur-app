@@ -45,6 +45,8 @@ final class NotificationsService {
             Task { await postDailyBrief(event) }
         case "agenda_alert":
             Task { await postAgendaAlert(event) }
+        case "meeting_briefing":
+            Task { await postMeetingBriefing(event) }
         default:
             return
         }
@@ -62,6 +64,24 @@ final class NotificationsService {
             // of the app keeps working. The Activity view is the always-on
             // fallback channel.
         }
+    }
+
+    /// Posts a notification on demand — used by the WebUI bridge
+    /// (`HygurNative.notify`). Ensures authorization first; intentionally
+    /// ungated by the opt-in toggles since the caller explicitly asked.
+    func postDirect(title: String, body: String) async {
+        await ensureAuthorization()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["kind": "webui"]
+        let req = UNNotificationRequest(
+            identifier: "webui-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        try? await center.add(req)
     }
 
     // MARK: - Posting
@@ -164,6 +184,33 @@ final class NotificationsService {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
         return f
+    }
+
+    /// Renders a `meeting_briefing` event (calendar event or mail deadline) into
+    /// a notification. Self-authorizes (like `postDirect`) so it works even if
+    /// the user never toggled the other notification categories — the sidecar
+    /// only emits this when it found relevant context, so it's not noisy.
+    private func postMeetingBriefing(_ event: ActivityEvent) async {
+        await ensureAuthorization()
+        let title = event.raw.string("title") ?? event.message ?? "Upcoming"
+        let content = UNMutableNotificationContent()
+        content.title = "Briefing — \(title)"
+        if let bullets = event.raw.stringArray("bullets"), !bullets.isEmpty {
+            content.body = bullets.prefix(2).joined(separator: " · ")
+        } else {
+            content.body = "Préparation avant échéance."
+        }
+        content.sound = .default
+        content.userInfo = [
+            "kind": "meeting_briefing",
+            "content_id": event.raw.string("content_id") ?? event.source,
+        ]
+        let req = UNNotificationRequest(
+            identifier: "meeting-brief-\(event.id.uuidString)",
+            content: content,
+            trigger: nil
+        )
+        try? await center.add(req)
     }
 
     private func postDailyBrief(_ event: ActivityEvent) async {

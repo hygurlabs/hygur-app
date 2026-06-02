@@ -33,6 +33,15 @@ const (
 	DefaultProtonBridgePort = 1143
 )
 
+// maxThreadFetchBytes bounds how many bytes of message bodies + decoded
+// attachments a single GetMessagesByThread call accumulates before it stops at
+// a message boundary. A reference-chain "thread" (or a chain carrying many
+// large PDF attachments) can otherwise pull multiple GB into memory at once —
+// the driver of the sidecar's RAM blowup during mail backfills. The message
+// COUNT cap (maxThreadMessages) can't catch a byte-heavy thread, so this is the
+// complementary byte budget. Real conversations stay far below 64 MiB.
+const maxThreadFetchBytes = 64 << 20
+
 // IMAPConnector implements mail.MailConnector and mail.CredentialSetter
 // for connecting to Proton Mail via Proton Bridge IMAP.
 //
@@ -615,6 +624,7 @@ func (c *IMAPConnector) GetMessages(ctx context.Context, threadID string) ([]mai
 	fetchCmd := c.client.Fetch(seqSet, fetchOptions)
 
 	var messages []mail.Message
+	var fetchedBytes int
 
 	for {
 		if checkContext(ctx) {
@@ -634,6 +644,16 @@ func (c *IMAPConnector) GetMessages(ctx context.Context, threadID string) ([]mai
 		mailMsg := convertToMailMessage(msgData, threadID)
 		if mailMsg != nil {
 			messages = append(messages, *mailMsg)
+			fetchedBytes += len(mailMsg.Body) + len(mailMsg.HTMLBody)
+			for _, att := range mailMsg.Attachments {
+				fetchedBytes += len(att.Data)
+			}
+			// Bound per-thread memory: stop at this message boundary once the
+			// byte budget is exceeded and index what we have. Aborting the
+			// FETCH (Close below) stops the server streaming the rest.
+			if fetchedBytes >= maxThreadFetchBytes {
+				break
+			}
 		}
 	}
 
@@ -787,6 +807,7 @@ func (c *IMAPConnector) fetchMessagesByUIDs(ctx context.Context, mailbox string,
 	fetchCmd := c.client.Fetch(seqSet, fetchOptions)
 
 	var messages []mail.Message
+	var fetchedBytes int
 
 	for {
 		if checkContext(ctx) {
@@ -806,6 +827,16 @@ func (c *IMAPConnector) fetchMessagesByUIDs(ctx context.Context, mailbox string,
 		mailMsg := convertToMailMessage(msgData, threadID)
 		if mailMsg != nil {
 			messages = append(messages, *mailMsg)
+			fetchedBytes += len(mailMsg.Body) + len(mailMsg.HTMLBody)
+			for _, att := range mailMsg.Attachments {
+				fetchedBytes += len(att.Data)
+			}
+			// Bound per-thread memory: stop at this message boundary once the
+			// byte budget is exceeded and index what we have. Aborting the
+			// FETCH (Close below) stops the server streaming the rest.
+			if fetchedBytes >= maxThreadFetchBytes {
+				break
+			}
 		}
 	}
 
@@ -975,6 +1006,7 @@ func convertToMailMessage(msg *imapclient.FetchMessageBuffer, threadID string) *
 	// normalizer would discard as MIME garbage without setting HTMLBody.
 	var plainBody, htmlBody string
 	var textFallback string
+	var rawFull []byte
 	for _, section := range msg.BodySection {
 		if len(section.Bytes) == 0 {
 			continue
@@ -982,6 +1014,7 @@ func convertToMailMessage(msg *imapclient.FetchMessageBuffer, threadID string) *
 		isFullBody := section.Section == nil ||
 			(section.Section.Specifier == "" && len(section.Section.Part) == 0)
 		if isFullBody {
+			rawFull = section.Bytes
 			plainBody, htmlBody = parseRawMIMEMessage(section.Bytes)
 			break
 		}
@@ -994,7 +1027,7 @@ func convertToMailMessage(msg *imapclient.FetchMessageBuffer, threadID string) *
 		plainBody = textFallback
 	}
 
-	return &mail.Message{
+	out := &mail.Message{
 		ID:       env.MessageID,
 		ThreadID: threadID,
 		From:     from,
@@ -1005,6 +1038,12 @@ func convertToMailMessage(msg *imapclient.FetchMessageBuffer, threadID string) *
 		Body:     plainBody,
 		HTMLBody: htmlBody,
 	}
+	// The full raw MIME already carries attachment bytes (unlike Gmail) — pull
+	// out small PDFs so EmailIndexer can extract their text.
+	if len(rawFull) > 0 {
+		out.Attachments = collectPDFAttachments(rawFull)
+	}
+	return out
 }
 
 // buildSearchCriteria converts ListOptions to IMAP search criteria.
@@ -1115,6 +1154,71 @@ func parseRawMIMEMessage(raw []byte) (plainText, htmlText string) {
 	}
 	cte := msg.Header.Get("Content-Transfer-Encoding")
 	return extractMIMEParts(mediaType, params, cte, msg.Body)
+}
+
+// collectPDFAttachments walks the raw MIME tree and returns the small PDF
+// attachments it finds, with their decoded bytes — so the indexer can extract
+// searchable text. Best-effort: returns nil on parse failure.
+func collectPDFAttachments(raw []byte) []mail.Attachment {
+	msg, err := netmail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return nil
+	}
+	mediaType, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		return nil
+	}
+	var out []mail.Attachment
+	collectMIMEAttachments(mediaType, params, msg.Header.Get("Content-Transfer-Encoding"), msg.Header.Get("Content-Disposition"), msg.Body, &out)
+	return out
+}
+
+func collectMIMEAttachments(mediaType string, params map[string]string, cte, disposition string, body io.Reader, out *[]mail.Attachment) {
+	if strings.HasPrefix(mediaType, "multipart/") {
+		boundary := params["boundary"]
+		if boundary == "" {
+			return
+		}
+		decoded := decodeMIMEPart(body, cte)
+		mr := multipart.NewReader(bytes.NewReader(decoded), boundary)
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			pMedia, pParams, perr := mime.ParseMediaType(part.Header.Get("Content-Type"))
+			if perr != nil {
+				continue
+			}
+			collectMIMEAttachments(pMedia, pParams, part.Header.Get("Content-Transfer-Encoding"), part.Header.Get("Content-Disposition"), part, out)
+		}
+		return
+	}
+
+	// Leaf part — keep it only if it's a (small) PDF.
+	filename := params["name"]
+	if disposition != "" {
+		if _, dparams, derr := mime.ParseMediaType(disposition); derr == nil {
+			if fn := dparams["filename"]; fn != "" {
+				filename = fn
+			}
+		}
+	}
+	isPDF := strings.Contains(strings.ToLower(mediaType), "pdf") ||
+		strings.HasSuffix(strings.ToLower(filename), ".pdf")
+	if !isPDF {
+		return
+	}
+	data := decodeMIMEPart(body, cte)
+	if len(data) == 0 || int64(len(data)) > mail.MaxIndexableAttachmentBytes {
+		return
+	}
+	*out = append(*out, mail.Attachment{
+		Filename: filename,
+		MimeType: mediaType,
+		Size:     int64(len(data)),
+		Data:     data,
+	})
 }
 
 // extractMIMEParts recurses into a MIME part and collects the first

@@ -53,8 +53,17 @@ type MailConnector struct {
 	credStore     *auth.CredentialStore
 	config        plugin.ConnectorConfig
 	activeSource  string // "proton" | "gmail" — legacy single-account path
+	// pinnedProvider, when set ("proton"|"gmail"|"mailapp"), makes this instance
+	// present itself as a single-provider connector type (distinct Info/schema/
+	// id) instead of the legacy unified "Email" connector. Init forces the
+	// provider so the instance only ever serves that one source. Empty = legacy
+	// unified behaviour (back-compat).
+	pinnedProvider string
 	health        plugin.HealthStatus
-	mu            sync.RWMutex
+	// reconcileDeletions opts into pruning KB mail that the server no longer
+	// returns after a full sweep. Set from config.Mail.ReconcileDeletions.
+	reconcileDeletions bool
+	mu                 sync.RWMutex
 
 	// Sessions manage persistent connections with auto-reconnection
 	// (legacy single-account path).
@@ -116,8 +125,18 @@ func New(
 // plugin.Connector — core lifecycle methods
 // ---------------------------------------------------------------------------
 
+// SetPinnedProvider pins this instance to a single provider so it presents as a
+// distinct connector type (Proton / Gmail / Mail.app). Must be called before
+// registration. Empty restores the legacy unified "Email" connector.
+func (c *MailConnector) SetPinnedProvider(provider string) {
+	c.pinnedProvider = provider
+}
+
 // Info returns the static metadata for this connector.
 func (c *MailConnector) Info() plugin.ConnectorInfo {
+	if c.pinnedProvider != "" {
+		return pinnedProviderInfo(c.pinnedProvider)
+	}
 	return plugin.ConnectorInfo{
 		ID:          "mail",
 		Name:        "Email",
@@ -131,7 +150,7 @@ func (c *MailConnector) Info() plugin.ConnectorInfo {
 
 // Capabilities returns the set of operations this connector supports.
 func (c *MailConnector) Capabilities() plugin.Capabilities {
-	return plugin.Capabilities{
+	caps := plugin.Capabilities{
 		CanList:      true,
 		CanSearch:    false,
 		CanSync:      true,
@@ -141,10 +160,22 @@ func (c *MailConnector) Capabilities() plugin.Capabilities {
 		NeedsAuth:    true,
 		AuthType:     plugin.AuthPassword,
 	}
+	switch c.pinnedProvider {
+	case "gmail":
+		caps.AuthType = plugin.AuthOAuth2
+	case "mailapp":
+		// Mail.app uses local Apple Events; no credentials.
+		caps.NeedsAuth = false
+		caps.AuthType = plugin.AuthNone
+	}
+	return caps
 }
 
 // ConfigSchema returns the dynamic form schema used to generate the UI.
 func (c *MailConnector) ConfigSchema() plugin.ConfigSchema {
+	if c.pinnedProvider != "" {
+		return pinnedProviderSchema(c.pinnedProvider)
+	}
 	return plugin.ConfigSchema{
 		Groups: []plugin.ConfigGroup{
 			{
@@ -277,6 +308,15 @@ func (c *MailConnector) Init(ctx context.Context, cfg plugin.ConnectorConfig) er
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// A pinned instance only ever serves its own provider, whatever the config
+	// (or its absence) says — this is what makes it a distinct connector type.
+	if c.pinnedProvider != "" {
+		if cfg.Settings == nil {
+			cfg.Settings = map[string]string{}
+		}
+		cfg.Settings["provider"] = c.pinnedProvider
+	}
+
 	c.config = cfg
 
 	provider := cfg.Settings["provider"]
@@ -361,35 +401,18 @@ func (c *MailConnector) Init(ctx context.Context, cfg plugin.ConnectorConfig) er
 		}
 
 	case "mailapp":
-		// Mail.app native: no credentials. Init triggers Apple Events
-		// discovery and seeds the multi-account registry. Subsequent sync
-		// operations always go through the AccountRegistry / SyncAccount
-		// path — there is no legacy single-source connector for mailapp.
+		// Mail.app native: no credentials. The account registry is already
+		// loaded from the credential store at startup, so the connector is
+		// usable immediately. Apple Events discovery only REFRESHES that list
+		// and can hang when Mail.app is busy/wedged — running it inline froze
+		// the entire sidecar boot (and the app's "Starting…" screen) until it
+		// timed out. Refresh in the background so startup never blocks on it.
 		if c.credStore == nil {
 			c.health.Status = plugin.StatusUnconfigured
 			c.health.Message = "credential store unavailable"
 			return fmt.Errorf("mail connector (mailapp): credential store unavailable")
 		}
-		accounts, err := mailapp.DiscoverAccounts(ctx)
-		if err != nil {
-			c.health.Status = plugin.StatusUnhealthy
-			c.health.Message = err.Error()
-			return fmt.Errorf("mail connector (mailapp): discover accounts: %w", err)
-		}
-		for _, acct := range accounts {
-			cred := auth.MailAccountCredential{
-				AccountID: acct.ID,
-				Provider:  "mailapp",
-				Email:     acct.PrimaryEmail(),
-			}
-			if err := c.credStore.SaveMailAccountCredential(cred); err != nil {
-				c.logger.Warn().Err(err).Str("account", acct.ID).Msg("mailapp: save credential failed")
-			}
-		}
-		if _, err := c.LoadAccountsFromCredStore(); err != nil {
-			c.logger.Warn().Err(err).Msg("mailapp: account registry reload failed")
-		}
-		c.logger.Info().Int("accounts", len(accounts)).Msg("mailapp: discovered accounts")
+		go c.refreshMailappAccounts()
 
 	default:
 		c.health.Status = plugin.StatusUnconfigured
@@ -400,6 +423,37 @@ func (c *MailConnector) Init(ctx context.Context, cfg plugin.ConnectorConfig) er
 	c.health.Status = plugin.StatusConnecting
 	c.health.Message = ""
 	return nil
+}
+
+// refreshMailappAccounts re-discovers Mail.app accounts and updates the
+// credential store + registry. It runs OFF the startup path (spawned from Init)
+// because Apple Events can hang when Mail.app is busy/wedged and must never
+// block boot. Best-effort: on failure the accounts already loaded from the
+// credential store remain in use. Bounded by its own context on top of the
+// per-call osascript ceiling. Does not touch c.mu-guarded fields.
+func (c *MailConnector) refreshMailappAccounts() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	accounts, err := mailapp.DiscoverAccounts(ctx)
+	if err != nil {
+		c.logger.Warn().Err(err).Msg("mailapp: background account discovery failed — using accounts from the credential store")
+		return
+	}
+	for _, acct := range accounts {
+		cred := auth.MailAccountCredential{
+			AccountID: acct.ID,
+			Provider:  "mailapp",
+			Email:     acct.PrimaryEmail(),
+		}
+		if err := c.credStore.SaveMailAccountCredential(cred); err != nil {
+			c.logger.Warn().Err(err).Str("account", acct.ID).Msg("mailapp: save credential failed")
+		}
+	}
+	if _, err := c.LoadAccountsFromCredStore(); err != nil {
+		c.logger.Warn().Err(err).Msg("mailapp: account registry reload failed")
+	}
+	c.logger.Info().Int("accounts", len(accounts)).Msg("mailapp: discovered accounts (background refresh)")
 }
 
 // Start attempts a test connection to the active mail provider.
@@ -450,7 +504,15 @@ func (c *MailConnector) Start(ctx context.Context) error {
 	// We pass activeSource as both accountID and provider so the query matches
 	// legacy rows (account_id = "gmail") as well as future multi-account rows.
 	if c.indexer != nil {
-		c.health.ItemCount = c.indexer.CountItems(ctx, c.activeSource, c.activeSource)
+		// Prefer the aggregate mail count (all accounts/providers) so the UI shows
+		// the real number; fall back to the per-source count only if the total is
+		// unavailable. The per-source CountItems returns 0 for the unified "mail"
+		// connector because indexed rows carry a real account id, not "proton".
+		if total := c.indexer.CountAllMail(ctx); total > 0 {
+			c.health.ItemCount = total
+		} else {
+			c.health.ItemCount = c.indexer.CountItems(ctx, c.activeSource, c.activeSource)
+		}
 	}
 
 	return nil
@@ -523,17 +585,80 @@ func (c *MailConnector) Sync(ctx context.Context, opts plugin.SyncOptions) (*plu
 		return c.syncAllProvider(ctx, "mailapp", opts)
 	}
 
-	var (
-		result  *plugin.SyncResult
-		syncErr error
-	)
-	_ = c.captureAndPublishDigest(ctx, func() error {
-		r, err := c.syncLegacy(ctx, opts)
-		result = r
-		syncErr = err
-		return err
-	})
-	return result, syncErr
+	// Generic (account-less) sync: index everything the user has — all
+	// registered accounts (mailapp/…) PLUS the configured legacy single-source
+	// provider (proton/gmail), if any. The unified "mail" connector can hold
+	// both at once, so syncing only one would silently drop mail. When nothing
+	// is configured it's a clean no-op rather than the old "activeSource not
+	// set" error (the connector's "mail" id never matches the provider-keyed
+	// config, so Configure() never Init's it on its own).
+	start := time.Now()
+	var totalProcessed, totalSkipped, totalFailed int
+	syncedSomething := false
+
+	// Sync the reliable single-source provider (Proton/Gmail) FIRST so it always
+	// completes within the window — a slow or wedged Mail.app account (handled by
+	// syncAllAccounts below) can then no longer starve it of the shared lock.
+	if activeSource == "proton" || activeSource == "gmail" {
+		var lr *plugin.SyncResult
+		_ = c.captureAndPublishDigest(ctx, func() error {
+			r, err := c.syncLegacy(ctx, opts)
+			lr = r
+			return err
+		})
+		if lr != nil {
+			totalProcessed += lr.Processed
+			totalSkipped += lr.Skipped
+			totalFailed += lr.Failed
+		}
+		syncedSomething = true
+	}
+	if c.accounts != nil && len(c.accounts.All()) > 0 {
+		if r, _ := c.syncAllAccounts(ctx, opts); r != nil {
+			totalProcessed += r.Processed
+			totalSkipped += r.Skipped
+			totalFailed += r.Failed
+			syncedSomething = true
+		}
+	}
+	if !syncedSomething {
+		c.logger.Info().Msg("mail sync skipped: no provider configured and no accounts registered")
+	}
+	return &plugin.SyncResult{
+		Processed: totalProcessed,
+		Skipped:   totalSkipped,
+		Failed:    totalFailed,
+		Duration:  time.Since(start),
+	}, nil
+}
+
+// syncAllAccounts syncs every registered account regardless of provider. Used
+// when the unified connector has no configured single-source provider, so a
+// generic (account-less) sync still indexes all accounts instead of failing.
+func (c *MailConnector) syncAllAccounts(ctx context.Context, opts plugin.SyncOptions) (*plugin.SyncResult, error) {
+	sessions := c.accounts.All()
+	start := time.Now()
+	var totalProcessed, totalSkipped, totalFailed int
+	for _, s := range sessions {
+		r, err := c.SyncAccount(ctx, s.AccountID, opts)
+		if err != nil {
+			c.logger.Error().Err(err).Str("provider", s.Provider).Str("account", s.AccountID).Msg("account sync failed")
+			totalFailed++
+			continue
+		}
+		if r != nil {
+			totalProcessed += r.Processed
+			totalSkipped += r.Skipped
+			totalFailed += r.Failed
+		}
+	}
+	c.logger.Info().Int("accounts", len(sessions)).Int("processed", totalProcessed).Msg("synced all registered accounts")
+	return &plugin.SyncResult{
+		Processed: totalProcessed,
+		Skipped:   totalSkipped,
+		Failed:    totalFailed,
+		Duration:  time.Since(start),
+	}, nil
 }
 
 // syncAllProvider iterates every registered account of the given provider
@@ -565,6 +690,29 @@ func (c *MailConnector) syncAllProvider(ctx context.Context, provider string, op
 		Failed:    totalFailed,
 		Duration:  time.Since(start),
 	}, nil
+}
+
+// applyIncrementalWindow narrows cfg to mail newer than the account's last
+// indexed message, so routine (cron) syncs stop re-fetching the whole mailbox
+// every run when nothing changed. Safety:
+//   - No-op on a forced full sync (full) or when nothing is indexed yet (first
+//     sync stays full), or when the watermark can't be resolved — so we never
+//     silently narrow a sync that needs to see everything.
+//   - A windowed sync can't observe the full mailbox, so it MUST NOT reconcile
+//     deletions; reconcile is forced off (it stays a full-sweep-only feature).
+//
+// A 48h overlap buffer absorbs clock skew / out-of-order delivery; re-seen
+// messages are cheap (deduped at index time).
+func (c *MailConnector) applyIncrementalWindow(ctx context.Context, cfg *mailpkg.BatchIndexConfig, accountID, provider string, full bool) {
+	if full || c.store == nil || accountID == "" {
+		return
+	}
+	_, lastIndexed, err := c.store.CountMailItemsByAccount(ctx, accountID, provider)
+	if err != nil || lastIndexed.IsZero() {
+		return
+	}
+	cfg.Since = lastIndexed.Add(-48 * time.Hour)
+	cfg.ReconcileDeletions = false
 }
 
 // syncLegacy is the original Sync body, extracted so it can be wrapped by
@@ -631,11 +779,13 @@ func (c *MailConnector) syncLegacy(ctx context.Context, opts plugin.SyncOptions)
 	}
 
 	cfg := mailpkg.BatchIndexConfig{
-		BatchSize:     10,
-		MaxConcurrent: 3,
-		Timeout:       30 * time.Second,
-		Limit:         limit,
+		BatchSize:          10,
+		MaxConcurrent:      3,
+		Timeout:            30 * time.Second,
+		Limit:              limit,
+		ReconcileDeletions: c.reconcileDeletions,
 	}
+	c.applyIncrementalWindow(ctx, &cfg, activeSource, activeSource, opts.Full)
 
 	c.logger.Info().Msg("selecting mail provider")
 
@@ -662,8 +812,11 @@ func (c *MailConnector) syncLegacy(ctx context.Context, opts plugin.SyncOptions)
 			providers = append(providers, providerInfo{name: "proton", conn: protonConn, session: c.protonSession})
 		}
 	default:
-		c.logger.Error().Str("activeSource", activeSource).Msg("sync failed: unknown provider")
-		return nil, fmt.Errorf("mail connector Sync: activeSource not set")
+		// No legacy single-source provider (activeSource is "mailapp" or unset).
+		// Multi-account providers are synced via syncAllAccounts/syncAllProvider,
+		// so the legacy path is a clean no-op here rather than a spurious error.
+		c.logger.Debug().Str("activeSource", activeSource).Msg("legacy sync: no single-source provider, skipping")
+		return &plugin.SyncResult{}, nil
 	}
 
 	start := time.Now()
@@ -716,6 +869,11 @@ func (c *MailConnector) syncLegacy(ctx context.Context, opts plugin.SyncOptions)
 			c.logger.Info().Str("mailbox", mailbox).Str("provider", currentSource).Msg("syncing mailbox")
 			stats, err := mbIndexer.IndexMailbox(ctx, currentSource, mailbox, syncCfg)
 			if err != nil {
+				if isMailboxNotFound(err) {
+					c.logger.Debug().Str("mailbox", mailbox).Str("provider", currentSource).
+						Msg("mailbox absent; skipping")
+					continue
+				}
 				c.logger.Error().Err(err).Str("mailbox", mailbox).Msg("mailbox sync failed")
 				c.mu.Lock()
 				c.health.Status = plugin.StatusDegraded
@@ -855,17 +1013,29 @@ func (c *MailConnector) syncAccountInner(ctx context.Context, accountID string, 
 			} else {
 				mailboxes = []string{defaultMailbox}
 			}
+		case "mailapp":
+			// Honour the user-selected folder list (mailapp_mailbox, comma-
+			// separated) applied to every Mail.app account. Empty preserves the
+			// prior behaviour (the connector's own default mailbox).
+			c.mu.RLock()
+			raw := c.config.Settings["mailapp_mailbox"]
+			c.mu.RUnlock()
+			if folders := splitCSV(raw); len(folders) > 0 {
+				mailboxes = folders
+			}
 		}
 	}
 
 	cfg := mailpkg.BatchIndexConfig{
-		BatchSize:     10,
-		MaxConcurrent: 3,
-		Timeout:       30 * time.Second,
-		Limit:         opts.Limit,
-		AccountID:     sess.AccountID,
-		LabelIDs:      labelIDs,
+		BatchSize:          10,
+		MaxConcurrent:      3,
+		Timeout:            30 * time.Second,
+		Limit:              opts.Limit,
+		AccountID:          sess.AccountID,
+		LabelIDs:           labelIDs,
+		ReconcileDeletions: c.reconcileDeletions,
 	}
+	c.applyIncrementalWindow(ctx, &cfg, sess.AccountID, sess.Provider, opts.Full)
 
 	mbIndexer := mailpkg.NewMailboxIndexer(indexer, sess.Conn)
 	start := time.Now()
@@ -875,6 +1045,13 @@ func (c *MailConnector) syncAccountInner(ctx context.Context, accountID string, 
 	for _, mailbox := range mailboxes {
 		stats, err := mbIndexer.IndexMailbox(ctx, sess.AccountID, mailbox, cfg)
 		if err != nil {
+			if isMailboxNotFound(err) {
+				// Folder absent on this account (the folder list spans accounts);
+				// skip silently rather than spamming errors / looking stuck.
+				c.logger.Debug().Str("account", sess.AccountID).Str("mailbox", mailbox).
+					Msg("mailbox absent on this account; skipping")
+				continue
+			}
 			lastErr = err
 			totalFailed++
 			c.logger.Error().
@@ -1356,6 +1533,14 @@ func (c *MailConnector) SetProtonSession(s *mailpkg.Session) {
 	c.protonSession = s
 }
 
+// SetReconcileDeletions toggles pruning of KB mail no longer present on the
+// server after a full sweep (opt-in; see config.Mail.ReconcileDeletions).
+func (c *MailConnector) SetReconcileDeletions(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reconcileDeletions = enabled
+}
+
 // SetGmailSession injects a pre-built MailSession for the Gmail connector.
 // This enables automatic reconnection on every operation.
 func (c *MailConnector) SetGmailSession(s *mailpkg.Session) {
@@ -1519,17 +1704,69 @@ func (c *MailConnector) IsAuthenticated() bool {
 	}
 }
 
-// ListMailboxes returns available IMAP mailboxes for the active provider.
+// ListMailboxes returns the folders/labels available for the active provider —
+// the source for the "select folders to sync" picker in the config UI. It
+// ensures the connection is live first so it works right after the user enters
+// credentials: Proton needs an open IMAP session; Gmail and Mail.app are
+// stateless (API token / Apple Events).
 func (c *MailConnector) ListMailboxes(ctx context.Context) ([]string, error) {
 	c.mu.RLock()
 	source := c.activeSource
-	conn := c.proton
+	protonConn := c.proton
+	gmailConn := c.gmail
+	psess := c.protonSession
 	c.mu.RUnlock()
 
-	if source != "proton" || conn == nil {
+	switch source {
+	case "proton":
+		if protonConn == nil {
+			return []string{}, nil
+		}
+		if psess != nil {
+			if err := psess.EnsureConnected(ctx); err != nil {
+				return nil, err
+			}
+		}
+		return protonConn.ListMailboxes(ctx)
+	case "gmail":
+		if gmailConn == nil {
+			return []string{}, nil
+		}
+		labels, err := gmailConn.ListLabels(ctx)
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(labels))
+		for _, l := range labels {
+			names = append(names, l.Name)
+		}
+		return names, nil
+	case "mailapp":
+		return listMailappFolders(ctx)
+	default:
 		return []string{}, nil
 	}
-	return conn.ListMailboxes(ctx)
+}
+
+// listMailappFolders unions the folder names exposed by every Mail.app account,
+// deduplicated, for the folder picker. Best-effort and bounded by the per-call
+// osascript ceiling.
+func listMailappFolders(ctx context.Context) ([]string, error) {
+	accounts, err := mailapp.DiscoverAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	folders := []string{}
+	for _, a := range accounts {
+		for _, mb := range a.MailboxNames {
+			if mb != "" && !seen[mb] {
+				seen[mb] = true
+				folders = append(folders, mb)
+			}
+		}
+	}
+	return folders, nil
 }
 
 // ListLabels returns available labels/mailboxes for the active provider.

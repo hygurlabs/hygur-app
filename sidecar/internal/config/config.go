@@ -35,6 +35,20 @@ type Config struct {
 
 	// DailyBrief configures the scheduled daily activity digest task.
 	DailyBrief DailyBriefConfig `mapstructure:"daily_brief" yaml:"daily_brief,omitempty"`
+
+	// Mail configures mail-sync behaviour.
+	Mail MailConfig `mapstructure:"mail" yaml:"mail,omitempty"`
+}
+
+// MailConfig configures mail-sync behaviour.
+type MailConfig struct {
+	// ReconcileDeletions, when true, removes from the knowledge base any
+	// previously-indexed mail of an account that is no longer present after a
+	// FULL (unbounded) sync sweep — i.e. messages deleted/spammed on the server
+	// stop polluting retrieval. Opt-in (default false) because a misconfigured
+	// partial sync could otherwise purge valid items; the reconcile only runs
+	// when the sweep had no thread limit.
+	ReconcileDeletions bool `mapstructure:"reconcile_deletions" yaml:"reconcile_deletions"`
 }
 
 // DailyBriefConfig configures the scheduled daily activity digest task.
@@ -153,15 +167,41 @@ type LMStudioConfig struct {
 	// ModelDefault is the default chat model used when none is specified.
 	ModelDefault string `mapstructure:"model_default"`
 
+	// IndexingURL is an optional separate chat endpoint for the lightweight
+	// ingestion/extraction model (Tier 2 NER). Falls back to URL when empty.
+	IndexingURL string `mapstructure:"indexing_url"`
+
+	// ModelIndexing is the chat model used for ingestion-time extraction
+	// (Tier 2 NER). A small fast model (e.g. minicpm5: ~1000 tok/s on many
+	// connections vs the big model's ~50 tok/s on a few) trades some accuracy
+	// for throughput on bulk indexing. Falls back to ModelDefault when empty.
+	ModelIndexing string `mapstructure:"model_indexing"`
+
 	// EmbeddingModel is the model used for generating embeddings.
 	// Defaults to "text-embedding-nomic-embed-text-v1.5" if not set.
 	EmbeddingModel string `mapstructure:"embedding_model"`
+
+	// VisionURL is an optional OpenAI-compatible endpoint serving a multimodal
+	// (vision) model — used to OCR scanned PDFs and images without a system
+	// Tesseract install (portable: just another local model over HTTP). Falls
+	// back to URL when empty.
+	VisionURL string `mapstructure:"vision_url"`
+
+	// VisionModel is the model id sent to VisionURL (e.g. "nemotron-omni").
+	// Falls back to ModelDefault when empty.
+	VisionModel string `mapstructure:"vision_model"`
 
 	// EmbeddingMaxTokens is the per-input token budget enforced before sending
 	// requests to the embedding endpoint. Inputs that exceed it are truncated
 	// so they never trigger a 500 "input too large" from servers whose
 	// physical batch size is smaller than the chunker's output. Default 512.
 	EmbeddingMaxTokens int `mapstructure:"embedding_max_tokens"`
+
+	// EmbeddingBatchSize is how many texts are sent per /v1/embeddings request
+	// during bulk indexing. Larger = fewer round-trips (big win when the server
+	// batches on GPU). Default 32; capped at 128. Lower it if your embedding
+	// server rejects large batches.
+	EmbeddingBatchSize int `mapstructure:"embedding_batch_size"`
 
 	// Timeout is the maximum duration for inference (chat) API calls.
 	Timeout time.Duration `mapstructure:"timeout"`

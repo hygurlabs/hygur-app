@@ -194,7 +194,18 @@ func extractDomainTag(email string) string {
 		return ""
 	}
 
-	domain := strings.ToLower(parts[1])
+	// Sanitize: sender addresses often arrive angle-bracketed ("Name <a@edf.fr>"),
+	// so parts[1] can be "edf.fr>". Keep only the leading run of valid domain
+	// characters (a-z, 0-9, '.', '-'), dropping any trailing '>', space, or junk.
+	domain := strings.ToLower(strings.TrimSpace(parts[1]))
+	if i := strings.IndexFunc(domain, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-')
+	}); i >= 0 {
+		domain = domain[:i]
+	}
+	if domain == "" {
+		return ""
+	}
 
 	// Skip common email providers (not useful for tagging)
 	commonProviders := []string{

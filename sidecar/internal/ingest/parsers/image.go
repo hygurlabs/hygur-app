@@ -28,17 +28,31 @@ var imageExtensions = []string{".png", ".jpg", ".jpeg", ".heic", ".webp"}
 // NormalizedText instead.
 type ImageParser struct {
 	visionEndpoint string
+	visionModel    string
 }
 
 // NewImageParser creates a new ImageParser.
-// visionEndpoint is the LM Studio vision API base URL (e.g. "http://localhost:1234").
-// If empty, the HYGUR_VISION_ENDPOINT environment variable is used.
+// visionEndpoint is the vision API base URL (e.g. "http://localhost:8082").
+// If empty, the HYGUR_VISION_ENDPOINT environment variable is used; the model
+// id defaults to HYGUR_VISION_MODEL (then "vision").
 func NewImageParser(visionEndpoint string) *ImageParser {
+	return NewImageParserWithModel(visionEndpoint, "")
+}
+
+// NewImageParserWithModel is like NewImageParser but pins the vision model id.
+func NewImageParserWithModel(visionEndpoint, visionModel string) *ImageParser {
 	ep := visionEndpoint
 	if ep == "" {
 		ep = os.Getenv("HYGUR_VISION_ENDPOINT")
 	}
-	return &ImageParser{visionEndpoint: ep}
+	model := visionModel
+	if model == "" {
+		model = os.Getenv("HYGUR_VISION_MODEL")
+	}
+	if model == "" {
+		model = "vision"
+	}
+	return &ImageParser{visionEndpoint: ep, visionModel: model}
 }
 
 // SupportedExtensions returns the file extensions this parser handles.
@@ -150,10 +164,14 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
-	prompt := "Transcris tout le texte visible dans cette image. Aucun commentaire."
+	prompt := "Transcris tout le texte visible dans cette image, fidèlement. Aucun commentaire, aucune explication."
 
 	payload := map[string]any{
-		"model": "vision",
+		"model":      p.visionModel,
+		"max_tokens": 2048, // enough for a full page of transcribed text
+		// Reasoning models (e.g. nemotron-omni) otherwise spend the budget
+		// "thinking" and leave content empty; OCR is a pure extraction task.
+		"chat_template_kwargs": map[string]any{"enable_thinking": false},
 		"messages": []map[string]any{
 			{
 				"role": "user",
@@ -197,7 +215,8 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string `json:"content"`
+				Reasoning string `json:"reasoning"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -210,7 +229,13 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 		return ""
 	}
 
-	return strings.TrimSpace(result.Choices[0].Message.Content)
+	// Prefer content; fall back to reasoning if a thinking model left content
+	// empty despite enable_thinking:false (defensive).
+	out := strings.TrimSpace(result.Choices[0].Message.Content)
+	if out == "" {
+		out = strings.TrimSpace(result.Choices[0].Message.Reasoning)
+	}
+	return out
 }
 
 // ParseImage is a convenience function for path-based callers (e.g. tests or

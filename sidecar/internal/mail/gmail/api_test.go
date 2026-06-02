@@ -407,7 +407,7 @@ func TestConvertMessage(t *testing.T) {
 		},
 	}
 
-	msg := connector.convertMessage(gmailMsg, "thread-123")
+	msg := connector.convertMessage(context.Background(), nil, gmailMsg, "thread-123")
 
 	if msg.ID != "msg-123" {
 		t.Errorf("expected message ID 'msg-123', got %q", msg.ID)

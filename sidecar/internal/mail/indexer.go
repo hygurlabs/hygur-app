@@ -10,13 +10,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/ingest"
+	"github.com/hygur/sidecar/internal/ingest/parsers"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
+
+// maxAttachmentTextChars caps how much extracted attachment text is appended to
+// a single mail's indexed body — enough for an invoice/recharge statement
+// without letting a giant PDF dominate the document.
+const maxAttachmentTextChars = 40_000
+
+// maxThreadMessages caps how many messages a single "thread" may contain before
+// the indexer skips it. Generic-subject buckets (Re:/no-subject/newsletters)
+// mis-grouped by subject in a large All Mail folder can balloon to thousands of
+// messages; fetching all their full bodies at once is a multi-GB memory bomb.
+// Real conversations are far smaller, so anything past this is indexing noise.
+const maxThreadMessages = 500
 
 // IndexResult contains the result of indexing an email thread.
 type IndexResult struct {
@@ -77,6 +89,84 @@ func (idx *EmailIndexer) CountItems(ctx context.Context, accountID, provider str
 	return count
 }
 
+// CountAllMail returns the total number of indexed email items across every
+// account and provider. Used to seed the unified connector's item count for the
+// UI, since the per-account CountItems can't represent the aggregate (rows are
+// tagged with a real account id, not the provider name).
+func (idx *EmailIndexer) CountAllMail(ctx context.Context) int64 {
+	if idx.store == nil {
+		return 0
+	}
+	n, err := idx.store.CountKnowledgeItemsBySourceTypes(ctx, []string{"email"})
+	if err != nil {
+		return 0
+	}
+	return int64(n)
+}
+
+// ReconcileAccount deletes indexed mail items of accountID whose content_id is
+// not in `seen` (the set of "email:<threadID>" ids present in the latest full
+// sweep). Returns the number of pruned items. Callers must only invoke this
+// after an UNBOUNDED sweep, or valid items would be wrongly deleted.
+func (idx *EmailIndexer) ReconcileAccount(ctx context.Context, accountID string, seen map[string]struct{}) (int, error) {
+	if idx.store == nil {
+		return 0, fmt.Errorf("store is required")
+	}
+	existing, err := idx.store.ListMailContentIDsByAccount(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, id := range existing {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		if err := idx.store.DeleteKnowledgeItem(ctx, id); err != nil {
+			idx.logger.Warn().Err(err).Str("content_id", id).Msg("reconcile: delete failed")
+			continue
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// extractAttachmentText parses the downloaded PDF attachments across all
+// messages and returns their concatenated text (capped at
+// maxAttachmentTextChars). Returns "" when no attachment bytes are present or
+// nothing parses. Best-effort — per-attachment failures are logged and skipped.
+func (idx *EmailIndexer) extractAttachmentText(ctx context.Context, messages []Message) string {
+	var b strings.Builder
+	// Text-only + process-isolated: the pure-Go PDF parser can allocate tens of
+	// GB on a malformed/bomb PDF (the cause of the sidecar's RAM blowups), so
+	// each attachment is parsed in a short-lived, heap-capped child process that
+	// is killed on timeout. OCR is never run inline (it would saturate the
+	// inference model and stall the sync). Failures yield "" and are skipped.
+	for _, msg := range messages {
+		for _, att := range msg.Attachments {
+			if len(att.Data) == 0 || !IsPDFAttachment(att) {
+				continue
+			}
+			text := parsers.ExtractPDFTextIsolated(ctx, att.Data, parsers.DefaultPDFExtractTimeout)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			name := att.Filename
+			if name == "" {
+				name = "document.pdf"
+			}
+			b.WriteString("\n[Pièce jointe : ")
+			b.WriteString(name)
+			b.WriteString("]\n")
+			b.WriteString(strings.TrimSpace(text))
+			b.WriteString("\n")
+			if b.Len() >= maxAttachmentTextChars {
+				return strings.TrimSpace(b.String())
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // IndexThread indexes a complete email thread into the knowledge store.
 // It normalizes the thread content, checks for duplicates, creates chunks,
 // and optionally generates embeddings.
@@ -97,6 +187,24 @@ func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messag
 	normalizedText, err := idx.normalizer.Normalize(thread, messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to normalize thread: %w", err)
+	}
+
+	// Step 1b: Append text extracted from PDF attachments whose bytes the
+	// connector downloaded. Many statements (recharge totals, invoices) put the
+	// key figures ONLY in the attached PDF; without this they'd be invisible to
+	// both FTS and embeddings. Best-effort — extraction failures are logged and
+	// skipped, never fatal.
+	if attText := idx.extractAttachmentText(ctx, messages); attText != "" {
+		normalizedText = normalizedText + "\n\n" + attText
+	}
+	// Release attachment bytes now that their text is extracted: each can be
+	// several MB and is unused downstream. Holding them across the whole batch
+	// of fetched threads is the main driver of the sidecar's RAM during mail
+	// backfills, so free them per-thread to let the GC reclaim eagerly.
+	for i := range messages {
+		for j := range messages[i].Attachments {
+			messages[i].Attachments[j].Data = nil
+		}
 	}
 
 	if len(normalizedText) < 100 {
@@ -201,62 +309,32 @@ func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messag
 		return nil, fmt.Errorf("failed to insert knowledge item: %w", err)
 	}
 
-	// Step 6: Chunk the text
-	legacyChunks := ingest.ChunkText(normalizedText, ingest.DefaultChunkOptions())
-
-	// Step 7: Insert chunks
-	var storeChunks []store.Chunk
-	for _, legacyChunk := range legacyChunks {
-		chunkID := uuid.New().String()
-		chunkHash := hashContent(legacyChunk.Content)
-
-		chunk := &store.Chunk{
-			ChunkID:   chunkID,
-			ContentID: contentID,
-			ChunkHash: chunkHash,
-			Text:      legacyChunk.Content,
-			Metadata: map[string]any{
-				"index":        legacyChunk.Index,
-				"start_offset": legacyChunk.StartOffset,
-				"end_offset":   legacyChunk.EndOffset,
-			},
-			CreatedAt: now,
+	// Steps 6-8: Chunk the thread into hierarchical sections + embed-sized
+	// chunks and persist them via the single shared indexing path, then embed.
+	// On failure, roll back to keep the DB clean — a KnowledgeItem without
+	// vectors is worse than no item at all.
+	secCount, chunkCount, idxErr := ingest.IndexSections(ctx, idx.store, idx.embeddingService, contentID, normalizedText, ingest.DefaultChunkTokenBudget, now)
+	if idxErr != nil {
+		idx.logger.Error().
+			Err(idxErr).
+			Str("content_id", contentID).
+			Msg("indexing failed; rolling back knowledge item")
+		if delErr := idx.store.DeleteKnowledgeItem(ctx, contentID); delErr != nil {
+			idx.logger.Error().
+				Err(delErr).
+				Str("content_id", contentID).
+				Msg("rollback of failed knowledge item failed; DB may be inconsistent")
 		}
-
-		if err := idx.store.InsertChunk(ctx, chunk); err != nil {
-			idx.logger.Error().Err(err).Int("index", legacyChunk.Index).Msg("failed to insert chunk")
-			return nil, fmt.Errorf("failed to insert chunk %d: %w", legacyChunk.Index, err)
-		}
-
-		storeChunks = append(storeChunks, *chunk)
+		return nil, fmt.Errorf("%w: indexing %s: %v", ErrEmbeddingFailed, contentID, idxErr)
 	}
 
-	// Log successful indexing
 	idx.logger.Info().
 		Str("content_id", contentID).
 		Str("title", item.Title).
-		Int("chunks", len(storeChunks)).
+		Int("sections", secCount).
+		Int("chunks", chunkCount).
 		Str("version_id", versionID).
 		Msg("successfully indexed email thread")
-
-	// Step 8: Generate embeddings. On failure, roll back to keep DB clean —
-	// a KnowledgeItem without vectors is worse than no item at all.
-	if idx.embeddingService != nil && len(storeChunks) > 0 {
-		if embErr := idx.embeddingService.BatchEmbedAndStore(ctx, storeChunks); embErr != nil {
-			idx.logger.Error().
-				Err(embErr).
-				Str("content_id", contentID).
-				Int("chunks", len(storeChunks)).
-				Msg("embedding failed; rolling back knowledge item")
-			if delErr := idx.store.DeleteKnowledgeItem(ctx, contentID); delErr != nil {
-				idx.logger.Error().
-					Err(delErr).
-					Str("content_id", contentID).
-					Msg("rollback of failed knowledge item failed; DB may be inconsistent")
-			}
-			return nil, fmt.Errorf("%w: indexing %s: %v", ErrEmbeddingFailed, contentID, embErr)
-		}
-	}
 
 	// Step 9: Apply auto-tags for mail
 	if idx.autoTagger != nil {
@@ -308,7 +386,7 @@ func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messag
 
 	return &IndexResult{
 		ContentID:  contentID,
-		ChunkCount: len(legacyChunks),
+		ChunkCount: chunkCount,
 		Status:     status,
 	}, nil
 }
@@ -349,8 +427,20 @@ type BatchIndexConfig struct {
 	// AccountID tags every indexed KnowledgeItem with the owner account.
 	AccountID string
 
+	// ReconcileDeletions, when true AND Limit==0 (a full unbounded sweep),
+	// removes previously-indexed mail of this account that wasn't seen in the
+	// sweep — i.e. messages deleted/spammed on the server. Gated on the
+	// unbounded sweep so a capped sync never purges items beyond the cap.
+	ReconcileDeletions bool
+
 	// LabelIDs is forwarded to ListOptions.LabelIDs when fetching threads.
 	LabelIDs []string
+
+	// Since, when non-zero, limits the fetch to threads newer than this time
+	// (incremental sync) — forwarded to ListOptions.Since so the connector does
+	// a SINCE search instead of re-fetching the most-recent Limit threads every
+	// run. Zero means a full fetch.
+	Since time.Time
 }
 
 // DefaultBatchIndexConfig returns the default batch indexing configuration.
@@ -488,6 +578,22 @@ func (mi *MailboxIndexer) IndexMailbox(ctx context.Context, source string, mailb
 	// Process threads with concurrency control using inline sync imports
 	mi.processThreadsConcurrently(ctx, threads, config, stats)
 
+	// Mail-deletion reconciliation (opt-in, full unbounded sweeps only): remove
+	// indexed mail of this account the server no longer returns — deleted/spam
+	// messages stop polluting retrieval. Gated on Limit<=0 so a capped sync
+	// never purges valid items beyond the cap.
+	if config.ReconcileDeletions && config.Limit <= 0 && config.AccountID != "" {
+		seen := make(map[string]struct{}, len(threads))
+		for _, t := range threads {
+			seen["email:"+t.ID] = struct{}{}
+		}
+		if removed, rerr := mi.ReconcileAccount(ctx, config.AccountID, seen); rerr != nil {
+			mi.logger.Warn().Err(rerr).Str("account", config.AccountID).Msg("mail reconcile failed")
+		} else if removed > 0 {
+			mi.logger.Info().Int("removed", removed).Str("account", config.AccountID).Msg("mail reconcile: pruned deleted items")
+		}
+	}
+
 	stats.FinishedAt = time.Now()
 	stats.Duration = stats.FinishedAt.Sub(stats.StartedAt).Seconds()
 
@@ -509,6 +615,10 @@ func (mi *MailboxIndexer) fetchAllThreads(ctx context.Context, mailbox string, c
 		MailboxID: mailbox,
 		LabelIDs:  config.LabelIDs,
 	}
+	if !config.Since.IsZero() {
+		s := config.Since
+		opts.Since = &s
+	}
 	threads, err := mi.connector.ListThreads(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -526,6 +636,14 @@ func (mi *MailboxIndexer) processThreadsConcurrently(ctx context.Context, thread
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
+	// Progress reporter: emit a throttled sync event (~1/s) carrying
+	// processed/total/eta so the UI can show a live loading bar. Also keeps the
+	// activity indicator's watchdog alive during long syncs.
+	progressDone := make(chan struct{})
+	if mi.broker != nil && len(threads) > 0 {
+		go mi.reportSyncProgress(ctx, stats, &mu, config.AccountID, progressDone)
+	}
+
 	for _, thread := range threads {
 		wg.Add(1)
 		sem <- struct{}{} // Acquire semaphore slot
@@ -537,6 +655,24 @@ func (mi *MailboxIndexer) processThreadsConcurrently(ctx context.Context, thread
 			// Create timeout context for this thread
 			threadCtx, cancel := context.WithTimeout(ctx, config.Timeout)
 			defer cancel()
+
+			// Guard against pathologically large "threads": generic-subject
+			// buckets (Re:/no-subject/newsletters) mis-grouped in All Mail can
+			// hold thousands of messages, and fetching all their full bodies at
+			// once is a multi-GB memory bomb (the cause of the sidecar's RAM
+			// blowup). A real conversation is rarely >maxThreadMessages, so skip
+			// these — they're indexing noise, not conversations.
+			if t.MessageCount > maxThreadMessages {
+				mi.logger.Warn().
+					Str("thread_id", t.ID).
+					Int("messages", t.MessageCount).
+					Msg("skipping oversized thread to bound sync memory")
+				mu.Lock()
+				stats.ProcessedThreads++
+				stats.SkippedDuplicates++
+				mu.Unlock()
+				return
+			}
 
 			// Fetch messages for this thread using UIDs when available
 			messages, err := mi.connector.GetMessagesByThread(threadCtx, &t)
@@ -581,4 +717,58 @@ func (mi *MailboxIndexer) processThreadsConcurrently(ctx context.Context, thread
 	}
 
 	wg.Wait()
+	close(progressDone)
+
+	// Final 100% tick so the bar completes before the connector's "completed"
+	// event clears it.
+	if mi.broker != nil && len(threads) > 0 {
+		mi.emitSyncProgress(config.AccountID, len(threads), len(threads), 0)
+	}
+}
+
+// reportSyncProgress emits a sync event roughly once per second with the
+// processed/total thread counts and an ETA, until processing finishes.
+func (mi *MailboxIndexer) reportSyncProgress(ctx context.Context, stats *IndexStats, mu *sync.Mutex, source string, done <-chan struct{}) {
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-t.C:
+			mu.Lock()
+			processed, total, started := stats.ProcessedThreads, stats.TotalThreads, stats.StartedAt
+			mu.Unlock()
+			mi.emitSyncProgress(source, processed, total, etaSeconds(started, processed, total))
+		}
+	}
+}
+
+// emitSyncProgress publishes a running sync event carrying progress + ETA for
+// the UI loading bar. No-op when the broker is unset.
+func (mi *MailboxIndexer) emitSyncProgress(source string, processed, total int, eta float64) {
+	if mi.broker == nil {
+		return
+	}
+	mi.broker.PublishWithType(events.EventTypeSync, events.StatusRunning, source, "syncing mail",
+		map[string]any{"processed": processed, "total": total, "eta_seconds": eta})
+}
+
+// etaSeconds estimates the remaining seconds from the processing rate so far.
+// Returns 0 when it can't be computed yet (no progress, or already complete).
+func etaSeconds(start time.Time, processed, total int) float64 {
+	if processed <= 0 || total <= processed || start.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(start).Seconds()
+	if elapsed <= 0 {
+		return 0
+	}
+	rate := float64(processed) / elapsed // threads/sec
+	if rate <= 0 {
+		return 0
+	}
+	return float64(total-processed) / rate
 }

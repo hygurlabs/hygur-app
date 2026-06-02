@@ -5,64 +5,65 @@ import Foundation
 /// Global hotkey registration via Carbon's Event Manager. We chose Carbon
 /// over `NSEvent.addGlobalMonitorForEvents` because the latter requires the
 /// app to be in the foreground (or hold Accessibility access) to receive
-/// modifier-key combos — neither acceptable for a system-wide "summon Hygur"
-/// shortcut. Carbon hotkeys work app-wide without entitlements as long as
-/// the app isn't sandboxed (Hygur isn't).
+/// modifier-key combos — neither acceptable for system-wide shortcuts. Carbon
+/// hotkeys work app-wide without entitlements as long as the app isn't
+/// sandboxed (Hygur isn't).
 ///
-/// Usage: `HotkeyManager.shared.register(handler: ...)` once at launch with
-/// the user's preferred shortcut. Call `unregister()` before re-registering
-/// with a different shortcut (otherwise both fire).
+/// Supports several independent hotkeys keyed by a small integer `id`
+/// (1 = summon, 2 = quick-ask, …). A single shared Carbon event handler
+/// dispatches each press to the matching Swift closure by reading the
+/// `EventHotKeyID` off the event. Re-registering the same id replaces its
+/// binding; `unregister(id:)` removes just that one.
 @MainActor
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
-    /// Stable signature used to disambiguate our hotkey ID inside the
-    /// shared application event target. The 4-char value is arbitrary; just
-    /// must not clash with another registered hotkey.
-    private static let signature: OSType = 0x48594752 // 'HYGR'
+    /// Stable signature disambiguating our hotkeys inside the shared
+    /// application event target. The 4-char value is arbitrary.
+    private static let signature: OSType = 0x48595352 // 'HYSR'
 
-    private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
-    private var onTrigger: (() -> Void)?
+    private var hotKeys: [UInt32: EventHotKeyRef] = [:] // id → ref
+    private var handlers: [UInt32: () -> Void] = [:]    // id → handler
 
     private init() {}
 
     // No deinit: HotkeyManager is a singleton, so the only "teardown" is
-    // process exit — at which point Carbon releases the hotkey on its own.
-    // Adding a deinit would also clash with Swift 6 strict concurrency
-    // (non-Sendable Carbon refs cannot be touched from a nonisolated deinit).
+    // process exit — Carbon releases the hotkeys on its own. A deinit would
+    // also clash with Swift 6 strict concurrency (non-Sendable Carbon refs
+    // can't be touched from a nonisolated deinit).
 
-    /// Registers a global hotkey. `keyCode` is a Carbon virtual key code
-    /// (e.g. `kVK_ANSI_H`); `modifiers` is the Carbon modifier mask
-    /// (`cmdKey | shiftKey` etc., NOT NSEvent.ModifierFlags). `handler` is
-    /// invoked on the main actor every time the user hits the combo.
-    /// Re-registering replaces any previous binding.
-    func register(
-        keyCode: UInt32,
-        modifiers: UInt32,
-        handler: @escaping () -> Void
-    ) {
-        unregister()
-        onTrigger = handler
-
-        // Carbon dispatch is C-style; pass `self` as opaque user data so
-        // the handler can route the event back to this Swift instance.
+    /// Installs the shared Carbon event handler once. It routes each
+    /// `kEventHotKeyPressed` to the registered closure for that hotkey id.
+    private func ensureEventHandler() {
+        guard eventHandler == nil else { return }
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         var spec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
-        let installStatus = InstallEventHandler(
+        InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, userData -> OSStatus in
-                guard let userData else { return noErr }
+            { _, event, userData -> OSStatus in
+                guard let userData, let event else { return noErr }
+                var hkID = EventHotKeyID()
+                let status = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hkID
+                )
+                guard status == noErr else { return noErr }
                 let manager = Unmanaged<HotkeyManager>
                     .fromOpaque(userData)
                     .takeUnretainedValue()
-                // Hop to main — Carbon delivers the event on the main thread
-                // already, but `onTrigger` is `@MainActor`-isolated and we
-                // want explicit safety here.
-                DispatchQueue.main.async { manager.onTrigger?() }
+                let id = hkID.id
+                // Carbon delivers on the main thread already; the explicit
+                // hop keeps the call site `@MainActor`-clean.
+                DispatchQueue.main.async { manager.handlers[id]?() }
                 return noErr
             },
             1,
@@ -70,42 +71,57 @@ final class HotkeyManager {
             selfPtr,
             &eventHandler
         )
-        guard installStatus == noErr else {
-            NSLog("HotkeyManager: InstallEventHandler failed (\(installStatus))")
-            return
-        }
+    }
 
-        let id = EventHotKeyID(signature: Self.signature, id: 1)
-        let registerStatus = RegisterEventHotKey(
+    /// Registers (or replaces) a global hotkey. `keyCode` is a Carbon virtual
+    /// key code (e.g. `kVK_ANSI_H`); `modifiers` is the Carbon modifier mask
+    /// (`cmdKey | shiftKey`, NOT `NSEvent.ModifierFlags`). `handler` runs on
+    /// the main actor on every press.
+    func register(
+        id: UInt32 = 1,
+        keyCode: UInt32,
+        modifiers: UInt32,
+        handler: @escaping () -> Void
+    ) {
+        unregister(id: id)
+        ensureEventHandler()
+        handlers[id] = handler
+
+        var ref: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
+        let status = RegisterEventHotKey(
             keyCode,
             modifiers,
-            id,
+            hotKeyID,
             GetApplicationEventTarget(),
             0,
-            &hotKeyRef
+            &ref
         )
-        if registerStatus != noErr {
-            NSLog("HotkeyManager: RegisterEventHotKey failed (\(registerStatus)) — likely already taken by another app")
+        if status == noErr {
+            hotKeys[id] = ref
+        } else {
+            NSLog("HotkeyManager: RegisterEventHotKey(id: \(id)) failed (\(status)) — likely taken by another app")
+            handlers[id] = nil
         }
     }
 
-    /// Removes the current hotkey binding. Safe to call when nothing is
-    /// registered. Always called by `register()` before installing a new
-    /// handler so duplicate keystrokes never fire.
-    func unregister() {
-        if let ref = hotKeyRef {
+    /// Removes one hotkey binding. Safe to call when nothing is registered.
+    func unregister(id: UInt32 = 1) {
+        if let ref = hotKeys[id] {
             UnregisterEventHotKey(ref)
-            hotKeyRef = nil
+            hotKeys[id] = nil
         }
-        if let handler = eventHandler {
-            RemoveEventHandler(handler)
-            eventHandler = nil
-        }
-        onTrigger = nil
+        handlers[id] = nil
     }
 
-    /// Convenience binding for the default summon shortcut (Cmd+Shift+H).
-    /// Public so Settings can rebind without re-deriving the constants.
+    // MARK: - Shortcut constants
+
+    /// Summon (bring the window forward, focus Ask). Default Cmd+Shift+H.
     static var defaultKeyCode: UInt32 { UInt32(kVK_ANSI_H) }
     static var defaultModifiers: UInt32 { UInt32(cmdKey | shiftKey) }
+
+    /// Quick-ask floating palette. Cmd+Shift+K.
+    static let quickAskID: UInt32 = 2
+    static var quickAskKeyCode: UInt32 { UInt32(kVK_ANSI_K) }
+    static var quickAskModifiers: UInt32 { UInt32(cmdKey | shiftKey) }
 }

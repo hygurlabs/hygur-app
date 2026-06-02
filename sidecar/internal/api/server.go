@@ -31,6 +31,7 @@ type Server struct {
 	mailHandler      *handlers.MailHandler
 	searchHandler    *handlers.SearchHandler
 	notesHandler     *handlers.NotesHandler
+	sessionsHandler  *handlers.SessionsHandler
 	tagHandler       *handlers.TagHandler
 	graphHandler     *handlers.GraphHandler
 	connectorHandler   *handlers.ConnectorHandler
@@ -41,6 +42,7 @@ type Server struct {
 	timelineHandler  *handlers.TimelineHandler
 	agendaHandler    *handlers.AgendaHandler
 	configHandler    *handlers.ConfigHandler
+	mentionsHandler  *handlers.MentionsHandler
 	interactionsHandler *handlers.InteractionsHandler
 	insightsHandler  *handlers.InsightsHandler
 	token            string // Authentication token for API access
@@ -106,6 +108,11 @@ func (s *Server) SetSearchHandler(handler *handlers.SearchHandler) {
 // This allows dependency injection of the notes handler.
 func (s *Server) SetNotesHandler(handler *handlers.NotesHandler) {
 	s.notesHandler = handler
+}
+
+// SetSessionsHandler sets the chat-sessions handler for the server.
+func (s *Server) SetSessionsHandler(handler *handlers.SessionsHandler) {
+	s.sessionsHandler = handler
 }
 
 // SetRAGChatHandler sets the RAG chat handler for the server.
@@ -377,6 +384,24 @@ func (s *Server) handleBriefRun(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
+// handleBriefMeeting handles POST /brief/meeting.
+func (s *Server) handleBriefMeeting(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.Meeting(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
+// handleBriefingsList handles GET /briefings.
+func (s *Server) handleBriefingsList(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
 // SetTimelineHandler attaches the timeline query handler.
 func (s *Server) SetTimelineHandler(handler *handlers.TimelineHandler) {
 	s.timelineHandler = handler
@@ -424,6 +449,29 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "config handler not configured")
+}
+
+// SetMentionsHandler attaches the mentions autocomplete handler.
+func (s *Server) SetMentionsHandler(handler *handlers.MentionsHandler) {
+	s.mentionsHandler = handler
+}
+
+// handleMentionsSearch handles GET /mentions.
+func (s *Server) handleMentionsSearch(w http.ResponseWriter, r *http.Request) {
+	if s.mentionsHandler != nil {
+		s.mentionsHandler.Search(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "mentions handler not configured")
+}
+
+// handleKnowledgeUpload handles POST /knowledge/upload.
+func (s *Server) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.Upload(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
 }
 
 // SetInteractionsHandler attaches the interactions ingestion handler.

@@ -19,10 +19,13 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
 CREATE INDEX IF NOT EXISTS idx_knowledge_items_source_type ON knowledge_items(source_type);
 CREATE INDEX IF NOT EXISTS idx_knowledge_items_created_at ON knowledge_items(created_at);
 
--- chunks stores embeddings-ready text chunks
+-- chunks stores embeddings-ready text chunks.
+-- section_id links a chunk to its parent logical block (the sections table):
+-- chunks are the precise recall unit, sections are the big block given to the LLM.
 CREATE TABLE IF NOT EXISTS chunks (
     chunk_id TEXT PRIMARY KEY,
     content_id TEXT NOT NULL REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    section_id TEXT,
     chunk_hash TEXT NOT NULL,
     embedding_model TEXT,
     text TEXT NOT NULL,
@@ -31,6 +34,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_content_id ON chunks(content_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_section_id ON chunks(section_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(chunk_hash);
 
 -- chunk_vectors stores embedding vectors for semantic search
@@ -41,6 +45,28 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunk_vectors_chunk_id ON chunk_vectors(chunk_id);
+
+-- sections stores complete logical blocks of a document (a heading and its body
+-- down to the next same-or-higher heading). Hierarchical retrieval narrows
+-- document -> section, then hands the section's full_text to the model instead
+-- of an arbitrary fixed-size chunk ("small-to-big"). parent_section_id encodes
+-- the heading hierarchy; level is the heading depth (1=H1…, 0 = preamble/root).
+CREATE TABLE IF NOT EXISTS sections (
+    section_id TEXT PRIMARY KEY,
+    content_id TEXT NOT NULL REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    parent_section_id TEXT,
+    heading TEXT,
+    heading_path TEXT,  -- JSON array of ancestor headings incl. self, root-first
+    level INTEGER NOT NULL DEFAULT 0,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    full_text TEXT NOT NULL,
+    token_count INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT,  -- JSON
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sections_content_id ON sections(content_id);
+CREATE INDEX IF NOT EXISTS idx_sections_parent ON sections(parent_section_id);
 
 -- projects organizes knowledge items into groups
 CREATE TABLE IF NOT EXISTS projects (
@@ -148,7 +174,37 @@ CREATE TABLE IF NOT EXISTS interaction_log (
 
 CREATE INDEX IF NOT EXISTS idx_interaction_log_kind_time ON interaction_log(kind, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_interaction_log_occurred_at ON interaction_log(occurred_at);
+
+-- chat_sessions persists conversations so the user can reopen prior exchanges.
+-- Unlike the in-memory session.Store (entities/topic cache, TTL-evicted), this
+-- is the durable transcript. project_id optionally scopes a conversation to a
+-- project for the global "unification" (chat ↔ project association).
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at ON chat_sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_id ON chat_sessions(project_id);
+
+-- chat_messages stores each turn (user + assistant). The sources column holds
+-- the JSON RAGSource array cited by an assistant turn so the transcript can be
+-- rehydrated with its citations. ordinal preserves turn order within a session.
+CREATE TABLE IF NOT EXISTS chat_messages (
+    message_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+    role TEXT NOT NULL,           -- user | assistant
+    content TEXT NOT NULL,
+    sources TEXT,                 -- JSON array of RAGSource (assistant turns only)
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, ordinal);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 8
+const CurrentSchemaVersion = 10

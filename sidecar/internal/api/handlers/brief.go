@@ -4,16 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/hygur/sidecar/internal/scheduler"
+	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
 
-// BriefHandler exposes on-demand triggers for the daily brief task.
+// BriefHandler exposes on-demand triggers for the daily brief task plus the
+// meeting-briefing endpoint and the unified briefings listing.
 type BriefHandler struct {
-	brief  *scheduler.DailyBrief
-	logger zerolog.Logger
+	brief   *scheduler.DailyBrief
+	meeting *scheduler.MeetingBriefer
+	store   *store.DB
+	logger  zerolog.Logger
 }
 
 // NewBriefHandler builds a brief handler. The brief argument may be nil
@@ -26,11 +32,22 @@ func NewBriefHandler(brief *scheduler.DailyBrief, logger zerolog.Logger) *BriefH
 	}
 }
 
+// SetMeetingBriefer wires the meeting briefer used by POST /brief/meeting.
+func (h *BriefHandler) SetMeetingBriefer(m *scheduler.MeetingBriefer) { h.meeting = m }
+
+// SetStore wires the store used by GET /briefings to list stored briefs.
+func (h *BriefHandler) SetStore(db *store.DB) { h.store = db }
+
 // briefRunRequest is the JSON body accepted by POST /brief/run. All fields
 // are optional. An empty body runs the default daily brief immediately.
 type briefRunRequest struct {
 	ProjectID     string `json:"project_id,omitempty"`
 	LookbackHours int    `json:"lookback_hours,omitempty"`
+	// On-demand contextual brief (WebUI "New briefing"): scope to these
+	// projects/items and steer with free-text instructions.
+	ProjectIDs   []string `json:"project_ids,omitempty"`
+	ContentIDs   []string `json:"content_ids,omitempty"`
+	Instructions string   `json:"instructions,omitempty"`
 }
 
 // briefRunResponse acknowledges that a brief is in flight. The actual
@@ -64,6 +81,9 @@ func (h *BriefHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	opts := scheduler.RunOptions{
 		ProjectID:     req.ProjectID,
 		LookbackHours: req.LookbackHours,
+		ProjectIDs:    req.ProjectIDs,
+		ContentIDs:    req.ContentIDs,
+		Instructions:  req.Instructions,
 	}
 
 	go func(opts scheduler.RunOptions) {
@@ -87,6 +107,117 @@ func (h *BriefHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// meetingBriefRequest is the JSON body for POST /brief/meeting, sent by the
+// macOS app ~30 min before a calendar event.
+type meetingBriefRequest struct {
+	EventID   string   `json:"event_id"`
+	Title     string   `json:"title"`
+	Attendees []string `json:"attendees,omitempty"`
+	Notes     string   `json:"notes,omitempty"`
+	Location  string   `json:"location,omitempty"`
+	Start     string   `json:"start"` // RFC3339
+}
+
+// Meeting handles POST /brief/meeting — generate a briefing for one calendar
+// event synchronously and return it. When the KB has no relevant context the
+// response carries relevant=false and no notification is emitted.
+func (h *BriefHandler) Meeting(w http.ResponseWriter, r *http.Request) {
+	if h.meeting == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "MEETING_BRIEF_DISABLED", "Meeting briefing is not configured.")
+		return
+	}
+	var req meetingBriefRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeBriefError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
+		return
+	}
+	if req.Title == "" {
+		writeBriefError(w, http.StatusBadRequest, "VALIDATION_ERROR", "title is required")
+		return
+	}
+	when := time.Now()
+	if req.Start != "" {
+		if t, err := time.Parse(time.RFC3339, req.Start); err == nil {
+			when = t
+		}
+	}
+	key := req.EventID
+	if key == "" {
+		key = req.Title
+	}
+	result, err := h.meeting.Generate(r.Context(), scheduler.MeetingInput{
+		Kind:      "calendar",
+		Key:       key,
+		Title:     req.Title,
+		Attendees: req.Attendees,
+		Notes:     req.Notes,
+		Location:  req.Location,
+		When:      when,
+	})
+	if err != nil {
+		h.logger.Warn().Err(err).Str("title", req.Title).Msg("meeting brief failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate briefing")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// BriefingDTO is one entry in the unified briefings list (daily + meeting).
+type BriefingDTO struct {
+	ContentID string `json:"content_id"`
+	Title     string `json:"title"`
+	Kind      string `json:"kind"` // "brief" | "meeting_brief"
+	Content   string `json:"content"`
+	When      string `json:"when,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+// List handles GET /briefings — returns daily briefs and meeting briefings,
+// most recent first.
+func (h *BriefHandler) List(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "briefings store not configured")
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	var items []*store.KnowledgeItem
+	for _, st := range []string{"brief", "meeting_brief"} {
+		got, err := h.store.ListKnowledgeItemsBySourceType(r.Context(), st, limit, 0)
+		if err != nil {
+			h.logger.Warn().Err(err).Str("source_type", st).Msg("list briefings failed")
+			continue
+		}
+		items = append(items, got...)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	out := make([]BriefingDTO, 0, len(items))
+	for _, it := range items {
+		dto := BriefingDTO{
+			ContentID: it.ContentID,
+			Title:     it.Title,
+			Kind:      it.SourceType,
+			Content:   it.NormalizedText,
+			CreatedAt: it.CreatedAt.Format(time.RFC3339),
+		}
+		if when, ok := it.Metadata["when"].(string); ok {
+			dto.When = when
+		}
+		out = append(out, dto)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"briefings": out})
 }
 
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {

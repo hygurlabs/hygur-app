@@ -7,10 +7,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	_ "net/http/pprof" // registered on the pprof mux, only served when HYGUR_PPROF is set
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -20,6 +24,7 @@ import (
 	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
 	filesconnector "github.com/hygur/sidecar/internal/connectors/files"
+	caldavconnector "github.com/hygur/sidecar/internal/connectors/caldav"
 	imapconnector "github.com/hygur/sidecar/internal/connectors/imap"
 	mailconnector "github.com/hygur/sidecar/internal/connectors/mail"
 	notesconnector "github.com/hygur/sidecar/internal/connectors/notes"
@@ -43,9 +48,60 @@ import (
 )
 
 func main() {
+	// Isolated PDF text extraction: re-invocations of this binary with the
+	// "pdf-extract" subcommand run a short-lived child that parses one PDF from
+	// stdin and exits. A malformed PDF / decompression bomb can make the pure-Go
+	// parser allocate tens of GB, so we sandbox it in a process that self-caps
+	// its heap and is killed on timeout — the sidecar is never touched. This
+	// MUST run before any normal startup (no port bind, no DB).
+	if len(os.Args) > 1 && os.Args[1] == parsers.PDFExtractSubcommand {
+		parsers.RunPDFExtractSubprocess() // never returns
+		return
+	}
+
 	// Set up signal handling for graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Soft heap cap so the sidecar stays small on modest machines. The mail
+	// pipeline now bounds its per-thread working set, so this is a safety net
+	// against accumulation rather than the primary control. Default 1 GiB;
+	// override with HYGUR_MEM_LIMIT_MIB (0 disables). Go also honours GOMEMLIMIT
+	// natively if set in the environment.
+	memLimitMiB := 1024
+	if v := os.Getenv("HYGUR_MEM_LIMIT_MIB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			memLimitMiB = n
+		}
+	}
+	if memLimitMiB > 0 {
+		debug.SetMemoryLimit(int64(memLimitMiB) << 20)
+	}
+
+	// Memory hygiene: Go keeps freed heap pages mapped by default, so a one-off
+	// peak stays resident as RSS long after the work is done. Periodically hand
+	// idle memory back to the OS so the footprint tracks the working set.
+	go func() {
+		t := time.NewTicker(90 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				debug.FreeOSMemory()
+			}
+		}
+	}()
+
+	// Optional pprof for memory/CPU profiling: set HYGUR_PPROF to a loopback
+	// addr (e.g. "127.0.0.1:6060"), then `go tool pprof http://…/debug/pprof/heap`.
+	if addr := os.Getenv("HYGUR_PPROF"); addr != "" {
+		go func() {
+			srv := &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second}
+			_ = srv.ListenAndServe()
+		}()
+	}
 
 	// Initialize structured logger
 	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
@@ -114,6 +170,29 @@ func main() {
 	// Create LLM client
 	llmClient := llm.NewClient(&cfg.LMStudio)
 
+	// Indexing client: a fast small model for ingestion-time Tier 2 NER
+	// (lm_studio.indexing_url / model_indexing, e.g. minicpm5). A 1B model at
+	// ~1000 tok/s across many connections processes bulk extraction far faster
+	// than the big default model (~50 tok/s, few connections). Tier 2 is bounded
+	// (≈6000 runes in, 1024 out, strict JSON + repair), so it stays within a
+	// small model's context and instruction-following. Falls back to the default
+	// client when neither indexing_url nor model_indexing is set.
+	indexingClient := llmClient
+	if cfg.LMStudio.IndexingURL != "" || cfg.LMStudio.ModelIndexing != "" {
+		idxCfg := cfg.LMStudio
+		if cfg.LMStudio.IndexingURL != "" {
+			idxCfg.URL = cfg.LMStudio.IndexingURL
+		}
+		if cfg.LMStudio.ModelIndexing != "" {
+			idxCfg.ModelDefault = cfg.LMStudio.ModelIndexing
+		}
+		indexingClient = llm.NewClient(&idxCfg)
+		logger.Info().
+			Str("url", idxCfg.URL).
+			Str("model", idxCfg.ModelDefault).
+			Msg("indexing model client configured for Tier 2 extraction")
+	}
+
 	// Check LM Studio connectivity
 	available, err := llmClient.Ping(ctx)
 	if err != nil {
@@ -136,8 +215,30 @@ func main() {
 	defer db.Close()
 	logger.Info().Str("path", cfg.Store.Path).Msg("database initialized")
 
+	// Bridge the vision config to the env vars the PDF/image parsers read, so
+	// scanned-PDF and image OCR can use the local multimodal model (portable, no
+	// system Tesseract needed). Defaults to the inference endpoint + default
+	// model, since a multimodal model served there (e.g. nemotron-omni) handles
+	// both chat and vision. Empty endpoint leaves OCR a fail-soft no-op.
+	visionURL := cfg.LMStudio.VisionURL
+	if visionURL == "" {
+		visionURL = cfg.LMStudio.URL
+	}
+	visionModel := cfg.LMStudio.VisionModel
+	if visionModel == "" {
+		visionModel = cfg.LMStudio.ModelDefault
+	}
+	if visionURL != "" {
+		_ = os.Setenv("HYGUR_VISION_ENDPOINT", visionURL)
+		if visionModel != "" {
+			_ = os.Setenv("HYGUR_VISION_MODEL", visionModel)
+		}
+		logger.Info().Str("vision_url", visionURL).Str("vision_model", visionModel).Msg("vision OCR fallback enabled")
+	}
+
 	// Create ingestor with store, embeddings, and register parsers
 	ingestor := ingest.NewIngestorWithEmbeddings(db, llmClient)
+	ingestor.SetIndexingClient(indexingClient) // Tier 2 NER on the fast small model
 	ingestor.RegisterParser(parsers.NewMarkdownParser())
 	ingestor.RegisterParser(parsers.NewTXTParser())
 	ingestor.RegisterParser(parsers.NewPDFParser())
@@ -148,6 +249,9 @@ func main() {
 
 	// Create handlers
 	knowledgeHandler := handlers.NewKnowledgeHandler(db, ingestor, searcher, logger)
+	// Uploaded files (WebUI paperclip) are saved here before ingestion so their
+	// source_path stays valid after the request.
+	knowledgeHandler.SetUploadDir(filepath.Join(dataDir, "uploads"))
 	projectHandler := handlers.NewProjectHandler(db, logger)
 
 	// Create mail components
@@ -202,10 +306,30 @@ func main() {
 	// Plugin manager — registers connector adapters and loads saved configs.
 	pluginManager := plugin.NewManager(credStore, logger)
 
-	mailConn := mailconnector.New(protonConnector, gmailConnector, emailIndexer, summarizeTool, listAttachmentsTool, credStore, logger)
-	// Wire up connection pooling with auto-reconnection.
-	mailConn.SetProtonSession(protonSession)
-	mailConn.SetGmailSession(gmailSession)
+	// Distinct per-provider connectors replace the legacy unified "Email"
+	// connector. Each pins a single provider (own Info/schema/id) but reuses the
+	// same tested sync engine + shared connection objects. Credentials still
+	// live under the merged "mail" record, so existing Proton/Gmail auth keeps
+	// working with no re-auth. IMAP keeps its own dedicated multi-instance
+	// connector (registered below).
+	protonConn := mailconnector.New(protonConnector, nil, emailIndexer, summarizeTool, listAttachmentsTool, credStore, logger)
+	protonConn.SetPinnedProvider("proton")
+	protonConn.SetProtonSession(protonSession)
+
+	gmailConn := mailconnector.New(nil, gmailConnector, emailIndexer, summarizeTool, listAttachmentsTool, credStore, logger)
+	gmailConn.SetPinnedProvider("gmail")
+	gmailConn.SetGmailSession(gmailSession)
+
+	// Mail.app is intrinsically multi-account: it owns the account registry and
+	// the per-account runner used by the WebUI mail views.
+	mailappConn := mailconnector.New(nil, nil, emailIndexer, summarizeTool, listAttachmentsTool, credStore, logger)
+	mailappConn.SetPinnedProvider("mailapp")
+
+	mailProviders := []*mailconnector.MailConnector{protonConn, gmailConn, mailappConn}
+	for _, mc := range mailProviders {
+		// Opt-in: prune KB mail deleted/spammed on the server after a full sweep.
+		mc.SetReconcileDeletions(cfg.Mail.ReconcileDeletions)
+	}
 
 	// Migrate legacy credentials to the multi-account schema (idempotent).
 	if credStore != nil {
@@ -218,7 +342,10 @@ func main() {
 				Int64("knowledge_items_moved", migRes.KnowledgeItemsMoved).
 				Msg("legacy mail credentials migrated to multi-account schema")
 		}
-		if n, lErr := mailConn.LoadAccountsFromCredStore(); lErr != nil {
+		// Only the Mail.app connector holds the multi-account registry; Proton
+		// and Gmail sync via their legacy single-source path, so loading the
+		// registry here does not double-sync them.
+		if n, lErr := mailappConn.LoadAccountsFromCredStore(); lErr != nil {
 			logger.Warn().Err(lErr).Msg("loading mail accounts from credential store failed")
 		} else if n > 0 {
 			logger.Info().Int("accounts", n).Msg("mail accounts registered")
@@ -226,22 +353,65 @@ func main() {
 	}
 
 	// Wire the multi-account runner + per-account counts onto the mail handler.
-	mailHandler.SetAccountRunner(mailconnector.AsAccountRunner(mailConn))
+	mailHandler.SetAccountRunner(mailconnector.AsAccountRunner(mailappConn))
 	mailHandler.SetAccountCounts(db)
 
 	notesConn := notesconnector.New(createNoteTool, db, embeddingService)
 	filesConn := filesconnector.New(ingestor, db)
-	imapConn := imapconnector.New(db, nil, logger) // broker wired below after events setup
-	_ = pluginManager.Register(mailConn)
+	imapConn := imapconnector.New(db, embeddingService, nil, logger) // broker wired below after events setup
+	caldavConn := caldavconnector.New(db, embeddingService, nil, logger)
+	_ = pluginManager.Register(protonConn)
+	_ = pluginManager.Register(gmailConn)
+	_ = pluginManager.Register(mailappConn)
 	_ = pluginManager.Register(notesConn)
 	_ = pluginManager.Register(filesConn)
 	_ = pluginManager.Register(imapConn)
+	_ = pluginManager.Register(caldavConn)
 
 	// Register IMAP factory for multi-instance support.
 	// Broker is nil here; dynamic instances get it wired below via SetBroker iteration.
 	pluginManager.RegisterFactory("imap", func() plugin.Connector {
-		return imapconnector.New(db, nil, logger)
+		return imapconnector.New(db, embeddingService, nil, logger)
 	})
+
+	// Register CalDAV factory for multi-instance support (multi-compte +).
+	// Dynamic instances get the broker wired below via the SetBroker iteration.
+	pluginManager.RegisterFactory("caldav", func() plugin.Connector {
+		return caldavconnector.New(db, embeddingService, nil, logger)
+	})
+
+	// Migrate a legacy unified "mail" connector config (written by pre-split
+	// builds) to the per-provider keys, so existing installs keep their enabled
+	// state + settings instead of starting unconfigured after the upgrade.
+	if legacy, ok := cfg.Connectors["mail"]; ok {
+		s := legacy.Settings
+		if s == nil {
+			s = map[string]string{}
+		}
+		if _, exists := cfg.Connectors["proton"]; !exists && s["username"] != "" {
+			cfg.Connectors["proton"] = config.ConnectorSettings{
+				Enabled:  legacy.Enabled,
+				Schedule: legacy.Schedule,
+				Settings: map[string]string{"username": s["username"], "proton_mailbox": s["proton_mailbox"], "limit": s["limit"]},
+			}
+		}
+		if _, exists := cfg.Connectors["gmail"]; !exists && s["gmail_mailbox"] != "" {
+			cfg.Connectors["gmail"] = config.ConnectorSettings{
+				Enabled:  legacy.Enabled,
+				Schedule: legacy.Schedule,
+				Settings: map[string]string{"gmail_mailbox": s["gmail_mailbox"], "limit": s["limit"]},
+			}
+		}
+		if _, exists := cfg.Connectors["mailapp"]; !exists {
+			cfg.Connectors["mailapp"] = config.ConnectorSettings{
+				Enabled:  legacy.Enabled,
+				Schedule: legacy.Schedule,
+				Settings: map[string]string{"limit": s["limit"], "mailapp_mailbox": s["mailapp_mailbox"]},
+			}
+		}
+		delete(cfg.Connectors, "mail")
+		logger.Info().Msg("migrated legacy unified 'mail' connector config to proton/gmail/mailapp")
+	}
 
 	// Apply connector configs persisted in config.yaml.
 	for id, settings := range cfg.Connectors {
@@ -251,6 +421,10 @@ func main() {
 			Schedule: settings.Schedule,
 		})
 	}
+
+	// Provider connectors (proton/gmail/mailapp) are keyed by their own ids, so
+	// the Configure loop above + pluginManager.Start below initialise each from
+	// its config.Connectors entry — no special-case init needed anymore.
 
 	// Reload dynamic connector instances from config.yaml (multi-compte).
 	for _, inst := range cfg.ConnectorInstances {
@@ -270,6 +444,12 @@ func main() {
 
 	connectorHandler := handlers.NewConnectorHandler(pluginManager, credStore, configPath, logger)
 	configHandler := handlers.NewConfigHandler(cfg, configPath, logger)
+	// Apply runtime-relevant config changes from PATCH /config without a restart.
+	configHandler.SetOnChange(func(c *config.Config) {
+		for _, mc := range mailProviders {
+			mc.SetReconcileDeletions(c.Mail.ReconcileDeletions)
+		}
+	})
 	marketplaceHandler := handlers.NewMarketplaceHandler(pluginManager, logger)
 
 	// Create notes handler with embedding support for RAG search
@@ -355,6 +535,10 @@ func main() {
 	toolRegistry.MustRegister(createCalendarEventTool)
 	ragChatHandler.SetToolRegistry(toolRegistry)
 
+	// Persistent chat transcripts — the handler saves each turn (user +
+	// assistant + cited sources) so conversations can be reopened later.
+	ragChatHandler.SetChatStore(db)
+
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)
@@ -363,6 +547,8 @@ func main() {
 	server.SetProjectHandler(projectHandler)
 	server.SetMailHandler(mailHandler)
 	server.SetNotesHandler(notesHandler)
+	server.SetSessionsHandler(handlers.NewSessionsHandler(db, logger))
+	server.SetMentionsHandler(handlers.NewMentionsHandler(db, logger))
 	server.SetSearchHandler(searchHandler)
 	server.SetRAGChatHandler(ragChatHandler)
 	server.SetTagHandler(tagHandler)
@@ -385,8 +571,10 @@ func main() {
 	server.SetTimelineHandler(timelineHandler)
 
 	// Agenda handler — extracts upcoming deadlines from recent knowledge items
-	// and exposes them via GET /agenda/context.
-	agendaExtractor := agenda.NewExtractor(llmClient)
+	// and exposes them via GET /agenda/context. Deadline extraction is a factual
+	// extraction task (not synthesis), so it runs on the fast indexing model
+	// (minicpm5 @ indexing_url) rather than the big inference model.
+	agendaExtractor := agenda.NewExtractor(indexingClient)
 	agendaHandler := handlers.NewAgendaHandler(agendaExtractor, db, logger)
 	server.SetAgendaHandler(agendaHandler)
 
@@ -413,6 +601,9 @@ func main() {
 	// Wire the broker into the IMAP connector so sync completions emit events.
 	imapConn.SetBroker(broker)
 
+	// Wire the broker into the CalDAV connector so calendar syncs emit events.
+	caldavConn.SetBroker(broker)
+
 	// Wire broker into any dynamic IMAP instances loaded from config.
 	for _, inst := range pluginManager.ListInstances() {
 		if conn, ok := pluginManager.Get(inst.InstanceID); ok {
@@ -425,7 +616,9 @@ func main() {
 	// Wire the digest pipeline so each mail sync cycle ends with a
 	// mail_digest event aggregating the priority_mail items it produced.
 	mailSummarizer := retrieval.NewMailSummarizer(llmClient)
-	mailConn.SetDigestPipeline(broker, db, mailSummarizer)
+	for _, mc := range mailProviders {
+		mc.SetDigestPipeline(broker, db, mailSummarizer)
+	}
 
 	// Background watcher for LM Studio reachability — emits a single event
 	// each time up/down flips. The macOS app uses this to drive the menubar
@@ -448,6 +641,18 @@ func main() {
 	}
 	briefHandler := handlers.NewBriefHandler(dailyBrief, logger)
 	server.SetBriefHandler(briefHandler)
+
+	// Meeting briefings — short RAG briefings ahead of events/deadlines.
+	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
+	//    each event (it owns EventKit); the briefer generates + emits the SSE.
+	//  - Mail-extracted deadlines: the scheduler below briefs them the morning
+	//    they fall due. Both paths emit a `meeting_briefing` event the app turns
+	//    into a notification, and persist a `meeting_brief` knowledge item that
+	//    the Briefings view lists.
+	meetingBriefer := scheduler.NewMeetingBriefer(db, llmClient, unifiedSearcher, broker, logger)
+	briefHandler.SetMeetingBriefer(meetingBriefer)
+	briefHandler.SetStore(db)
+	scheduler.NewMeetingBriefScheduler(meetingBriefer, db, agendaExtractor, 8, logger).Start(ctx)
 
 	// Agenda scheduler — runs daily at 08:00, emits agenda_alert events for
 	// high-priority items due within the next 48 h.

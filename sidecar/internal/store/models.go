@@ -23,13 +23,35 @@ type KnowledgeItem struct {
 
 // Chunk represents a chunk of a knowledge item for embedding purposes.
 type Chunk struct {
-	ChunkID        string
-	ContentID      string
+	ChunkID   string
+	ContentID string
+	// SectionID links the chunk to its parent logical block (see Section).
+	// nil for chunks produced before hierarchical chunking (schema < v9).
+	SectionID      *string
 	ChunkHash      string
 	EmbeddingModel *string
 	Text           string
 	Metadata       map[string]any
 	CreatedAt      time.Time
+}
+
+// Section is a complete logical block of a document — a heading and its body
+// down to the next same-or-higher heading. Sections are the "big" unit of the
+// small-to-big retrieval strategy: chunks give precise recall, but the full
+// section is what gets handed to the LLM so it reasons over a coherent block
+// instead of an arbitrary fixed-size slice.
+type Section struct {
+	SectionID       string
+	ContentID       string
+	ParentSectionID *string  // nil for top-level sections
+	Heading         string   // this section's heading text ("" for preamble/root)
+	HeadingPath     []string // ancestor headings incl. self, root-first
+	Level           int      // heading depth: 1=H1, 2=H2…; 0 = preamble/root
+	Ordinal         int      // order within the document
+	FullText        string   // the complete logical block
+	TokenCount      int
+	Metadata        map[string]any
+	CreatedAt       time.Time
 }
 
 // Project represents a project that groups knowledge items.

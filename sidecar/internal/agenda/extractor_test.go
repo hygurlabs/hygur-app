@@ -192,3 +192,21 @@ func TestFailSoftWhenLLMErrors(t *testing.T) {
 		t.Errorf("expected 2026-12-31, got %s", actions[0].DeadlineISO)
 	}
 }
+
+func TestExtractJSONArray(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"plain", `[{"what":"x"}]`, `[{"what":"x"}]`},
+		{"think_block", "<think>\nFirst I reason...\n</think>\n[{\"what\":\"x\"}]", `[{"what":"x"}]`},
+		{"think_with_prose", "Voici le JSON:\n[{\"what\":\"y\"}]\nVoilà.", `[{"what":"y"}]`},
+		{"unclosed_think_no_json", "<think>\nFirst, I need to extract actions with deadlines", ""},
+		{"empty_array", "<think>nothing</think>[]", `[]`},
+		{"no_array", "no deadlines found", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := extractJSONArray(c.in); got != c.want {
+				t.Errorf("extractJSONArray(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

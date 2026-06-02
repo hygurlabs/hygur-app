@@ -3,6 +3,10 @@ import SwiftUI
 
 @main
 struct HygurApp: App {
+    // Keeps the app alive when the window is closed (menu-bar app) and brings
+    // the window back on Dock-icon reopen. See AppDelegate / WindowAccess.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     @AppStorage("lastSidebarSelection") private var lastSidebarSelectionRaw: String = "chat"
 
     // Backs the Services menu entry "Add to Hygur". Held as a strong
@@ -10,10 +14,6 @@ struct HygurApp: App {
     // reference and the provider would otherwise be deallocated as soon
     // as the `.task` block returns.
     @State private var servicesProvider = HygurServiceProvider()
-
-    // Gates the first-run onboarding sheet. Flipped to `true` when the user
-    // either finishes the flow or chooses Start chatting on the final step.
-    @AppStorage("onboarding.completed") private var onboardingCompleted: Bool = false
 
     // Single, app-wide event stream consumer. Connects to /events on the
     // sidecar at launch and fans events out to the menubar, ActivityView,
@@ -48,8 +48,6 @@ struct HygurApp: App {
     // prompt fires until the agenda or a tool-driven create touches the API).
     @State private var calendar = CalendarService.shared
 
-    @State private var showOnboarding: Bool = false
-
     /// Master switch for the global summon hotkey (default Cmd+Shift+H).
     /// Stored in UserDefaults so power users can disable it from Settings if
     /// it clashes with another app's binding.
@@ -62,8 +60,12 @@ struct HygurApp: App {
     @AppStorage("ui.menuBarOnly") private var menuBarOnly: Bool = false
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        WindowGroup("Hygur", id: "main") {
+            // The entire Hygur interface is the React/TS web app served by the
+            // sidecar and hosted in a WKWebView. Native-only surfaces (model
+            // settings, connectors) stay reachable via the Settings scene
+            // (Cmd+,) and the menu bar.
+            WebShellView()
                 .environment(eventStream)
                 .environment(supervisor)
                 .environment(updater)
@@ -71,30 +73,6 @@ struct HygurApp: App {
                 .environment(inspectorSelection)
                 .environment(voiceService)
                 .environment(calendar)
-                .sheet(isPresented: $showOnboarding) {
-                    OnboardingView(onComplete: {
-                        onboardingCompleted = true
-                        showOnboarding = false
-                    })
-                    // Sheets present a fresh environment scope on macOS 26;
-                    // re-inject the @Observable services the steps need so
-                    // `@Environment(SidecarSupervisor.self)` resolves inside
-                    // the sheet (otherwise the Connect AI model step crashes
-                    // on transition).
-                    .environment(eventStream)
-                    .environment(supervisor)
-                    .environment(updater)
-                    .environment(calendar)
-                    .interactiveDismissDisabled()
-                }
-                .onAppear {
-                    // Surface the onboarding sheet on the very first launch.
-                    // Subsequent launches see `onboardingCompleted == true`
-                    // and the sheet stays dismissed.
-                    if !onboardingCompleted {
-                        showOnboarding = true
-                    }
-                }
                 .onOpenURL { url in
                     handleHygurURL(url)
                 }
@@ -212,6 +190,12 @@ struct HygurApp: App {
                     // Start the event consumer once the sidecar URL is known.
                     eventStream.start(sidecar: SidecarService.fromSettings())
 
+                    // Calendar-event meeting briefings: a native timer asks the
+                    // sidecar to brief ~30 min before each event in the
+                    // user-selected calendars (gated by the calendar.briefing.*
+                    // UserDefaults the WebUI calendar bridge writes).
+                    MeetingBriefingScheduler.shared.start()
+
                     // Phase 1 (pair mode) — wire the InteractionLogger so the
                     // sidecar can record signals from chat / brief / memory /
                     // connector flows. The provider closure resolves a fresh
@@ -236,6 +220,17 @@ struct HygurApp: App {
                             summonHygur()
                         }
                     }
+
+                    // Global quick-ask palette (Cmd+Shift+K): write to Hygur
+                    // without opening the window. Chat queries deep-link into
+                    // the web UI via summonHygur(prefill:).
+                    HotkeyManager.shared.register(
+                        id: HotkeyManager.quickAskID,
+                        keyCode: HotkeyManager.quickAskKeyCode,
+                        modifiers: HotkeyManager.quickAskModifiers
+                    ) {
+                        QuickAskController.shared.toggle()
+                    }
                 }
                 .onChange(of: summonHotkeyEnabled) { _, enabled in
                     if enabled {
@@ -253,8 +248,19 @@ struct HygurApp: App {
                     applyMenuBarOnlyMode()
                 }
         }
-        .windowStyle(.hiddenTitleBar)
         .commands {
+            // Cmd+, opens the integrated WebUI Settings panel instead of the
+            // legacy SwiftUI Settings scene (which we're migrating away from).
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    WindowAccess.shared.reveal()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        NotificationCenter.default.post(name: .navigateToSection, object: "settings")
+                    }
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("New Note") {
                     NotificationCenter.default.post(name: .showNewNoteSheet, object: nil)
@@ -319,13 +325,6 @@ struct HygurApp: App {
                 Button("Check for Updates…") {
                     NotificationCenter.default.post(name: .openUpdatesPane, object: nil)
                 }
-                #if DEBUG
-                Divider()
-                Button("Reset Onboarding…") {
-                    onboardingCompleted = false
-                    showOnboarding = true
-                }
-                #endif
             }
 
             // Native Help menu — replaces the autogenerated "Hygur Help" item
@@ -409,13 +408,13 @@ fileprivate func applyMenuBarOnlyMode() {
 /// quick action so the activation path is identical regardless of trigger.
 @MainActor
 func summonHygur(prefill: String? = nil) {
-    NSApp.activate(ignoringOtherApps: true)
-    for window in NSApp.windows where window.canBecomeMain {
-        window.makeKeyAndOrderFront(nil)
-        break
+    WindowAccess.shared.reveal()
+    // Defer routing so a freshly reopened window has mounted its web view
+    // before we drive its hash router (which deep-links the prefilled query).
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        NotificationCenter.default.post(name: .navigateToSection, object: "chat")
+        NotificationCenter.default.post(name: .focusChatInput, object: prefill)
     }
-    NotificationCenter.default.post(name: .navigateToSection, object: "chat")
-    NotificationCenter.default.post(name: .focusChatInput, object: prefill)
 }
 
 // MARK: - URL Routing

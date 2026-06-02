@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -93,6 +94,7 @@ func (m *Manager) Configure(id string, cfg ConnectorConfig) error {
 		m.mu.Unlock()
 		return fmt.Errorf("connector %q not found", id)
 	}
+	conn := m.connectors[id]
 	m.configs[id] = cfg
 	m.mu.Unlock()
 
@@ -101,13 +103,29 @@ func (m *Manager) Configure(id string, cfg ConnectorConfig) error {
 	// Skip when the manager hasn't been started yet (startCtx is nil) — the
 	// normal Start() call will pick up the stored config on its own.
 	m.mu.RLock()
-	started := m.startCtx != nil
+	ctx := m.startCtx
 	m.mu.RUnlock()
-	if cfg.Enabled && started {
+	if ctx == nil {
+		return nil
+	}
+
+	if cfg.Enabled {
 		if err := m.ReinitConnector(id); err != nil {
 			return err
 		}
 		m.triggerSyncAsync(id, "configure")
+		return nil
+	}
+
+	// Disabled: still refresh the connector's in-memory config so config-driven
+	// reads (ListMailboxes, health, schema fetches) use the latest saved values
+	// — otherwise a corrected host/credential typed while disabled is ignored
+	// until the connector is enabled. Init must not dial (only Start does), so
+	// this is cheap and safe; failures are non-fatal (partial config).
+	if conn != nil {
+		if err := conn.Init(ctx, m.withSecrets(id, conn, cfg)); err != nil {
+			m.logger.Debug().Err(err).Str("connector", id).Msg("config refresh init (non-fatal)")
+		}
 	}
 	return nil
 }
@@ -137,9 +155,41 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
+// withSecrets merges the connector's stored secret fields (from the credential
+// store) into cfg.Settings, so connectors that read secrets from their config
+// (e.g. IMAP/CalDAV password) receive them at Init without each needing direct
+// credential-store access. Secrets are deliberately kept out of config.yaml;
+// this re-injects them in-memory only, right before Init.
+func (m *Manager) withSecrets(id string, c Connector, cfg ConnectorConfig) ConnectorConfig {
+	sp, ok := c.(SecretFieldProvider)
+	if !ok || m.credStore == nil {
+		return cfg
+	}
+	keys := sp.SecretFieldKeys()
+	if len(keys) == 0 {
+		return cfg
+	}
+	creds, err := m.credStore.GetConnectorCredential(id)
+	if err != nil || len(creds) == 0 {
+		return cfg
+	}
+	merged := make(map[string]string, len(cfg.Settings)+len(keys))
+	for k, v := range cfg.Settings {
+		merged[k] = v
+	}
+	for _, key := range keys {
+		if v := creds[key]; v != "" {
+			merged[key] = v
+		}
+	}
+	cfg.Settings = merged
+	return cfg
+}
+
 // initAndStart initialise et démarre un connecteur unique.
 // Non-fatal : loggue les erreurs sans faire planter le Manager.
 func (m *Manager) initAndStart(ctx context.Context, id string, c Connector, cfg ConnectorConfig) {
+	cfg = m.withSecrets(id, c, cfg)
 	if err := c.Init(ctx, cfg); err != nil {
 		m.logger.Error().Str("connector", id).Err(err).Msg("init failed")
 		return
@@ -198,6 +248,16 @@ func (m *Manager) ReinitConnector(id string) error {
 		return fmt.Errorf("manager not started")
 	}
 	if !cfg.Enabled {
+		// Not running, so there's nothing to Stop/Start — but still refresh the
+		// in-memory config WITH secrets. ReinitConnector is called right after
+		// credentials are saved (PUT /credentials), and the UI persists config
+		// BEFORE credentials; without this, a disabled connector's cfg.Settings
+		// never receives its stored password, so config-driven reads
+		// (ListMailboxes "Load folders", health checks) see an empty secret.
+		// Init must not dial — only Start does — so this is cheap.
+		if err := c.Init(ctx, m.withSecrets(id, c, cfg)); err != nil {
+			m.logger.Debug().Err(err).Str("connector", id).Msg("reinit refresh init (non-fatal)")
+		}
 		return nil
 	}
 
@@ -485,5 +545,16 @@ func (m *Manager) ListInstances() []InstanceInfo {
 			Health:      conn.Health(),
 		})
 	}
+	// Deterministic order: m.connectors is a map (random iteration), which made
+	// the Connectors list jump around between refreshes. Sort by type then
+	// instance id so the list stays fixed regardless of startup/registration
+	// order. Singleton connectors (instanceID == typeID) sort before their
+	// dynamic "+"-added instances of the same type.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TypeID != result[j].TypeID {
+			return result[i].TypeID < result[j].TypeID
+		}
+		return result[i].InstanceID < result[j].InstanceID
+	})
 	return result
 }

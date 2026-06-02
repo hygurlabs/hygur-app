@@ -210,9 +210,20 @@ func (e *Extractor) extractViaLLM(ctx context.Context, items []store.KnowledgeIt
 		return nil, nil
 	}
 
-	// Build a compact context block for the LLM.
+	// Build a compact context block for the LLM, bounded so the prompt fits the
+	// small indexing model's context window (minicpm5: 16384 tokens). Without
+	// this cap a large batch of date-less items overflowed it (400 "maximum
+	// context length"). ~12k chars ≈ well under 16k tokens, leaving room for the
+	// system prompt + output. Items beyond the cap still get templated dates.
+	const (
+		maxItems        = 40
+		maxContextChars = 12000
+	)
 	var sb strings.Builder
-	for _, item := range items {
+	for i, item := range items {
+		if i >= maxItems || sb.Len() >= maxContextChars {
+			break
+		}
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", item.ContentID, item.Title))
 		if len(item.NormalizedText) > 200 {
 			sb.WriteString(item.NormalizedText[:200])
@@ -237,7 +248,11 @@ Si aucune deadline n'est trouvée, retourne [].`
 		},
 		Stream:      false,
 		Temperature: 0,
-		MaxTokens:   80,
+		// Reasoning models burn the whole budget inside <think> and never emit
+		// JSON if MaxTokens is tiny — give room for a short array, and disable
+		// thinking outright (the /no_think hint alone isn't honored by nemotron).
+		MaxTokens:          512,
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("LLM chat: %w", err)
@@ -261,9 +276,19 @@ Si aucune deadline n'est trouvée, retourne [].`
 		content = strings.Join(jsonLines, "\n")
 	}
 
+	// Reasoning models (nemotron, Qwen3) may still wrap the answer in a
+	// <think>…</think> block and/or surround it with prose despite enable_thinking
+	// being off; slice down to the JSON array. An empty result means the model
+	// found nothing actionable — a valid "no deadlines" answer, not a failure —
+	// so the caller keeps the templated actions without logging a warning.
+	content = extractJSONArray(content)
+	if content == "" {
+		return nil, nil
+	}
+
 	var results []llmActionResult
 	if err := json.Unmarshal([]byte(content), &results); err != nil {
-		return nil, fmt.Errorf("parse LLM JSON: %w", err)
+		return nil, fmt.Errorf("parse LLM JSON: %w (raw=%q)", err, content)
 	}
 
 	// Build a source map from title to content_id.
@@ -322,6 +347,22 @@ var reISODate = regexp.MustCompile(`^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$`)
 // reTextualDate matches "DD <month-name> YYYY" with the month name being a FR
 // or EN word. Stripped of accents and lowercased before lookup.
 var reTextualDate = regexp.MustCompile(`(?i)^\s*(\d{1,2})\s+([\p{L}.]+)\s+(\d{4})\s*$`)
+
+// extractJSONArray pulls the JSON array out of a model completion, tolerating
+// reasoning-model noise: a leading/trailing <think>…</think> block (closed or
+// not) and surrounding prose. It returns "" when no array is present (treated
+// by the caller as "no actionable deadlines", not an error).
+func extractJSONArray(s string) string {
+	if i := strings.LastIndex(s, "</think>"); i != -1 {
+		s = s[i+len("</think>"):]
+	}
+	start := strings.Index(s, "[")
+	end := strings.LastIndex(s, "]")
+	if start == -1 || end == -1 || end < start {
+		return ""
+	}
+	return strings.TrimSpace(s[start : end+1])
+}
 
 // normalizeToISO converts the raw deadline strings produced by tier-1 (FR/EN
 // month names, DD/MM/YYYY, DD-MM-YYYY) and by the LLM (already ISO) into a

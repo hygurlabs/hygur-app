@@ -14,6 +14,15 @@ func (s *Server) setupRoutes() {
 	// Health endpoint uses a handler that's updated when SetLLMClient is called
 	s.router.Get("/health", s.handleHealth)
 
+	// Web UI — the embedded single-page client that replaces the SwiftUI views.
+	// Public so it can bootstrap the API token into the page (see handleWebUI);
+	// the loopback bind is the trust boundary.
+	s.router.Get("/", s.handleWebUI)
+	s.router.Get("/app", s.handleWebUI)
+	// Content-hashed SPA bundle (JS/CSS). Public, same trust boundary as the
+	// shell; served from the embedded build with long-lived immutable caching.
+	s.router.Handle("/assets/*", webUIAssets())
+
 	// Streaming routes (auth, no timeout) — SSE can take minutes for chat
 	// with multiple LLM round-trips (tool calls + synthesis). Declared as a
 	// separate group BEFORE the timeout-bearing group because chi's Group
@@ -39,6 +48,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/diagnostic", s.handleKnowledgeDiagnostic)
 			r.Post("/ingest", s.handleKnowledgeIngest)
 			r.Post("/ingest-folder", s.handleKnowledgeIngestFolder)
+			r.Post("/upload", s.handleKnowledgeUpload)
 			r.Post("/search", s.handleKnowledgeSearch)
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
 			r.Delete("/reset", s.handleKnowledgeReset)
@@ -105,8 +115,20 @@ func (s *Server) setupRoutes() {
 			r.Delete("/{id}", s.handleNotesDelete)
 		})
 
+		// Chat session transcripts (persistent history)
+		r.Route("/sessions", func(r chi.Router) {
+			r.Get("/", s.handleSessionsList)
+			r.Get("/{id}", s.handleSessionGet)
+			r.Put("/{id}", s.handleSessionUpdate)
+			r.Delete("/{id}", s.handleSessionDelete)
+		})
+
 		// Tools endpoints (global search)
 		r.Get("/tools/search", s.handleToolsSearch)
+
+		// Mentions autocomplete — projects + notes/mails/documents for the
+		// WebUI composer's "@" context picker.
+		r.Get("/mentions", s.handleMentionsSearch)
 
 		// Memory endpoints
 		r.Route("/memory", func(r chi.Router) {
@@ -140,6 +162,13 @@ func (s *Server) setupRoutes() {
 		// {"project_id": "...", "lookback_hours": 24}. The brief runs
 		// asynchronously; the result lands in /events as a `brief` event.
 		r.Post("/brief/run", s.handleBriefRun)
+
+		// Meeting briefing — POST /brief/meeting generates a RAG briefing for
+		// one calendar event (the macOS app calls this ~30 min before).
+		r.Post("/brief/meeting", s.handleBriefMeeting)
+
+		// GET /briefings — unified list of daily briefs + meeting briefings.
+		r.Get("/briefings", s.handleBriefingsList)
 
 		// Config read/write — exposes the tunable sidecar config to the macOS app.
 		// Changes are persisted to config.yaml and take effect on next restart.
@@ -564,6 +593,42 @@ func (s *Server) handleNotesDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "notes handler not configured")
+}
+
+// handleSessionsList handles GET /sessions.
+func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
+	if s.sessionsHandler != nil {
+		s.sessionsHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "sessions handler not configured")
+}
+
+// handleSessionGet handles GET /sessions/{id}.
+func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
+	if s.sessionsHandler != nil {
+		s.sessionsHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "sessions handler not configured")
+}
+
+// handleSessionUpdate handles PUT /sessions/{id}.
+func (s *Server) handleSessionUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.sessionsHandler != nil {
+		s.sessionsHandler.Update(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "sessions handler not configured")
+}
+
+// handleSessionDelete handles DELETE /sessions/{id}.
+func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	if s.sessionsHandler != nil {
+		s.sessionsHandler.Delete(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "sessions handler not configured")
 }
 
 // handleUnifiedSearch handles POST /search.

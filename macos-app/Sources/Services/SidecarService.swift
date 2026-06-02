@@ -1508,6 +1508,34 @@ actor SidecarService {
         return try JSONDecoder().decode(BriefRunResponse.self, from: data)
     }
 
+    /// Requests a synchronous briefing for one calendar event (POST /brief/meeting).
+    /// The sidecar runs RAG on the subject/attendees, persists a `meeting_brief`,
+    /// and — when the KB had relevant context — emits a `meeting_briefing` SSE
+    /// event the app turns into a notification. `relevant=false` means nothing
+    /// relevant was found (no notification fired).
+    @discardableResult
+    func meetingBrief(eventID: String, title: String, attendees: [String], notes: String, location: String, start: Date) async throws -> MeetingBriefResponse {
+        let url = baseURL.appendingPathComponent("brief/meeting")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addAuthHeader(&request)
+
+        let body = MeetingBriefRequest(
+            eventId: eventID,
+            title: title,
+            attendees: attendees,
+            notes: notes,
+            location: location,
+            start: Self.iso8601DateFormatter().string(from: start)
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        return try JSONDecoder().decode(MeetingBriefResponse.self, from: data)
+    }
+
     // MARK: - Sidecar Config
 
     /// Fetch the current tunable sidecar configuration (GET /config).

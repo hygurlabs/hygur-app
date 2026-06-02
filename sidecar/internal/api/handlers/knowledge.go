@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/retrieval"
@@ -29,8 +28,13 @@ type KnowledgeHandler struct {
 	ingestor         *ingest.Ingestor
 	searcher         *retrieval.HybridSearcher
 	embeddingService *llm.EmbeddingService
+	uploadDir        string
 	logger           zerolog.Logger
 }
+
+// SetUploadDir sets the directory where files received via POST /knowledge/upload
+// are saved before ingestion. When empty, a temp directory is used.
+func (h *KnowledgeHandler) SetUploadDir(dir string) { h.uploadDir = dir }
 
 // NewKnowledgeHandler creates a new KnowledgeHandler.
 func NewKnowledgeHandler(store *store.DB, ingestor *ingest.Ingestor, searcher *retrieval.HybridSearcher, logger zerolog.Logger) *KnowledgeHandler {
@@ -236,6 +240,84 @@ func (h *KnowledgeHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeKnowledgeJSON(w, http.StatusCreated, resp)
+}
+
+// Upload handles POST /knowledge/upload — accepts a multipart file, saves it to
+// the uploads directory, and ingests it into the knowledge base. Drives the
+// WebUI composer's paperclip: an uploaded document becomes searchable and is
+// referenced as an attachment in the question.
+func (h *KnowledgeHandler) Upload(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		writeKnowledgeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid multipart form")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "file is required")
+		return
+	}
+	defer file.Close()
+
+	dir := h.uploadDir
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), "hygur-uploads")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to prepare upload dir")
+		return
+	}
+	name := filepath.Base(header.Filename)
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "upload"
+	}
+	dst := filepath.Join(dir, strconv.FormatInt(time.Now().UnixNano(), 10)+"-"+name)
+	out, err := os.Create(dst)
+	if err != nil {
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to save upload")
+		return
+	}
+	if _, err := out.ReadFrom(file); err != nil {
+		_ = out.Close()
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to write upload")
+		return
+	}
+	_ = out.Close()
+
+	var projectID *string
+	if pid := r.FormValue("project_id"); pid != "" {
+		projectID = &pid
+	}
+	var tags []string
+	if t := r.FormValue("tags"); t != "" {
+		tags = strings.Split(t, ",")
+	}
+
+	result, err := h.ingestor.Ingest(r.Context(), dst, ingest.IngestOptions{ProjectID: projectID, Tags: tags})
+	if err != nil {
+		h.logger.Error().Err(err).Str("file", name).Msg("upload ingestion failed")
+		switch {
+		case err == ingest.ErrNoParser:
+			writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "unsupported file type")
+		case err == ingest.ErrFileTooLarge:
+			writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "file exceeds maximum size")
+		case err == ingest.ErrEmptyContent:
+			writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "file content is empty")
+		default:
+			writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "ingestion failed")
+		}
+		return
+	}
+
+	writeKnowledgeJSON(w, http.StatusCreated, IngestResponse{
+		ContentID:  result.ContentID,
+		Status:     result.Status,
+		ChunkCount: result.ChunkCount,
+		Title:      name,
+	})
 }
 
 // IngestFolder handles POST /knowledge/ingest-folder.
@@ -638,6 +720,7 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	titleFilter := r.URL.Query().Get("q")
+	sourceTypeFilter := r.URL.Query().Get("source_type")
 
 	// Title-filter path: bypass pagination and return matching items directly.
 	if titleFilter != "" {
@@ -671,16 +754,30 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get total count for pagination metadata
-	total, err := h.store.CountKnowledgeItems(r.Context())
+	// Get total count for pagination metadata (scoped to the source_type filter
+	// when one is supplied).
+	var (
+		total int
+		err   error
+	)
+	if sourceTypeFilter != "" {
+		total, err = h.store.CountKnowledgeItemsBySourceTypes(r.Context(), []string{sourceTypeFilter})
+	} else {
+		total, err = h.store.CountKnowledgeItems(r.Context())
+	}
 	if err != nil {
 		h.logger.Error().Err(err).Msg("failed to count knowledge items")
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to count items")
 		return
 	}
 
-	// Retrieve knowledge items
-	items, err := h.store.ListKnowledgeItems(r.Context(), limit, offset)
+	// Retrieve knowledge items (optionally filtered by source_type, e.g. "event").
+	var items []*store.KnowledgeItem
+	if sourceTypeFilter != "" {
+		items, err = h.store.ListKnowledgeItemsBySourceType(r.Context(), sourceTypeFilter, limit, offset)
+	} else {
+		items, err = h.store.ListKnowledgeItems(r.Context(), limit, offset)
+	}
 	if err != nil {
 		h.logger.Error().Err(err).Msg("failed to list knowledge items")
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list items")
@@ -722,6 +819,10 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 				dateStr = md
 			} else if md, ok := item.Metadata["file_date"].(string); ok && md != "" {
 				h.logger.Debug().Str("file_date", md).Msg("DEBUG: found file_date")
+				dateStr = md
+			} else if md, ok := item.Metadata["canonical_date"].(string); ok && md != "" {
+				dateStr = md
+			} else if md, ok := item.Metadata["start"].(string); ok && md != "" {
 				dateStr = md
 			} else {
 				h.logger.Debug().Msg("DEBUG: no date found in metadata, checking other keys")
@@ -1006,55 +1107,22 @@ func (h *KnowledgeHandler) Reindex(w http.ResponseWriter, r *http.Request) {
 	writeKnowledgeJSON(w, http.StatusOK, resp)
 }
 
-// reindexItem creates chunks and embeddings for a single knowledge item.
-// Returns the number of chunks created and embeddings created.
+// reindexItem creates sections, chunks and embeddings for a single knowledge
+// item via the shared indexing path. Returns the number of chunks created and
+// embeddings created. An embedding failure is soft (chunks persist and stay
+// searchable via FTS); a persistence failure is returned as an error.
 func (h *KnowledgeHandler) reindexItem(ctx context.Context, item *store.KnowledgeItem) (int, int, error) {
-	// Chunk the normalized text
-	chunks := ingest.ChunkText(item.NormalizedText, ingest.DefaultChunkOptions())
-	if len(chunks) == 0 {
-		return 0, 0, nil
-	}
-
 	now := time.Now()
-	var storeChunks []store.Chunk
-
-	// Insert chunks
-	for _, legacyChunk := range chunks {
-		chunkID := uuid.New().String()
-		chunkHash := hashChunkContent(legacyChunk.Content)
-
-		chunk := &store.Chunk{
-			ChunkID:   chunkID,
-			ContentID: item.ContentID,
-			ChunkHash: chunkHash,
-			Text:      legacyChunk.Content,
-			Metadata: map[string]any{
-				"index":        legacyChunk.Index,
-				"start_offset": legacyChunk.StartOffset,
-				"end_offset":   legacyChunk.EndOffset,
-			},
-			CreatedAt: now,
+	_, chunkCount, err := ingest.IndexSections(ctx, h.store, h.embeddingService, item.ContentID, item.NormalizedText, ingest.DefaultChunkTokenBudget, now)
+	if err != nil {
+		if chunkCount == 0 {
+			return 0, 0, err // nothing persisted — a real failure
 		}
-
-		if err := h.store.InsertChunk(ctx, chunk); err != nil {
-			return 0, 0, err
-		}
-
-		storeChunks = append(storeChunks, *chunk)
+		// Chunks persisted but embedding failed — still searchable via FTS.
+		h.logger.Warn().Err(err).Str("content_id", item.ContentID).Msg("reindex: embedding failed; chunks still searchable via FTS")
+		return chunkCount, 0, nil
 	}
-
-	// Generate embeddings
-	embeddingsCreated := 0
-	if h.embeddingService != nil && len(storeChunks) > 0 {
-		if err := h.embeddingService.BatchEmbedAndStore(ctx, storeChunks); err != nil {
-			// Log but don't fail - chunks are still created
-			h.logger.Warn().Err(err).Str("content_id", item.ContentID).Msg("failed to generate embeddings")
-		} else {
-			embeddingsCreated = len(storeChunks)
-		}
-	}
-
-	return len(chunks), embeddingsCreated, nil
+	return chunkCount, chunkCount, nil
 }
 
 // hashChunkContent returns the SHA-256 hash of the text.

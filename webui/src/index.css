@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+/* Design tokens — calm minimalism, off-white + green. The @theme inline block
+   exposes them to Tailwind as utilities (bg-bg, text-muted, border-border,
+   bg-accent, font-display, …) while the underlying values stay in :root so a
+   single media query flips the whole palette to dark. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface2: var(--surface-2);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-weak: var(--accent-weak);
+  --color-danger: var(--danger);
+  --font-display: ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root {
+  --bg: #fbfaf7;
+  --surface: #ffffff;
+  --surface-2: #f4f2ec;
+  --text: #1b1b18;
+  --muted: #74726b;
+  --faint: #9a988f;
+  --border: #e7e5dd;
+  --accent: #2e6a57;
+  --accent-weak: #e9f1ed;
+  --danger: #9b3d2e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16170f;
+    --surface: #1e1f17;
+    --surface-2: #24251b;
+    --text: #eceae0;
+    --muted: #a6a399;
+    --faint: #7c7a70;
+    --border: #313127;
+    --accent: #6fb89e;
+    --accent-weak: #20281f;
+    --danger: #c4664f;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Restrained view-enter — one quiet fade-up, disabled for reduced motion. */
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.view-enter {
+  animation: view-enter 0.28s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .view-enter {
+    animation: none;
+  }
+}
+
+/* Blinking caret shown while a chat answer streams. */
+@keyframes hygur-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Rendered markdown (chat answers) — scoped so Tailwind's preflight reset
+   doesn't strip list/table styling inside react-markdown output. */
+.prose-answer p {
+  margin: 0 0 0.8em;
+}
+.prose-answer ul {
+  margin: 0 0 0.8em;
+  padding-left: 1.2em;
+  list-style: disc;
+}
+.prose-answer ol {
+  margin: 0 0 0.8em;
+  padding-left: 1.4em;
+  list-style: decimal;
+}
+.prose-answer li {
+  margin: 0.15em 0;
+}
+.prose-answer code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.prose-answer pre {
+  background: var(--surface-2);
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow: auto;
+  margin: 0 0 0.8em;
+}
+.prose-answer pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose-answer table {
+  border-collapse: collapse;
+  margin: 0.4em 0 1em;
+  font-size: 0.95em;
+}
+.prose-answer th,
+.prose-answer td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  text-align: left;
+}
+.prose-answer a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.prose-answer h1,
+.prose-answer h2,
+.prose-answer h3 {
+  font-family: var(--font-display);
+  font-weight: 550;
+  margin: 0.6em 0 0.3em;
+}

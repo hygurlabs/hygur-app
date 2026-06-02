@@ -62,7 +62,8 @@ type Ingestor struct {
 	parsers          map[string]Parser // extension -> parser
 	store            *store.DB
 	embeddingService *llm.EmbeddingService
-	llmClient        *llm.Client // optional, used for Tier 2 NER extraction
+	llmClient        *llm.Client // optional, used for embeddings + fallback Tier 2 NER
+	indexingClient   *llm.Client // optional, fast small model for Tier 2 NER; falls back to llmClient
 	autoTagger       *AutoTagger
 	broker           *events.Broker // optional; nil disables event emission
 }
@@ -119,10 +120,27 @@ func (i *Ingestor) SetEmbeddingService(svc *llm.EmbeddingService) {
 	i.embeddingService = svc
 }
 
-// SetLLMClient sets the LLM client used for Tier 2 NER extraction.
-// When unset, Tier 2 is skipped silently (Tier 1 still runs).
+// SetLLMClient sets the LLM client used for embeddings and, unless an indexing
+// client is set, Tier 2 NER extraction. When unset, Tier 2 is skipped silently
+// (Tier 1 still runs).
 func (i *Ingestor) SetLLMClient(c *llm.Client) {
 	i.llmClient = c
+}
+
+// SetIndexingClient sets a dedicated (typically small, fast) LLM client for
+// Tier 2 NER extraction at ingestion time. When unset, Tier 2 falls back to the
+// main LLM client. Embeddings always use the main client.
+func (i *Ingestor) SetIndexingClient(c *llm.Client) {
+	i.indexingClient = c
+}
+
+// tier2Client returns the client to use for Tier 2 extraction: the dedicated
+// indexing client when configured, otherwise the main LLM client.
+func (i *Ingestor) tier2Client() *llm.Client {
+	if i.indexingClient != nil {
+		return i.indexingClient
+	}
+	return i.llmClient
 }
 
 // SetBroker wires an event broker so the ingestor emits ingest_start /
@@ -269,11 +287,14 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 		}
 	}
 
-	// Chunk the content
-	chunks := ChunkText(normalized, DefaultChunkOptions())
-
 	// Generate a content ID
 	contentID := uuid.New().String()
+
+	// Build the hierarchical sections + embed-sized chunks once. The chunk
+	// count is reported even when no store is configured (parse-only path);
+	// persistence + embedding happen in the store block below.
+	builtSections := BuildSections(contentID, normalized, DefaultChunkTokenBudget)
+	chunkCount := TotalChunks(builtSections)
 
 	// Persist to store if available
 	if i.store != nil {
@@ -332,12 +353,12 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 			tier2Result extract.Tier2Entities
 			tier2Err    error
 		)
-		if i.llmClient != nil {
+		if t2 := i.tier2Client(); t2 != nil {
 			tier2Wait = &sync.WaitGroup{}
 			tier2Wait.Add(1)
 			go func() {
 				defer tier2Wait.Done()
-				tier2Result, tier2Err = extract.ExtractTier2(ctx, i.llmClient, content)
+				tier2Result, tier2Err = extract.ExtractTier2(ctx, t2, content)
 			}()
 		}
 
@@ -345,39 +366,11 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 			return nil, fmt.Errorf("failed to insert knowledge item: %w", err)
 		}
 
-		// Insert chunks and collect for embedding
-		var storeChunks []store.Chunk
-		for _, legacyChunk := range chunks {
-			chunkID := uuid.New().String()
-			chunkHash := hashContent(legacyChunk.Content)
-
-			chunk := &store.Chunk{
-				ChunkID:   chunkID,
-				ContentID: contentID,
-				ChunkHash: chunkHash,
-				Text:      legacyChunk.Content,
-				Metadata: map[string]any{
-					"index":        legacyChunk.Index,
-					"start_offset": legacyChunk.StartOffset,
-					"end_offset":   legacyChunk.EndOffset,
-				},
-				CreatedAt: now,
-			}
-
-			if err := i.store.InsertChunk(ctx, chunk); err != nil {
-				return nil, fmt.Errorf("failed to insert chunk %d: %w", legacyChunk.Index, err)
-			}
-
-			storeChunks = append(storeChunks, *chunk)
-		}
-
-		// Generate embeddings for all chunks — mandatory. If this fails, the item
-		// is unusable for semantic search, so we roll back the entire insert.
-		if i.embeddingService != nil && len(storeChunks) > 0 {
-			if err := i.embeddingService.BatchEmbedAndStore(ctx, storeChunks); err != nil {
-				_ = i.store.DeleteKnowledgeItem(context.Background(), contentID)
-				return nil, fmt.Errorf("embedding failed for %s: %w", contentID, err)
-			}
+		// Persist the prebuilt sections + chunks and embed them. On failure
+		// roll back the item so a KnowledgeItem never lingers without vectors.
+		if _, _, idxErr := PersistSections(ctx, i.store, i.embeddingService, builtSections, now); idxErr != nil {
+			_ = i.store.DeleteKnowledgeItem(context.Background(), contentID)
+			return nil, fmt.Errorf("indexing failed for %s: %w", contentID, idxErr)
 		}
 
 		// Wait for Tier 2 to finish (it ran concurrently with the embedding).
@@ -421,7 +414,7 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 	return &IngestResult{
 		ContentID:  contentID,
 		Status:     "indexed",
-		ChunkCount: len(chunks),
+		ChunkCount: chunkCount,
 	}, nil
 }
 

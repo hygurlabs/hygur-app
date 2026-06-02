@@ -20,11 +20,21 @@ RELEASE   := $(BUILD_DIR)/Release
 DMG_NAME  := $(APP_NAME)-$(VERSION).dmg
 APP_PATH  := $(RELEASE)/$(APP_NAME).app
 SIDECAR   := sidecar
+WEBUI     := webui
 TOKEN_FILE := $(HOME)/Library/Application Support/Hygur/token
 SIDECAR_URL := http://localhost:8420
 
-.PHONY: all test test-go test-binary check-api dev open \
-        build-sidecar build-app sign-app package-dmg verify-dmg release clean
+# Stable code-signing identity, kept in the LOGIN keychain (always searched and
+# unlocked, no separate keychain to pollute the search list). A stable identity
+# is what makes macOS keep its grants — Automation (Mail.app) and Keychain ACLs —
+# across rebuilds. Ad-hoc signing ("-") changes the identity every build, which
+# resets every permission (the "redemande à chaque lancement" / mail-sync-breaks
+# problem). Create the cert once with `make dev-cert`.
+CODESIGN_ID    := Hygur Dev
+LOGIN_KEYCHAIN := $(HOME)/Library/Keychains/login.keychain-db
+
+.PHONY: all test test-go test-binary check-api dev open reset-db dev-cert \
+        webui build-sidecar build-app sign-app package-dmg verify-dmg release clean
 
 all: test
 
@@ -36,11 +46,15 @@ test: test-go test-binary build-app
 	@echo ""
 	@echo "✅ Tout est vert. Lance \`make verify-dmg\` pour tester le packaging complet."
 
-test-go:
+# sqlite_fts5 must match the sidecar Makefile's GO_TAGS: the FTS5 lexical index
+# is a runtime SQLite module, absent without this tag (build stays green, app breaks).
+# Depends on `webui`: the api/webui package go:embed's dist/, which is generated
+# (not committed), so the Go build/test can't compile until the SPA is built.
+test-go: webui
 	@echo "→ Tests Go (race detector)..."
-	cd $(SIDECAR) && go test -race ./...
+	cd $(SIDECAR) && go test -tags sqlite_fts5 -race ./...
 	@echo "→ go vet..."
-	cd $(SIDECAR) && go vet ./...
+	cd $(SIDECAR) && go vet -tags sqlite_fts5 ./...
 	@echo "✅ Tests Go OK"
 
 test-binary: build-sidecar
@@ -100,10 +114,33 @@ open: sign-app
 	@sleep 1
 	@echo "→ Ouverture de $(APP_NAME).app..."
 	open $(APP_PATH)
+	@echo "→ UI web (servie par le sidecar) : http://localhost:8420"
+
+## Repart d'une base de connaissances vierge : supprime la DB SQLite dans
+## Application Support. Au prochain lancement, le schéma (migration v9 : sections
+## + FTS5) est recréé et les connecteurs réindexent depuis zéro via le nouveau
+## pipeline structurel. DESTRUCTIF — à lancer volontairement.
+HYGUR_DATA := $(HOME)/Library/Application Support/Hygur
+reset-db:
+	@echo "→ Arrêt de l'app et du sidecar..."
+	@osascript -e 'tell application "$(APP_NAME)" to quit' 2>/dev/null || true
+	@killall hygur-sidecar 2>/dev/null || true
+	@sleep 1
+	@echo "→ Suppression de la base : $(HYGUR_DATA)/hygur.db*"
+	@rm -f "$(HYGUR_DATA)/hygur.db" "$(HYGUR_DATA)/hygur.db-shm" "$(HYGUR_DATA)/hygur.db-wal"
+	@echo "✅ Base supprimée. Lance \`make open\` : le schéma est recréé et les connecteurs réindexent."
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-build-sidecar:
+## Build the React web UI (Vite + TS) into the sidecar's go:embed dir. Runs
+## before any sidecar build so `dist/` exists when go:embed bundles it. Installs
+## node deps only when node_modules is missing (fast on rebuilds).
+webui:
+	@echo "→ Build WebUI (Vite + React + TypeScript)..."
+	@cd $(WEBUI) && (test -d node_modules || npm ci) && npm run build
+	@echo "✅ WebUI prête (embarquée dans le sidecar via go:embed)"
+
+build-sidecar: webui
 	@echo "→ Build sidecar universel..."
 	$(MAKE) -C $(SIDECAR) build-for-bundle VERSION=$(VERSION)
 
@@ -124,10 +161,48 @@ build-app: build-sidecar
 	@test -d $(APP_PATH) || (echo "❌ Build échoué" && exit 1)
 	@echo "✅ $(APP_NAME).app prêt"
 
+## Crée (une seule fois) un certificat de signature stable dans le TROUSSEAU
+## LOGIN, pour que macOS garde les autorisations (Automation Mail, Keychain)
+## d'un build à l'autre — fini les re-demandes à chaque lancement. Demande ton
+## mot de passe de session UNE fois (pour autoriser codesign à utiliser la clé).
+## Réversible : `security delete-certificate -c "$(CODESIGN_ID)" "$(LOGIN_KEYCHAIN)"`.
+dev-cert:
+	@if security find-certificate -c "$(CODESIGN_ID)" "$(LOGIN_KEYCHAIN)" >/dev/null 2>&1; then \
+		echo "✅ Certificat '$(CODESIGN_ID)' déjà présent dans le trousseau login"; \
+	else \
+		echo "→ Création du certificat de signature stable '$(CODESIGN_ID)'..."; \
+		TMP=$$(mktemp -d); \
+		printf '[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=%s\n[v3]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\nbasicConstraints=critical,CA:false\n' "$(CODESIGN_ID)" > $$TMP/cs.cnf; \
+		/usr/bin/openssl req -x509 -newkey rsa:2048 -keyout $$TMP/key.pem -out $$TMP/cert.pem -days 3650 -nodes -config $$TMP/cs.cnf >/dev/null 2>&1; \
+		/usr/bin/openssl pkcs12 -export -inkey $$TMP/key.pem -in $$TMP/cert.pem -out $$TMP/id.p12 -name "$(CODESIGN_ID)" -passout pass:hygur >/dev/null 2>&1; \
+		security import $$TMP/id.p12 -k "$(LOGIN_KEYCHAIN)" -P hygur -T /usr/bin/codesign >/dev/null; \
+		rm -rf $$TMP; \
+		printf "→ Mot de passe de session (1 seule fois, pour autoriser codesign à utiliser la clé) : "; \
+		stty -echo 2>/dev/null; read PW; stty echo 2>/dev/null; echo; \
+		if security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$$PW" "$(LOGIN_KEYCHAIN)" >/dev/null 2>&1; then \
+			echo "✅ '$(CODESIGN_ID)' installé (identité stable)."; \
+		else \
+			echo "⚠️  partition-list non posée (mot de passe ?) — codesign demandera l'accès au 1er build, clique « Toujours autoriser »."; \
+		fi; \
+		echo "   Au 1er \`make open\` ensuite, macOS redemande Automation Mail + Keychain UNE dernière fois (changement d'identité), puis s'en souvient pour tous les builds suivants."; \
+	fi
+
+# NOTE: on NE réinjecte PAS les entitlements (keychain-access-groups,
+# application-groups). Ce sont des entitlements RESTREINTS qui exigent une équipe
+# Apple Developer / provisioning ; un cert self-signed qui les revendique fait
+# échouer le lancement (Launchd job spawn failed, err 163). On signe donc sans —
+# l'app se lance ; le revers est que le Keychain redemande l'accès aux secrets
+# connecteurs (limite inhérente au dev signing sans compte développeur).
 sign-app: build-app
-	@echo "→ Signature ad-hoc..."
-	codesign --deep --force --sign "-" $(APP_PATH)
-	@echo "✅ Signé : $(APP_PATH)"
+	@if security find-certificate -c "$(CODESIGN_ID)" "$(LOGIN_KEYCHAIN)" >/dev/null 2>&1; then \
+		echo "→ Signature avec identité stable '$(CODESIGN_ID)'..."; \
+		codesign --deep --force --sign "$(CODESIGN_ID)" $(APP_PATH); \
+		echo "✅ Signé ('$(CODESIGN_ID)') : $(APP_PATH)"; \
+	else \
+		echo "→ Signature ad-hoc (\`make dev-cert\` une fois pour une identité stable)..."; \
+		codesign --deep --force --sign "-" $(APP_PATH); \
+		echo "✅ Signé (ad-hoc) : $(APP_PATH)"; \
+	fi
 
 # ── Packaging DMG ────────────────────────────────────────────────────────────
 

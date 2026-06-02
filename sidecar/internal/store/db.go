@@ -90,7 +90,33 @@ func NewDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("failed to apply migrations: %w", err)
 	}
 
+	// Belt-and-suspenders: ensure the hybrid-retrieval objects (sections,
+	// chunks_fts, chunks.section_id) exist even when the DB carries a HIGHER
+	// schema_version from a different/abandoned migration lineage — in which
+	// case applyMigrations skips our v9 entirely. Idempotent (IF NOT EXISTS /
+	// PRAGMA-guarded). Without this, a version-mismatched DB silently breaks all
+	// indexing with "no such table: sections".
+	if err := ensureRAGSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ensure RAG schema: %w", err)
+	}
+
 	return &DB{db: db}, nil
+}
+
+// ensureRAGSchema idempotently guarantees the sections + chunks_fts objects
+// exist, regardless of the DB's recorded schema_version. Runs the v9 setup in
+// its own transaction. Safe to call on every open.
+func ensureRAGSchema(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := applySectionsAndFTSV9Migration(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // Close closes the database connection.
@@ -393,6 +419,47 @@ func (d *DB) CountKnowledgeItemsBySourceTypes(ctx context.Context, sourceTypes [
 	return count, nil
 }
 
+// CountAndLatestBySourceTypes returns the number of knowledge items with the
+// given source_types and the most recent updated_at among them. The IMAP
+// connector uses it to seed its item count and sync watermark from persisted
+// state on startup, so a restart doesn't re-fetch the whole mailbox. latest is
+// the zero time when there are no matching items.
+func (d *DB) CountAndLatestBySourceTypes(ctx context.Context, sourceTypes []string) (int64, time.Time, error) {
+	if len(sourceTypes) == 0 {
+		return 0, time.Time{}, nil
+	}
+	placeholders := make([]string, len(sourceTypes))
+	args := make([]any, len(sourceTypes))
+	for i, st := range sourceTypes {
+		placeholders[i] = "?"
+		args[i] = st
+	}
+	query := fmt.Sprintf(`SELECT COUNT(*), MAX(updated_at) FROM knowledge_items WHERE source_type IN (%s)`,
+		strings.Join(placeholders, ","))
+
+	var count int64
+	var maxUpdated sql.NullString
+	if err := d.db.QueryRowContext(ctx, query, args...).Scan(&count, &maxUpdated); err != nil {
+		return 0, time.Time{}, fmt.Errorf("count+latest by source types: %w", err)
+	}
+	var latest time.Time
+	if maxUpdated.Valid && maxUpdated.String != "" {
+		for _, layout := range []string{
+			"2006-01-02 15:04:05.999999999-07:00",
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02 15:04:05",
+			time.RFC3339Nano,
+			time.RFC3339,
+		} {
+			if t, perr := time.Parse(layout, maxUpdated.String); perr == nil {
+				latest = t
+				break
+			}
+		}
+	}
+	return count, latest, nil
+}
+
 // SearchKnowledgeItemsByTitle returns items whose title contains q (case-insensitive).
 // Used for diagnostics (e.g., "is this email indexed?").
 func (d *DB) SearchKnowledgeItemsByTitle(ctx context.Context, q string, limit int) ([]*KnowledgeItem, error) {
@@ -585,9 +652,9 @@ func (d *DB) InsertChunk(ctx context.Context, chunk *Chunk) error {
 	}
 
 	_, err = d.db.ExecContext(ctx, `
-		INSERT INTO chunks (chunk_id, content_id, chunk_hash, embedding_model, text, metadata, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, chunk.ChunkID, chunk.ContentID, chunk.ChunkHash, chunk.EmbeddingModel, chunk.Text, string(metadata), chunk.CreatedAt)
+		INSERT INTO chunks (chunk_id, content_id, section_id, chunk_hash, embedding_model, text, metadata, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, chunk.ChunkID, chunk.ContentID, chunk.SectionID, chunk.ChunkHash, chunk.EmbeddingModel, chunk.Text, string(metadata), chunk.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert chunk: %w", err)
 	}
@@ -598,7 +665,7 @@ func (d *DB) InsertChunk(ctx context.Context, chunk *Chunk) error {
 // GetChunksByContentID retrieves all chunks for a given content ID.
 func (d *DB) GetChunksByContentID(ctx context.Context, contentID string) ([]*Chunk, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT chunk_id, content_id, chunk_hash, embedding_model, text, metadata, created_at
+		SELECT chunk_id, content_id, section_id, chunk_hash, embedding_model, text, metadata, created_at
 		FROM chunks
 		WHERE content_id = ?
 		ORDER BY created_at ASC
@@ -613,10 +680,12 @@ func (d *DB) GetChunksByContentID(ctx context.Context, contentID string) ([]*Chu
 		chunk := &Chunk{}
 		var metadataStr sql.NullString
 		var embeddingModel sql.NullString
+		var sectionID sql.NullString
 
 		err := rows.Scan(
 			&chunk.ChunkID,
 			&chunk.ContentID,
+			&sectionID,
 			&chunk.ChunkHash,
 			&embeddingModel,
 			&chunk.Text,
@@ -627,6 +696,9 @@ func (d *DB) GetChunksByContentID(ctx context.Context, contentID string) ([]*Chu
 			return nil, fmt.Errorf("failed to scan chunk: %w", err)
 		}
 
+		if sectionID.Valid {
+			chunk.SectionID = &sectionID.String
+		}
 		if embeddingModel.Valid {
 			chunk.EmbeddingModel = &embeddingModel.String
 		}
@@ -652,11 +724,12 @@ func (d *DB) GetChunk(ctx context.Context, chunkID string) (*Chunk, error) {
 	chunk := &Chunk{}
 	var metadataStr sql.NullString
 	var embeddingModel sql.NullString
+	var sectionID sql.NullString
 	err := d.db.QueryRowContext(ctx, `
-		SELECT chunk_id, content_id, chunk_hash, embedding_model, text, metadata, created_at
+		SELECT chunk_id, content_id, section_id, chunk_hash, embedding_model, text, metadata, created_at
 		FROM chunks WHERE chunk_id = ?
 	`, chunkID).Scan(
-		&chunk.ChunkID, &chunk.ContentID, &chunk.ChunkHash,
+		&chunk.ChunkID, &chunk.ContentID, &sectionID, &chunk.ChunkHash,
 		&embeddingModel, &chunk.Text, &metadataStr, &chunk.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -664,6 +737,9 @@ func (d *DB) GetChunk(ctx context.Context, chunkID string) (*Chunk, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetChunk: %w", err)
+	}
+	if sectionID.Valid {
+		chunk.SectionID = &sectionID.String
 	}
 	if embeddingModel.Valid {
 		chunk.EmbeddingModel = &embeddingModel.String

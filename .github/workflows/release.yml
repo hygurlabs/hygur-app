@@ -25,6 +25,13 @@ jobs:
           cache: true
           cache-dependency-path: sidecar/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
       - name: Install tools
         run: |
           brew install create-dmg xcodegen
@@ -34,6 +41,11 @@ jobs:
       - name: Derive version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build web UI
+        # The api/webui package go:embed's dist/, which is generated (not
+        # committed), so this must run before any Go build of the sidecar.
+        run: make webui
 
       - name: Build sidecar (universal binary)
         run: make -C sidecar build-for-bundle VERSION=${{ steps.version.outputs.VERSION }}

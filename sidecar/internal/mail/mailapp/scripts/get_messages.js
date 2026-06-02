@@ -90,7 +90,7 @@ for (let k = 0; k < args.ids.length; k++) {
     subject: safe(function () { return m.subject(); }, ""),
     from: safe(function () { return m.sender(); }, ""),
     replyTo: safe(function () { return m.replyTo(); }, ""),
-    date: safe(function () { return m.dateSent().toISOString(); }, ""),
+    date: safe(function () { return (m.dateReceived() || m.dateSent()).toISOString(); }, ""),
     body: safe(function () { return m.content(); }, ""),
     source: safe(function () { return m.source(); }, ""),
     attachments: attachments,

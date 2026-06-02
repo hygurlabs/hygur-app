@@ -16,6 +16,12 @@ INSTALL_DIR=$(HOME)/.hygur/bin
 # CGO is required for the sqlite3 driver.
 CGO_ENABLED=1
 
+# Build tags. sqlite_fts5 enables SQLite's FTS5 extension in mattn/go-sqlite3,
+# which powers the lexical/BM25 half of the hybrid retriever. Without it,
+# `CREATE VIRTUAL TABLE ... USING fts5` fails at RUNTIME with "no such module:
+# fts5" — the build stays green, so this tag must be on every build path.
+GO_TAGS := sqlite_fts5
+
 # Version information injected at build time
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -28,7 +34,7 @@ LDFLAGS := -ldflags "\
 
 # Common Go build invocation — used by every target that compiles Go.
 # Stays in sync with `make run` so all binaries are built identically.
-GO_BUILD = CGO_ENABLED=$(CGO_ENABLED) go build $(LDFLAGS)
+GO_BUILD = CGO_ENABLED=$(CGO_ENABLED) go build -tags '$(GO_TAGS)' $(LDFLAGS)
 
 .PHONY: all build build-sidecar build-reindex build-probe build-backfill build-arm64 build-amd64 build-universal build-for-bundle run reindex probe backfill install uninstall test lint clean fmt vet check
 
@@ -46,14 +52,14 @@ build-sidecar:
 build-arm64:
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=arm64 \
-		go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-arm64 ./$(CMD_DIR)
+		go build -tags '$(GO_TAGS)' $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-arm64 ./$(CMD_DIR)
 
 # Build amd64 slice (cross-compiled via clang -arch x86_64 on Apple Silicon).
 build-amd64:
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=amd64 \
 		CC="clang -arch x86_64" \
-		go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-amd64 ./$(CMD_DIR)
+		go build -tags '$(GO_TAGS)' $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-amd64 ./$(CMD_DIR)
 
 # Combine arm64 + amd64 into a universal (fat) binary using lipo.
 build-universal: build-arm64 build-amd64
@@ -125,7 +131,7 @@ uninstall:
 
 # Run the full test suite.
 test:
-	CGO_ENABLED=$(CGO_ENABLED) go test -race ./...
+	CGO_ENABLED=$(CGO_ENABLED) go test -tags '$(GO_TAGS)' -race ./...
 
 # Run golangci-lint (if installed).
 lint:
@@ -138,7 +144,7 @@ fmt:
 
 # Run go vet.
 vet:
-	go vet ./...
+	go vet -tags '$(GO_TAGS)' ./...
 
 # Clean build artifacts.
 clean:

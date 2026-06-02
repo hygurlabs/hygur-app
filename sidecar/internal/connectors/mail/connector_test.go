@@ -352,10 +352,14 @@ func TestMailConnector_Health_ReflectsSync_RealPath(t *testing.T) {
 
 	mc := mailconn.New(nil, nil, nil, nil, nil, nil, zerolog.Nop())
 
-	// Attempt Sync without an indexer — expect a clear error message.
-	_, err := mc.Sync(ctx, plugin.SyncOptions{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "indexer not configured")
+	// An unconfigured connector with no provider and no registered accounts has
+	// nothing to sync: it returns a clean empty result (no error) instead of the
+	// old confusing "activeSource not set", and stays Unconfigured. This keeps a
+	// generic /connectors/mail/sync from spamming errors before setup.
+	res, err := mc.Sync(ctx, plugin.SyncOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 0, res.Processed)
 
 	// Health should remain as-is (Unconfigured from New).
 	h := mc.Health()

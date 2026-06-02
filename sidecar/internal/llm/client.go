@@ -35,6 +35,20 @@ type Client struct {
 	streamHTTPClient   *http.Client
 	embeddingModel     string
 	embeddingMaxTokens int
+	embeddingBatchSize int
+}
+
+// EmbeddingBatchSize returns the number of texts to send per embedding request,
+// clamped to [1, MaxBatchSize]. Defaults to DefaultEmbeddingBatchSize.
+func (c *Client) EmbeddingBatchSize() int {
+	n := c.embeddingBatchSize
+	if n <= 0 {
+		n = DefaultEmbeddingBatchSize
+	}
+	if n > MaxBatchSize {
+		n = MaxBatchSize
+	}
+	return n
 }
 
 // embeddingURL returns the base URL that should be used for embedding calls.
@@ -237,6 +251,11 @@ type ChatRequest struct {
 	// "required", or `{type:"function", function:{name:"..."}}` to force a
 	// specific tool. `any` keeps both string and object forms valid.
 	ToolChoice any `json:"tool_choice,omitempty"`
+	// ChatTemplateKwargs passes vLLM/SGLang chat-template options through to the
+	// backend. The key use is `{"enable_thinking": false}` to stop reasoning
+	// models (nemotron, Qwen3) from emitting <think> blocks that waste the token
+	// budget and break strict-JSON callers. Omitted when nil.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 // ChatResponse represents a response from the chat completions endpoint.
@@ -312,6 +331,7 @@ func NewClient(cfg *config.LMStudioConfig) *Client {
 		maxRetries:         cfg.MaxRetries,
 		embeddingModel:     cfg.EmbeddingModel,
 		embeddingMaxTokens: maxTokens,
+		embeddingBatchSize: cfg.EmbeddingBatchSize,
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},

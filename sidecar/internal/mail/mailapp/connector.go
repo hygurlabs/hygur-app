@@ -82,7 +82,14 @@ func (c *Connector) Connect(ctx context.Context) error {
 		return mailpkg.ErrMailAppNotRunning
 	}
 	if hr.AccountCount == 0 {
-		return fmt.Errorf("mail.app: no accounts configured")
+		// Mail.app is running but reported zero accounts. Either the account
+		// enumeration threw (permission / Mail.app busy — captured in hr.Error)
+		// or there genuinely are none. Surface the real cause so the log is
+		// actionable instead of the misleading flat "no accounts configured".
+		if hr.Error != "" {
+			return fmt.Errorf("mail.app: cannot read accounts: %s", hr.Error)
+		}
+		return fmt.Errorf("mail.app: running but reports 0 accounts — grant Automation access (System Settings → Privacy & Security → Automation → Hygur ▸ Mail) and ensure Mail has finished launching")
 	}
 	c.connected = true
 	return nil

@@ -17,6 +17,7 @@ import (
 
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/ledongthuc/pdf"
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
 // ErrProtectedPDF indicates the PDF is password-protected and cannot be read.
@@ -26,11 +27,32 @@ var ErrProtectedPDF = errors.New("pdf: document is password protected")
 var ErrInvalidPDF = errors.New("pdf: invalid or corrupted document")
 
 // PDFParser extracts text content from PDF documents.
-type PDFParser struct{}
+type PDFParser struct {
+	visionEndpoint string
+	visionModel    string
+	// disableOCR skips the (expensive) OCR fallback entirely. Used for bulk
+	// mail-attachment indexing: OCRing scanned attachments via the vision model
+	// would hammer the inference model and make mail sync crawl. Direct text
+	// extraction (the common case) still works.
+	disableOCR bool
+}
 
-// NewPDFParser creates a new PDF parser instance.
+// NewPDFParser creates a new PDF parser instance. The OCR fallback's vision
+// endpoint/model default to HYGUR_VISION_ENDPOINT / HYGUR_VISION_MODEL (same
+// convention as ImageParser), so a config→env bridge enables vision OCR for
+// scanned PDFs without threading the values through every call site.
 func NewPDFParser() *PDFParser {
-	return &PDFParser{}
+	return &PDFParser{
+		visionEndpoint: os.Getenv("HYGUR_VISION_ENDPOINT"),
+		visionModel:    os.Getenv("HYGUR_VISION_MODEL"),
+	}
+}
+
+// NewPDFParserTextOnly returns a parser that extracts embedded text but never
+// runs the OCR fallback — for bulk mail-attachment indexing where vision OCR is
+// far too costly per attachment. Text-based PDFs still index fully.
+func NewPDFParserTextOnly() *PDFParser {
+	return &PDFParser{disableOCR: true}
 }
 
 // SupportedExtensions returns the file extensions this parser handles.
@@ -40,7 +62,19 @@ func (p *PDFParser) SupportedExtensions() []string {
 
 // Parse extracts text content and metadata from a PDF document.
 // The reader content is fully buffered since PDF parsing requires random access.
-func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Metadata, error) {
+func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (content string, meta ingest.Metadata, err error) {
+	// The ledongthuc/pdf library panics on some malformed/truncated PDFs
+	// (e.g. "malformed PDF: reading at offset … EOF") instead of returning an
+	// error. Recover so a bad document degrades to ErrInvalidPDF rather than
+	// crashing the process — mail-attachment indexing runs Parse in goroutines,
+	// where an unrecovered panic takes down the whole sidecar.
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.WarnContext(ctx, "pdf.parse: recovered from panic in PDF library", "panic", rec)
+			content, meta, err = "", nil, fmt.Errorf("%w: panic: %v", ErrInvalidPDF, rec)
+		}
+	}()
+
 	// Check context before starting
 	select {
 	case <-ctx.Done():
@@ -114,7 +148,7 @@ func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Meta
 	}
 
 	// Join pages with double newlines
-	content := strings.Join(pageTexts, "\n\n")
+	content = strings.Join(pageTexts, "\n\n")
 
 	// Normalize the text
 	content = ingest.NormalizeText(content)
@@ -135,8 +169,9 @@ func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Meta
 
 	// Sparse-text heuristic: if the extracted text averages fewer than 50
 	// characters per page, the PDF is likely scanned/image-only. Attempt an
-	// OCR fallback via pdftoppm + Tesseract.
-	if isSparseText(content, pageCount) {
+	// OCR fallback — unless OCR is disabled (bulk mail-attachment path), where a
+	// per-attachment vision call would saturate the inference model.
+	if !p.disableOCR && isSparseText(content, pageCount) {
 		slog.WarnContext(ctx, "pdf.parse: sparse text detected, attempting OCR fallback",
 			"page_count", pageCount, "content_len", len(content))
 		ocrText := p.ocrFallback(ctx, data)
@@ -161,10 +196,12 @@ func isSparseText(text string, pageCount int) bool {
 	return len([]rune(strings.TrimSpace(text)))/pageCount < 50
 }
 
-// ocrFallback converts each PDF page to a PNG with pdftoppm and runs
-// Tesseract OCR on the resulting images. It is entirely fail-soft: any
-// error is logged as a warning and an empty string is returned so the
-// caller can continue with the (possibly empty) directly-extracted text.
+// ocrFallback OCRs a scanned/image-only PDF. It first tries a pure-Go path:
+// extract the images embedded in the PDF (pdfcpu — for scanned docs each page
+// is one image) and OCR them via the vision model, so OCR works with NO system
+// binary (portable). If that yields nothing and pdftoppm (poppler) happens to
+// be installed, it falls back to rendering pages — which also covers vector /
+// text-only-sparse pages and codecs pdfcpu can't decode. Entirely fail-soft.
 func (p *PDFParser) ocrFallback(ctx context.Context, data []byte) (result string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -173,9 +210,51 @@ func (p *PDFParser) ocrFallback(ctx context.Context, data []byte) (result string
 		}
 	}()
 
+	if txt := p.ocrViaEmbeddedImages(ctx, data); strings.TrimSpace(txt) != "" {
+		return txt
+	}
+	return p.ocrViaPdftoppm(ctx, data)
+}
+
+// ocrViaEmbeddedImages extracts the images embedded in the PDF (pure Go via
+// pdfcpu) and OCRs each via ImageParser (Tesseract → vision model). No system
+// dependency — the portable default. Returns "" when no images are extractable.
+func (p *PDFParser) ocrViaEmbeddedImages(ctx context.Context, data []byte) string {
+	imagesByPage, err := pdfcpuapi.ExtractImagesRaw(bytes.NewReader(data), nil, nil)
+	if err != nil {
+		slog.WarnContext(ctx, "pdf.ocr: pdfcpu image extraction failed", "err", err)
+		return ""
+	}
+	ip := NewImageParserWithModel(p.visionEndpoint, p.visionModel)
+	var pageTexts []string
+	for _, page := range imagesByPage {
+		for _, img := range page {
+			select {
+			case <-ctx.Done():
+				return strings.Join(pageTexts, "\n\n")
+			default:
+			}
+			if img.Reader == nil {
+				continue
+			}
+			b, err := io.ReadAll(img.Reader)
+			if err != nil || len(b) == 0 {
+				continue
+			}
+			if text, _, _ := ip.Parse(ctx, bytes.NewReader(b)); strings.TrimSpace(text) != "" {
+				pageTexts = append(pageTexts, strings.TrimSpace(text))
+			}
+		}
+	}
+	return strings.Join(pageTexts, "\n\n")
+}
+
+// ocrViaPdftoppm renders each page to PNG with pdftoppm (poppler) and OCRs it.
+// Opportunistic: returns "" when pdftoppm is absent, so it's never a hard dep.
+func (p *PDFParser) ocrViaPdftoppm(ctx context.Context, data []byte) string {
 	// Guard: pdftoppm must be present.
 	if _, err := exec.LookPath("pdftoppm"); err != nil {
-		slog.WarnContext(ctx, "pdf.ocr: pdftoppm not found in PATH, skipping OCR fallback")
+		slog.WarnContext(ctx, "pdf.ocr: pdftoppm not in PATH, skipping render fallback")
 		return ""
 	}
 
@@ -212,8 +291,10 @@ func (p *PDFParser) ocrFallback(ctx context.Context, data []byte) (result string
 	}
 	sort.Strings(matches) // lexicographic order matches page order
 
-	// OCR each page image using the same Tesseract pipeline as ImageParser.
-	ip := NewImageParser("")
+	// OCR each page image via ImageParser: Tesseract if installed, else the
+	// configured vision model (e.g. nemotron-omni) — so OCR works with no system
+	// Tesseract, keeping the app portable.
+	ip := NewImageParserWithModel(p.visionEndpoint, p.visionModel)
 	var pageTexts []string
 	for _, imgPath := range matches {
 		// Respect context cancellation between pages.
@@ -230,8 +311,8 @@ func (p *PDFParser) ocrFallback(ctx context.Context, data []byte) (result string
 			continue
 		}
 
-		text := ip.tryTesseract(ctx, imgData)
-		if text != "" {
+		text, _, _ := ip.Parse(ctx, bytes.NewReader(imgData))
+		if text = strings.TrimSpace(text); text != "" {
 			pageTexts = append(pageTexts, text)
 		}
 	}

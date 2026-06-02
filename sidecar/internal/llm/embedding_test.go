@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,6 +145,71 @@ func TestGenerateEmbeddings_Batch(t *testing.T) {
 		if emb[0] != expected {
 			t.Errorf("embedding[%d][0] = %f, expected %f", i, emb[0], expected)
 		}
+	}
+}
+
+// TestGenerateEmbeddings_ContextOverflowRecovery verifies that when the server
+// rejects an input for exceeding its context window, the client shrinks the
+// inputs and retries until they fit — instead of failing the whole batch (which
+// would roll back the knowledge item).
+func TestGenerateEmbeddings_ContextOverflowRecovery(t *testing.T) {
+	const fitsAt = 100 // bytes: server accepts once every input is this short
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var req EmbeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		// Reject while any input is still too long (mimics the 512-token cap).
+		for _, in := range req.Input {
+			if len(in) > fitsAt {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":{"message":"input (534 tokens) is larger than the max context size (512 tokens)"}}`))
+				return
+			}
+		}
+		data := make([]EmbeddingData, len(req.Input))
+		for i := range req.Input {
+			emb := make([]float32, ExpectedEmbeddingDimension)
+			data[i] = EmbeddingData{Object: "embedding", Index: i, Embedding: emb}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(EmbeddingResponse{Object: "list", Data: data, Model: req.Model})
+	}))
+	defer server.Close()
+
+	client := NewClientWithHTTP(server.URL, 5*time.Second, 0, server.Client())
+
+	// A long input that overflows on the first attempt and must be shrunk.
+	long := strings.Repeat("https://tracking.example.com/AS8PR03MB6855/click?id=", 8)
+	embeddings, err := client.GenerateEmbeddings(context.Background(), []string{long})
+	if err != nil {
+		t.Fatalf("expected recovery via shrink, got error: %v", err)
+	}
+	if len(embeddings) != 1 || len(embeddings[0]) != ExpectedEmbeddingDimension {
+		t.Fatalf("expected 1 embedding of dim %d, got %d", ExpectedEmbeddingDimension, len(embeddings))
+	}
+	if calls < 2 {
+		t.Errorf("expected at least one shrink-retry, server saw %d call(s)", calls)
+	}
+}
+
+// TestGenerateEmbeddings_ContextOverflowGivesUp verifies termination: if the
+// server always rejects for overflow, the client stops after the shrink budget
+// rather than looping forever.
+func TestGenerateEmbeddings_ContextOverflowGivesUp(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"input is larger than the max context size (512 tokens)"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClientWithHTTP(server.URL, 5*time.Second, 0, server.Client())
+	_, err := client.GenerateEmbeddings(context.Background(), []string{"anything"})
+	if err == nil {
+		t.Fatal("expected an error when the server always rejects for overflow")
 	}
 }
 

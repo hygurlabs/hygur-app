@@ -140,6 +140,45 @@ CREATE INDEX IF NOT EXISTS idx_interaction_log_kind_time ON interaction_log(kind
 CREATE INDEX IF NOT EXISTS idx_interaction_log_occurred_at ON interaction_log(occurred_at);
 `,
 	},
+	// Migration 9 introduces the hybrid-retrieval storage layer: the `sections`
+	// block table (small-to-big), chunks.section_id, and the chunks_fts FTS5
+	// index + sync triggers (BM25 lexical search). Handled by
+	// applySectionsAndFTSV9Migration (special-cased below) so it stays
+	// idempotent across fresh/upgraded installs and so FTS5 trigger creation
+	// runs as discrete statements. Requires the sqlite_fts5 build tag.
+	{
+		Version: 9,
+		Name:    "sections_and_fts5",
+		SQL:     "", // handled by applySectionsAndFTSV9Migration
+	},
+	// Migration 10 adds persistent chat transcripts: chat_sessions +
+	// chat_messages. Idempotent on fresh installs (schemaSQL v1 now declares
+	// both tables). Upgraded DBs get them created here.
+	{
+		Version: 10,
+		Name:    "chat_sessions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at ON chat_sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_id ON chat_sessions(project_id);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    message_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    sources TEXT,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, ordinal);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
@@ -177,6 +216,11 @@ func applyMigrations(db *sql.DB) error {
 		// handles both paths cleanly.
 		if m.Version == 7 {
 			if err := applyMemoriesV7Migration(tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
+			}
+		} else if m.Version == 9 {
+			if err := applySectionsAndFTSV9Migration(tx); err != nil {
 				tx.Rollback()
 				return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
 			}
@@ -239,6 +283,98 @@ func applyMemoriesV7Migration(tx *sql.Tx) error {
 	}
 	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_accepted_at ON memories(accepted_at)`); err != nil {
 		return fmt.Errorf("index accepted_at: %w", err)
+	}
+	return nil
+}
+
+// applySectionsAndFTSV9Migration introduces the hierarchical + hybrid-search
+// storage layer:
+//   - the `sections` block table and chunks.section_id (small-to-big),
+//   - the `chunks_fts` FTS5 virtual table + sync triggers (BM25 lexical search).
+//
+// Idempotent across fresh and upgraded DBs: schemaSQL (v1) already declares
+// `sections` and chunks.section_id on fresh installs, so those are guarded with
+// IF NOT EXISTS / PRAGMA inspection. The FTS5 objects live only here (not in
+// schemaSQL) so each CREATE runs as a discrete statement.
+//
+// NOTE: requires the sqlite_fts5 build tag (see the Makefile). Without it,
+// "CREATE VIRTUAL TABLE ... USING fts5" fails with "no such module: fts5".
+func applySectionsAndFTSV9Migration(tx *sql.Tx) error {
+	// 1. sections table + indexes (no-op when schemaSQL already created them).
+	for _, s := range []string{
+		`CREATE TABLE IF NOT EXISTS sections (
+			section_id TEXT PRIMARY KEY,
+			content_id TEXT NOT NULL REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+			parent_section_id TEXT,
+			heading TEXT,
+			heading_path TEXT,
+			level INTEGER NOT NULL DEFAULT 0,
+			ordinal INTEGER NOT NULL DEFAULT 0,
+			full_text TEXT NOT NULL,
+			token_count INTEGER NOT NULL DEFAULT 0,
+			metadata TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sections_content_id ON sections(content_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sections_parent ON sections(parent_section_id)`,
+	} {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("sections ddl: %w", err)
+		}
+	}
+
+	// 2. chunks.section_id — added via PRAGMA inspection (SQLite < 3.35 lacks
+	//    ADD COLUMN IF NOT EXISTS; fresh installs already have it via schemaSQL).
+	cols, err := existingColumns(tx, "chunks")
+	if err != nil {
+		return err
+	}
+	if _, ok := cols["section_id"]; !ok {
+		if _, err := tx.Exec(`ALTER TABLE chunks ADD COLUMN section_id TEXT`); err != nil {
+			return fmt.Errorf("add chunks.section_id: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_section_id ON chunks(section_id)`); err != nil {
+		return fmt.Errorf("index chunks.section_id: %w", err)
+	}
+
+	// 3. FTS5 index over chunk text + sync triggers. Standalone (not external
+	//    content) so chunk_id/content_id are returned directly from a MATCH.
+	//    French tokenizer: unicode61 with diacritics folded.
+	for _, s := range []string{
+		`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+			chunk_id UNINDEXED,
+			content_id UNINDEXED,
+			text,
+			tokenize = 'unicode61 remove_diacritics 2'
+		)`,
+		`CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+			INSERT INTO chunks_fts(chunk_id, content_id, text)
+			VALUES (new.chunk_id, new.content_id, new.text);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks BEGIN
+			DELETE FROM chunks_fts WHERE chunk_id = old.chunk_id;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
+			DELETE FROM chunks_fts WHERE chunk_id = old.chunk_id;
+			INSERT INTO chunks_fts(chunk_id, content_id, text)
+			VALUES (new.chunk_id, new.content_id, new.text);
+		END`,
+	} {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("fts5 ddl: %w", err)
+		}
+	}
+
+	// 4. Backfill the FTS index from any chunks predating the triggers (no-op
+	//    on a fresh DB; idempotent via NOT EXISTS on re-run).
+	if _, err := tx.Exec(`
+		INSERT INTO chunks_fts(chunk_id, content_id, text)
+		SELECT c.chunk_id, c.content_id, c.text
+		FROM chunks c
+		WHERE NOT EXISTS (SELECT 1 FROM chunks_fts f WHERE f.chunk_id = c.chunk_id)
+	`); err != nil {
+		return fmt.Errorf("backfill fts5: %w", err)
 	}
 	return nil
 }

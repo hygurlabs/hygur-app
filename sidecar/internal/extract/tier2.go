@@ -16,7 +16,11 @@ import (
 const Tier2Version = "v1"
 
 const (
-	tier2MaxTokens = 1024
+	// Larger budget than a strict JSON-only model would need: small models
+	// (e.g. minicpm5) ignore /no_think and spend tokens on a <think> block
+	// before the JSON, so we leave room for both. parseTier2Response then digs
+	// the JSON object out of whatever wraps it.
+	tier2MaxTokens = 2048
 	tier2Timeout   = 60 * time.Second
 	// tier2BodyMaxRunes caps how much of the document is sent to the LLM. We
 	// want full coverage for short docs but bound the prompt for long ones —
@@ -132,12 +136,24 @@ func parseTier2Response(raw string) (Tier2Entities, error) {
 	raw = strings.TrimSuffix(raw, "```")
 	raw = strings.TrimSpace(raw)
 
-	if i := strings.Index(raw, "</think>"); i >= 0 {
+	// Strip a reasoning block. Some models (notably minicpm5) ignore /no_think
+	// and wrap output in <think>…</think>; keep what follows the LAST close.
+	if i := strings.LastIndex(raw, "</think>"); i >= 0 {
 		raw = strings.TrimSpace(raw[i+len("</think>"):])
 	}
 
-	// Some models wrap the JSON in a single-element array; accept that.
+	// Small models often emit the JSON wrapped in prose or an unterminated
+	// <think> (no closing tag within the token budget). Dig out the outermost
+	// {...} object so we still capture entities instead of failing the parse.
 	trimmed := strings.TrimLeft(raw, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		if obj := extractFirstJSONObject(raw); obj != "" {
+			raw = obj
+		}
+	}
+
+	// Some models wrap the JSON in a single-element array; accept that.
+	trimmed = strings.TrimLeft(raw, " \t\r\n")
 	if strings.HasPrefix(trimmed, "[") {
 		var arr []Tier2Entities
 		if err := json.Unmarshal([]byte(raw), &arr); err != nil {
@@ -161,6 +177,44 @@ func parseTier2Response(raw string) (Tier2Entities, error) {
 		return Tier2Entities{}, fmt.Errorf("invalid json: %w (raw=%q)", err, truncateRunes(raw, 200))
 	}
 	return out, nil
+}
+
+// extractFirstJSONObject returns the substring from the first '{' to its
+// matching '}' (brace-balanced, string-aware), or "" if none is found. Used to
+// recover the JSON object from small-model output that wraps it in prose or an
+// unterminated <think> block.
+func extractFirstJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return ""
+	}
+	depth, inStr, esc := 0, false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
 }
 
 // repairTier2JSON patches the two most frequent malformations observed in
@@ -191,12 +245,46 @@ func repairTier2JSON(raw string) (string, bool) {
 // normalizeTier2 trims, dedupes (case-insensitive on the simple slices), and
 // caps each list. Topics are additionally lowercased.
 func normalizeTier2(t Tier2Entities) Tier2Entities {
-	t.Persons = dedupStringsCI(t.Persons, 20, false)
-	t.Organizations = dedupStringsCI(t.Organizations, 20, false)
-	t.Projects = dedupStringsCI(t.Projects, 10, false)
-	t.Topics = dedupStringsCI(t.Topics, 5, true)
-	t.EventDates = dedupEventDates(t.EventDates, 20)
+	t.Persons = dedupStringsCI(dropPlaceholders(t.Persons), 20, false)
+	t.Organizations = dedupStringsCI(dropPlaceholders(t.Organizations), 20, false)
+	t.Projects = dedupStringsCI(dropPlaceholders(t.Projects), 10, false)
+	t.Topics = dedupStringsCI(dropPlaceholders(t.Topics), 5, true)
+	t.EventDates = dedupEventDates(dropPlaceholderDates(t.EventDates), 20)
 	return t
+}
+
+// isSchemaPlaceholder reports whether s is a literal example token from the
+// Tier 2 schema that a weak model may echo verbatim instead of real values
+// ("...", "YYYY-MM-DD", "<short reason>", etc.). Such echoes are dropped so a
+// 1B model that fails to follow the instruction pollutes nothing.
+func isSchemaPlaceholder(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	switch t {
+	case "", "...", "…", "..", "yyyy-mm-dd", "<short reason>", "short reason", "string", "name":
+		return true
+	}
+	return strings.HasPrefix(t, "<") && strings.HasSuffix(t, ">")
+}
+
+func dropPlaceholders(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !isSchemaPlaceholder(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func dropPlaceholderDates(in []EventDate) []EventDate {
+	out := make([]EventDate, 0, len(in))
+	for _, e := range in {
+		if e.Date == "" || isSchemaPlaceholder(e.Date) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func dedupStringsCI(in []string, maxLen int, lower bool) []string {

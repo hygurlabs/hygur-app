@@ -174,6 +174,35 @@ func NewMailDigestEvent(p MailDigestPayload) Event {
 	}
 }
 
+// MeetingBriefingPayload describes a briefing generated ahead of an event or
+// deadline. Kind is "calendar" or "mail".
+type MeetingBriefingPayload struct {
+	Kind      string
+	ContentID string
+	Title     string
+	WhenISO   string
+	Bullets   []string
+}
+
+// NewMeetingBriefingEvent constructs an Event announcing a meeting/deadline
+// briefing. Always EventTypeMeetingBriefing with StatusCompleted.
+func NewMeetingBriefingEvent(p MeetingBriefingPayload) Event {
+	return Event{
+		Type:    EventTypeMeetingBriefing,
+		Source:  p.ContentID,
+		Status:  StatusCompleted,
+		Message: p.Title,
+		Data: map[string]any{
+			"kind":       p.Kind,
+			"content_id": p.ContentID,
+			"title":      p.Title,
+			"when":       p.WhenISO,
+			"bullets":    p.Bullets,
+		},
+		CreatedAt: time.Now(),
+	}
+}
+
 // NewBriefEvent constructs an Event announcing a freshly-generated daily brief.
 func NewBriefEvent(p BriefPayload) Event {
 	status := StatusCompleted

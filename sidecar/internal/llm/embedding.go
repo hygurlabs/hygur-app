@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -15,8 +16,15 @@ const (
 	// DefaultEmbeddingModel is the fallback model if none is configured.
 	DefaultEmbeddingModel = "text-embedding-nomic-embed-text-v1.5"
 
-	// MaxBatchSize is the maximum number of texts per embedding request.
-	MaxBatchSize = 10
+	// MaxBatchSize is the absolute ceiling of texts per embedding request,
+	// regardless of the configured batch size.
+	MaxBatchSize = 128
+
+	// DefaultEmbeddingBatchSize is the number of chunks sent per /v1/embeddings
+	// request when no override is configured. Larger batches mean far fewer HTTP
+	// round-trips during bulk indexing (and big wins when the embedding server
+	// batches on GPU). Tunable via lm_studio.embedding_batch_size.
+	DefaultEmbeddingBatchSize = 32
 
 	// ExpectedEmbeddingDimension is the expected dimension for nomic-embed-text-v1.5.
 	ExpectedEmbeddingDimension = 768
@@ -109,7 +117,17 @@ func (c *Client) EmbeddingMaxTokens() int {
 // at a UTF-8 boundary to avoid corrupt characters.
 func (c *Client) capInputToBudget(text string) string {
 	budget := c.EmbeddingMaxTokens()
-	maxBytes := budget * tokenEstimateCharsPerToken
+	// Reserve ~20% headroom: the chars/token estimate undercounts for dense
+	// content (URLs, tracking links, code), where the real tokenizer can emit
+	// noticeably more tokens than estimated. Without this margin the server
+	// rejected inputs (400, "larger than max context size") and the whole item
+	// was rolled back. This is the hard guarantee; chunk sizing keeps most
+	// inputs well below it.
+	safeBudget := budget * 4 / 5
+	if safeBudget < 1 {
+		safeBudget = budget
+	}
+	maxBytes := safeBudget * tokenEstimateCharsPerToken
 	if len(text) <= maxBytes {
 		return text
 	}
@@ -120,6 +138,39 @@ func (c *Client) capInputToBudget(text string) string {
 		cut--
 	}
 	return text[:cut]
+}
+
+// isContextOverflowError reports whether an API error is the server rejecting
+// an input for exceeding the embedding model's context window. The wording
+// varies across servers (llama.cpp, LM Studio), so we match on stable phrases.
+func isContextOverflowError(apiErr *APIError) bool {
+	if apiErr == nil || apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	m := strings.ToLower(apiErr.Message)
+	return strings.Contains(m, "context size") ||
+		strings.Contains(m, "max context") ||
+		strings.Contains(m, "context length") ||
+		(strings.Contains(m, "larger than") && strings.Contains(m, "token"))
+}
+
+// shrinkTexts trims each text to `factor` of its current byte length, stepping
+// back to a UTF-8 rune boundary. Used to recover from a context-overflow
+// rejection without dropping the whole batch.
+func shrinkTexts(texts []string, factor float64) []string {
+	out := make([]string, len(texts))
+	for i, t := range texts {
+		cut := int(float64(len(t)) * factor)
+		if cut >= len(t) {
+			out[i] = t
+			continue
+		}
+		for cut > 0 && (t[cut]&0xC0) == 0x80 {
+			cut--
+		}
+		out[i] = t[:cut]
+	}
+	return out
 }
 
 // GetEmbeddingModel returns the configured embedding model.
@@ -179,52 +230,45 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 		return nil, ErrEmptyInput
 	}
 
-	req := EmbeddingRequest{
-		Model: c.GetEmbeddingModel(),
-		Input: validTexts,
-	}
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
-	}
-
 	embURL := c.embeddingURL() + "/v1/embeddings"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, embURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create embedding request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-
 	embHTTP := c.embeddingHTTPClient
 	if embHTTP == nil {
 		embHTTP = c.httpClient
 	}
 
-	var lastErr error
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		if attempt > 0 {
-			// Exponential backoff: 100ms, 200ms, 400ms, ...
-			backoff := 100 << (attempt - 1)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-timeAfter(backoff):
-			}
+	// currentInput starts at the budget-capped texts. If the server rejects the
+	// batch for exceeding its context window (its tokeniser counts more tokens
+	// than our char-based estimate — common for dense mail: long Message-IDs,
+	// tracking URLs), we shrink every input and retry. This is the hard
+	// guarantee that one oversized chunk can't roll back the whole item.
+	currentInput := validTexts
 
-			// Recreate request body for retry
-			httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, embURL, bytes.NewReader(body))
-			if err != nil {
-				return nil, fmt.Errorf("failed to create embedding request: %w", err)
-			}
-			httpReq.Header.Set("Content-Type", "application/json")
+	var lastErr error
+	attempt := 0          // transient-error retries (capped at maxRetries, with backoff)
+	overflowShrinks := 0  // context-overflow shrinks (own budget, no backoff)
+	const maxOverflowShrinks = 6
+
+	for {
+		body, err := json.Marshal(EmbeddingRequest{Model: c.GetEmbeddingModel(), Input: currentInput})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
 		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, embURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create embedding request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
 		resp, err := embHTTP.Do(httpReq)
 		if err != nil {
 			lastErr = fmt.Errorf("embedding request failed: %w", err)
-			if isRetryableError(err) {
+			if isRetryableError(err) && attempt < c.maxRetries {
+				attempt++
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-timeAfter(100 << (attempt - 1)):
+				}
 				continue
 			}
 			return nil, lastErr
@@ -239,14 +283,27 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 			apiErr := parseAPIError(resp)
 			resp.Body.Close()
 
-			// Check for model unavailable in error message
-			if apiErr.StatusCode == http.StatusBadRequest &&
-				(containsModelError(apiErr.Message)) {
+			// Model unavailable surfaced as a 400 message.
+			if apiErr.StatusCode == http.StatusBadRequest && containsModelError(apiErr.Message) {
 				return nil, ErrEmbeddingModelUnavailable
 			}
 
-			if isRetryableStatus(resp.StatusCode) {
+			// Context overflow: shrink each input ~30% and retry. Converges fast
+			// and the floor guarantees termination; no backoff needed.
+			if isContextOverflowError(apiErr) && overflowShrinks < maxOverflowShrinks {
+				overflowShrinks++
+				currentInput = shrinkTexts(currentInput, 0.7)
+				continue
+			}
+
+			if isRetryableStatus(resp.StatusCode) && attempt < c.maxRetries {
 				lastErr = apiErr
+				attempt++
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-timeAfter(100 << (attempt - 1)):
+				}
 				continue
 			}
 			return nil, apiErr
@@ -263,23 +320,19 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 			return nil, ErrEmptyEmbedding
 		}
 
-		// Sort by index and extract embeddings
+		// Sort by index and extract embeddings, mapping back to original indices.
 		result := make([][]float32, len(texts))
 		for _, data := range embResp.Data {
 			if data.Index < 0 || data.Index >= len(validIndices) {
 				continue
 			}
-
 			if len(data.Embedding) == 0 {
 				return nil, ErrEmptyEmbedding
 			}
-
-			// Map back to original index
-			originalIdx := validIndices[data.Index]
-			result[originalIdx] = data.Embedding
+			result[validIndices[data.Index]] = data.Embedding
 		}
 
-		// Check that we got all expected embeddings
+		// Check that we got all expected embeddings.
 		for i, idx := range validIndices {
 			if result[idx] == nil {
 				return nil, fmt.Errorf("missing embedding for text at index %d", i)
@@ -288,11 +341,6 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 
 		return result, nil
 	}
-
-	if lastErr != nil {
-		return nil, fmt.Errorf("all retries exhausted: %w", lastErr)
-	}
-	return nil, fmt.Errorf("all retries exhausted")
 }
 
 // ValidateEmbeddingDimension checks if the embedding has the expected dimension.

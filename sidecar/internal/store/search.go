@@ -17,12 +17,13 @@ func GetCanonicalDate(item *KnowledgeItem) time.Time {
 	if item == nil || item.Metadata == nil {
 		return time.Time{}
 	}
-	for _, key := range []string{"canonical_date", "mail_date"} {
-		v, ok := item.Metadata[key]
-		if !ok {
-			continue
-		}
-		s, ok := v.(string)
+	// The real content/mail date is stamped in metadata at ingestion. Connectors
+	// disagree on the key — the mail pipeline writes "canonical_date"/"mail_date",
+	// the IMAP connector wrote "date" — so accept all of them. We deliberately do
+	// NOT fall back to created_at: that is an ingestion timestamp and must never
+	// stand in for a message's real sent date in temporal reasoning.
+	for _, key := range []string{"canonical_date", "mail_date", "date"} {
+		s, ok := item.Metadata[key].(string)
 		if !ok || s == "" {
 			continue
 		}

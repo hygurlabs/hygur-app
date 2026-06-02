@@ -4,6 +4,7 @@ package mail
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -158,6 +159,27 @@ type Attachment struct {
 
 	// Size is the size of the attachment in bytes.
 	Size int64
+
+	// Data holds the raw attachment bytes when the connector chose to download
+	// them for indexing (text-bearing types under MaxIndexableAttachmentBytes).
+	// Nil for most attachments — it is populated opportunistically so the
+	// EmailIndexer can extract searchable text (e.g. a recharge total that lives
+	// only inside an attached PDF).
+	Data []byte
+}
+
+// MaxIndexableAttachmentBytes caps the size of an attachment whose bytes are
+// downloaded for text extraction. Keeps sync bandwidth/memory bounded; larger
+// attachments are indexed by metadata (filename) only.
+const MaxIndexableAttachmentBytes = 10 << 20 // 10 MiB
+
+// IsPDFAttachment reports whether an attachment is a PDF (by MIME type or
+// filename), i.e. a candidate for text extraction during indexing.
+func IsPDFAttachment(att Attachment) bool {
+	if strings.Contains(strings.ToLower(att.MimeType), "pdf") {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(att.Filename), ".pdf")
 }
 
 // CredentialSetter is an optional interface for connectors that accept

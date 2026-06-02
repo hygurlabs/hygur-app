@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,38 @@ func TestConnect_RejectsMissingMailApp(t *testing.T) {
 	}
 	if c.IsConnected() {
 		t.Fatal("connector should not be marked connected")
+	}
+}
+
+func TestConnect_SurfacesAccountReadError(t *testing.T) {
+	// Mail.app running but account enumeration threw: the script reports
+	// accountCount 0 plus an error string. Connect must surface that cause
+	// rather than the misleading flat "no accounts configured".
+	r := newFakeRunner()
+	out, _ := json.Marshal(map[string]any{
+		"running": true, "accountCount": 0, "mailboxCount": 0,
+		"error": "Error: Application isn't running (-600)",
+	})
+	r.responses[scriptHealth[:60]] = out
+	c := NewConnector("acct-1", "Test").withRunner(r)
+
+	err := c.Connect(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when 0 accounts are reported")
+	}
+	if got := err.Error(); !strings.Contains(got, "cannot read accounts") || !strings.Contains(got, "(-600)") {
+		t.Fatalf("error should surface the underlying cause, got %q", got)
+	}
+}
+
+func TestConnect_ZeroAccountsHint(t *testing.T) {
+	r := newFakeRunner()
+	r.onHealth(true, 0) // running, genuinely 0 accounts, no error
+	c := NewConnector("acct-1", "Test").withRunner(r)
+
+	err := c.Connect(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Automation") {
+		t.Fatalf("expected an actionable Automation hint, got %v", err)
 	}
 }
 

@@ -72,6 +72,32 @@ func TestPDFParser_Parse_InvalidPDF(t *testing.T) {
 	}
 }
 
+// TestPDFParser_Parse_PanicRecovery feeds inputs that make the underlying
+// pdf library panic (e.g. an xref offset past EOF — the real-world
+// "malformed PDF: reading at offset … EOF" crash). Parse must recover and
+// return ErrInvalidPDF rather than panicking, since mail-attachment indexing
+// runs it in goroutines where a panic would crash the whole sidecar.
+func TestPDFParser_Parse_PanicRecovery(t *testing.T) {
+	p := NewPDFParser()
+	inputs := map[string][]byte{
+		// Valid-looking header + startxref pointing far past EOF.
+		"xref past eof": []byte("%PDF-1.4\nstartxref\n9999999\n%%EOF\n"),
+		// Header + garbage trailer/xref tokens.
+		"garbage xref":  []byte("%PDF-1.5\n1 0 obj<<>>endobj\nstartxref\n5\n%%EOF"),
+		// Truncated mid-stream after a plausible object.
+		"truncated obj": append([]byte("%PDF-1.7\n2 0 obj<</Length 99>>stream\n"), make([]byte, 8)...),
+	}
+	for name, in := range inputs {
+		t.Run(name, func(t *testing.T) {
+			// The assertion is simply that this returns instead of panicking.
+			_, _, err := p.Parse(context.Background(), bytes.NewReader(in))
+			if err == nil {
+				t.Fatal("expected an error for malformed PDF, got nil")
+			}
+		})
+	}
+}
+
 func TestPDFParser_Parse_ContextCancelled(t *testing.T) {
 	p := NewPDFParser()
 

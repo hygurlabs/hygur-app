@@ -39,10 +39,16 @@ const Mail = Application("Mail");
 const mb = findMailbox(Mail, args.accountId || "", args.mailboxName);
 if (!mb) throw new Error("mailbox not found: " + (args.accountId || "(local)") + "/" + args.mailboxName);
 
-// Bulk-fetch all attributes in 4 Apple Events instead of N×4.
+// Bulk-fetch all attributes in a few Apple Events instead of N×4.
 const ids = mb.messages.id();
 const subjects = mb.messages.subject();
-const dates = mb.messages.dateSent();
+// Order/group by RECEIVED date so a just-received mail is treated as the
+// newest even when it was SENT earlier (a reply to an old thread, a delayed
+// delivery). dateSent alone buried/mis-grouped freshly-received mail. Fall
+// back to sent date per-message when received is unavailable.
+const sentDates = mb.messages.dateSent();
+let recvDates = [];
+try { recvDates = mb.messages.dateReceived(); } catch (e) { recvDates = []; }
 const senders = mb.messages.sender();
 let messageIds = [];
 try { messageIds = mb.messages.messageId(); } catch (e) { messageIds = []; }
@@ -52,7 +58,7 @@ const before = args.before ? new Date(args.before) : null;
 
 const groups = new Map();
 for (let i = 0; i < ids.length; i++) {
-  const d = dates[i];
+  const d = recvDates[i] || sentDates[i];
   if (since && d < since) continue;
   if (before && d >= before) continue;
 
@@ -72,7 +78,14 @@ for (let i = 0; i < ids.length; i++) {
   }
   if (senders[i]) g.participants.add(String(senders[i]));
   g.ids.push(ids[i]);
-  if (d < g.dateMin) g.dateMin = d;
+  // Key the thread on its OLDEST message (the root) so the content_id is
+  // deterministic across syncs — Apple Mail returns messages in mailbox/storage
+  // order, so "first seen" was non-deterministic and could spawn duplicate
+  // thread items. get_messages fetches by the numeric id list, not this id.
+  if (d < g.dateMin) {
+    g.dateMin = d;
+    g.id = messageIds[i] || ("local-" + ids[i]);
+  }
   if (d > g.dateMax) g.dateMax = d;
 }
 

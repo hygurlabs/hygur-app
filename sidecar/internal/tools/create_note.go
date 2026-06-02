@@ -102,40 +102,11 @@ func (t *CreateNoteTool) Run(ctx context.Context, req CreateNoteRequest) (*Creat
 		return nil, fmt.Errorf("failed to save note: %w", err)
 	}
 
-	// Chunk the content for search
-	chunks := ingest.ChunkText(normalizedText, ingest.DefaultChunkOptions())
-
-	// Insert chunks and collect for embedding
-	var storeChunks []store.Chunk
-	for _, chunk := range chunks {
-		chunkID := uuid.New().String()
-
-		storeChunk := &store.Chunk{
-			ChunkID:   chunkID,
-			ContentID: contentID,
-			ChunkHash: fmt.Sprintf("%x", chunkID[:8]), // Simple hash for notes
-			Text:      chunk.Content,
-			Metadata: map[string]any{
-				"index":        chunk.Index,
-				"start_offset": chunk.StartOffset,
-				"end_offset":   chunk.EndOffset,
-			},
-			CreatedAt: now,
-		}
-
-		if err := t.store.InsertChunk(ctx, storeChunk); err != nil {
-			return nil, fmt.Errorf("failed to insert chunk %d: %w", chunk.Index, err)
-		}
-
-		storeChunks = append(storeChunks, *storeChunk)
-	}
-
-	// Generate embeddings — mandatory. Roll back if this fails.
-	if t.embeddingService != nil && len(storeChunks) > 0 {
-		if err := t.embeddingService.BatchEmbedAndStore(ctx, storeChunks); err != nil {
-			_ = t.store.DeleteKnowledgeItem(context.Background(), contentID)
-			return nil, fmt.Errorf("embedding failed for note %s: %w", contentID, err)
-		}
+	// Chunk into hierarchical sections + embed-sized chunks and persist them
+	// via the single shared indexing path, then embed. Roll back on failure.
+	if _, _, idxErr := ingest.IndexSections(ctx, t.store, t.embeddingService, contentID, normalizedText, ingest.DefaultChunkTokenBudget, now); idxErr != nil {
+		_ = t.store.DeleteKnowledgeItem(context.Background(), contentID)
+		return nil, fmt.Errorf("indexing failed for note %s: %w", contentID, idxErr)
 	}
 
 	// Link to project if specified

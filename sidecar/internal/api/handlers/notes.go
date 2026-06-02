@@ -316,51 +316,20 @@ func (h *NotesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Update version ID for change tracking
 	item.VersionID = uuid.New().String()
 
-	// If content changed, we need to re-chunk and re-embed
+	// If content changed, re-chunk into hierarchical sections + chunks and
+	// re-embed via the single shared indexing path (it replaces the old
+	// sections/chunks itself).
 	if contentChanged {
-		// Delete old chunks (cascade deletes vectors too via trigger)
-		if err := h.store.DeleteChunksByContentID(r.Context(), noteID); err != nil {
-			h.logger.Error().Err(err).Str("id", noteID).Msg("failed to delete old chunks")
-			writeNotesError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to update note")
-			return
-		}
-
-		// Create new chunks
-		chunks := ingest.ChunkText(item.NormalizedText, ingest.DefaultChunkOptions())
 		now := time.Now()
-
-		var storeChunks []store.Chunk
-		for _, chunk := range chunks {
-			chunkID := uuid.New().String()
-
-			storeChunk := &store.Chunk{
-				ChunkID:   chunkID,
-				ContentID: noteID,
-				ChunkHash: chunkID[:16], // Simple hash for notes
-				Text:      chunk.Content,
-				Metadata: map[string]any{
-					"index":        chunk.Index,
-					"start_offset": chunk.StartOffset,
-					"end_offset":   chunk.EndOffset,
-				},
-				CreatedAt: now,
-			}
-
-			if err := h.store.InsertChunk(r.Context(), storeChunk); err != nil {
-				h.logger.Error().Err(err).Str("id", noteID).Int("chunk", chunk.Index).Msg("failed to insert chunk")
+		if _, chunkCount, idxErr := ingest.IndexSections(r.Context(), h.store, h.embeddingService, noteID, item.NormalizedText, ingest.DefaultChunkTokenBudget, now); idxErr != nil {
+			if chunkCount == 0 {
+				// Nothing persisted — a real failure.
+				h.logger.Error().Err(idxErr).Str("id", noteID).Msg("failed to re-index note")
 				writeNotesError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to update note")
 				return
 			}
-
-			storeChunks = append(storeChunks, *storeChunk)
-		}
-
-		// Re-embed if service available
-		if h.embeddingService != nil && len(storeChunks) > 0 {
-			if err := h.embeddingService.BatchEmbedAndStore(r.Context(), storeChunks); err != nil {
-				h.logger.Warn().Err(err).Str("id", noteID).Msg("failed to generate embeddings")
-				// Don't fail - note is still searchable via FTS
-			}
+			// Chunks persisted but embedding failed: note stays searchable via FTS.
+			h.logger.Warn().Err(idxErr).Str("id", noteID).Msg("re-index note: embedding failed; still searchable via FTS")
 		}
 	}
 

@@ -1,0 +1,1057 @@
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  ArrowUp,
+  History,
+  Paperclip,
+  Mic,
+  Plus,
+  X,
+  FolderKanban,
+  StickyNote,
+  Mail,
+  FileText,
+  Tag as TagIcon,
+  AtSign,
+  Copy,
+  Check,
+  FileDown,
+  Printer,
+  ChevronRight,
+} from "lucide-react";
+import { streamChat, api } from "../lib/api";
+import { native } from "../lib/native";
+import type {
+  AttachmentRef,
+  ChatMessage,
+  Mention,
+  RagSource,
+  SessionSummary,
+} from "../lib/types";
+import { fmtDate, srcLabel } from "../lib/format";
+import { useDetail } from "../components/DetailPanel";
+import { RecordList, type RecordRow } from "../components/RecordList";
+import { ErrorBanner } from "../components/ui";
+
+interface Turn {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: RagSource[];
+  activity?: string;
+  error?: string;
+}
+
+interface ProjectFocus {
+  id: string;
+  name: string;
+}
+
+// MARK: - Copy / export helpers
+
+/** Copies text to the clipboard, with an execCommand fallback for contexts
+ *  where the async Clipboard API is unavailable (older WKWebView). */
+async function copyText(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    /* fall through to legacy path */
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    ta.remove();
+  }
+}
+
+/** Small inline copy button that flips to a check for ~1.2s after copying. */
+function CopyButton({ text, title = "Copy" }: { text: string; title?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={async () => {
+        await copyText(text);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      }}
+      className="rounded-md p-1 text-muted opacity-0 transition-all hover:bg-surface2 hover:text-text group-hover:opacity-100"
+    >
+      {copied ? (
+        <Check size={13} strokeWidth={2} className="text-accent" />
+      ) : (
+        <Copy size={13} strokeWidth={1.9} />
+      )}
+    </button>
+  );
+}
+
+/** Renders the conversation as Markdown for export. */
+function buildChatMarkdown(turns: Turn[]): string {
+  const out: string[] = ["# Conversation Hygur", ""];
+  for (const t of turns) {
+    if (!t.content) continue;
+    out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "", t.content, "");
+    if (t.role === "assistant" && t.sources?.length) {
+      out.push("**Sources:**");
+      for (const s of t.sources) {
+        out.push(`- ${s.title}${s.mail_date ? ` — ${fmtDate(s.mail_date)}` : ""}`);
+      }
+      out.push("");
+    }
+  }
+  return out.join("\n");
+}
+
+const EXAMPLES = [
+  "What's my VAT due for Q1 2026?",
+  "Summarise my last invoices from EDF",
+  "What deadlines do I have this month?",
+];
+
+let turnSeq = 0;
+const nextId = () => `t${++turnSeq}`;
+const newSessionId = () =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : String(Date.now());
+
+export function Ask() {
+  const openDetail = useDetail();
+  const qc = useQueryClient();
+
+  const [sessionId, setSessionId] = useState(newSessionId);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+
+  // Pending context for the NEXT message: 📎 file/@-mention attachments
+  // (document refs, consumed per message) and @-mentioned projects (focus
+  // scope, sticky for the conversation).
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
+  const [focusProjects, setFocusProjects] = useState<ProjectFocus[]>([]);
+  const [focusTags, setFocusTags] = useState<ProjectFocus[]>([]);
+
+  // Right panel: "sessions" (history picker) or "context" (live retrieval that
+  // auto-hides once the answer starts streaming).
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelMode, setPanelMode] = useState<"sessions" | "context">("context");
+  const [liveSources, setLiveSources] = useState<RagSource[]>([]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const hidOnStreamRef = useRef(false);
+
+  const [params, setParams] = useSearchParams();
+  const lastQ = useRef<string | null>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns]);
+
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 168)}px`;
+  }, [input]);
+
+  // Deep-linked query (#/?q=…&n=…) from the native shell — run once, then strip.
+  useEffect(() => {
+    const q = params.get("q");
+    if (!q) return;
+    const key = `${q} ${params.get("n") ?? ""}`;
+    if (key !== lastQ.current && !streaming) {
+      lastQ.current = key;
+      setParams({}, { replace: true });
+      void send(q);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // Deep-link: a document opened from Library/Search can be attached to the
+  // chat (#/?attach=<content_id>&attachTitle=…) so the user asks about it.
+  const lastAttach = useRef<string | null>(null);
+  useEffect(() => {
+    const attach = params.get("attach");
+    if (!attach || attach === lastAttach.current) return;
+    lastAttach.current = attach;
+    const title = params.get("attachTitle") ?? undefined;
+    setAttachments((prev) =>
+      prev.some((a) => a.content_id === attach)
+        ? prev
+        : [...prev, { type: "document", content_id: attach, title }],
+    );
+    setParams({}, { replace: true });
+    taRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  function patchLast(patch: (t: Turn) => Turn) {
+    setTurns((prev) => {
+      if (prev.length === 0) return prev;
+      const copy = prev.slice();
+      copy[copy.length - 1] = patch(copy[copy.length - 1]);
+      return copy;
+    });
+  }
+
+  function startNewChat() {
+    abortRef.current?.abort();
+    setSessionId(newSessionId());
+    setTurns([]);
+    setAttachments([]);
+    setFocusProjects([]);
+    setFocusTags([]);
+    setLiveSources([]);
+    setPanelOpen(false);
+    setInput("");
+    taRef.current?.focus();
+  }
+
+  async function loadSession(id: string) {
+    try {
+      const detail = await api.session(id);
+      setSessionId(detail.id);
+      setTurns(
+        detail.messages.map((m) => ({
+          id: nextId(),
+          role: m.role,
+          content: m.content,
+          sources: m.sources,
+        })),
+      );
+      setAttachments([]);
+      setFocusProjects([]);
+      setFocusTags([]);
+      setPanelOpen(false);
+    } catch {
+      /* surfaced by the panel's own error state if needed */
+    }
+  }
+
+  async function send(explicit?: string) {
+    const q = (explicit ?? input).trim();
+    if (!q || streaming) return;
+    if (!explicit) setInput("");
+    setStreaming(true);
+
+    const msgAttachments = attachments.slice();
+    setAttachments([]);
+    setLiveSources([]);
+    hidOnStreamRef.current = false;
+    setPanelMode("context");
+    setPanelOpen(true);
+
+    const userTurn: Turn = { id: nextId(), role: "user", content: q };
+    const assistantTurn: Turn = {
+      id: nextId(),
+      role: "assistant",
+      content: "",
+      activity: "Thinking…",
+    };
+    setTurns((prev) => [...prev, userTurn, assistantTurn]);
+
+    const history: ChatMessage[] = [
+      ...turns.map((t) => ({ role: t.role, content: t.content })),
+      {
+        role: "user" as const,
+        content: q,
+        ...(msgAttachments.length ? { attachments: msgAttachments } : {}),
+      },
+    ];
+
+    const projectIds = focusProjects.map((p) => p.id);
+    const tagIds = focusTags.map((t) => t.id);
+    const focusScope =
+      projectIds.length || tagIds.length
+        ? {
+            ...(projectIds.length ? { project_ids: projectIds } : {}),
+            ...(tagIds.length ? { tag_ids: tagIds } : {}),
+          }
+        : undefined;
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      await streamChat(
+        history,
+        sessionId,
+        {
+          onSources: (sources) => {
+            setLiveSources(sources);
+            patchLast((t) => ({
+              ...t,
+              sources,
+              activity: `Reading ${sources.length} source${sources.length === 1 ? "" : "s"}…`,
+            }));
+          },
+          onTool: (name) =>
+            patchLast((t) => ({
+              ...t,
+              activity:
+                name === "search_knowledge_base"
+                  ? "Searching your knowledge base…"
+                  : `Running ${name}…`,
+            })),
+          onDelta: (delta) => {
+            // The answer is now streaming — retract the ephemeral context panel.
+            if (!hidOnStreamRef.current) {
+              hidOnStreamRef.current = true;
+              setPanelOpen(false);
+            }
+            patchLast((t) => ({
+              ...t,
+              content: t.content + delta,
+              activity: undefined,
+            }));
+          },
+          onError: (message) => patchLast((t) => ({ ...t, error: message })),
+          onDone: () => patchLast((t) => ({ ...t, activity: undefined })),
+        },
+        ctrl.signal,
+        { focusScope },
+      );
+    } catch {
+      /* onError surfaced it */
+    } finally {
+      patchLast((t) => ({ ...t, activity: undefined }));
+      setStreaming(false);
+      abortRef.current = null;
+      // The session now exists/updated server-side — refresh the history list.
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+      taRef.current?.focus();
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void send();
+    }
+  }
+
+  function toggleHistory() {
+    if (panelOpen && panelMode === "sessions") {
+      setPanelOpen(false);
+    } else {
+      setPanelMode("sessions");
+      setPanelOpen(true);
+    }
+  }
+
+  return (
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between border-b border-border px-7 py-3 print:hidden">
+          <span className="font-display text-[15px] font-semibold tracking-tight">
+            Ask Hygur
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={startNewChat}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text"
+            >
+              <Plus size={15} strokeWidth={1.9} /> New
+            </button>
+            <button
+              onClick={toggleHistory}
+              aria-pressed={panelOpen && panelMode === "sessions"}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors ${
+                panelOpen && panelMode === "sessions"
+                  ? "bg-accent-weak text-accent"
+                  : "text-muted hover:bg-surface2 hover:text-text"
+              }`}
+            >
+              <History size={15} strokeWidth={1.9} /> History
+            </button>
+            <button
+              onClick={() =>
+                native.download(
+                  "hygur-chat.md",
+                  "text/markdown;charset=utf-8",
+                  buildChatMarkdown(turns),
+                )
+              }
+              disabled={turns.length === 0}
+              title="Export conversation as Markdown"
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
+            >
+              <FileDown size={15} strokeWidth={1.9} /> MD
+            </button>
+            <button
+              onClick={() => native.print()}
+              disabled={turns.length === 0}
+              title="Export as PDF (via system print)"
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
+            >
+              <Printer size={15} strokeWidth={1.9} /> PDF
+            </button>
+          </div>
+        </header>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto print:overflow-visible">
+          <div className="view-enter mx-auto max-w-[760px] px-7 pb-8 pt-8">
+            {turns.length === 0 ? (
+              <div className="pt-8">
+                <h1 className="font-display text-[28px] font-semibold leading-tight tracking-tight">
+                  Ask Hygur
+                </h1>
+                <p className="mt-2 max-w-[56ch] text-[14px] text-muted">
+                  Everything stays on your machine. Attach documents with the
+                  clip, pull in notes, mails and projects with{" "}
+                  <span className="font-mono">@</span>, or dictate with the mic.
+                </p>
+                <div className="mt-7 flex flex-col items-start gap-2">
+                  {EXAMPLES.map((ex) => (
+                    <button
+                      key={ex}
+                      onClick={() => {
+                        setInput(ex);
+                        taRef.current?.focus();
+                      }}
+                      className="rounded-lg border border-border bg-surface px-3.5 py-2 text-left text-[13.5px] text-muted transition-colors hover:border-accent/40 hover:text-text"
+                    >
+                      {ex}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-7">
+                {turns.map((t) =>
+                  t.role === "user" ? (
+                    <div
+                      key={t.id}
+                      className="group flex max-w-[86%] flex-col items-end gap-1 self-end print:max-w-none"
+                    >
+                      <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
+                        {t.content}
+                      </div>
+                      <div className="print:hidden">
+                        <CopyButton text={t.content} title="Copy message" />
+                      </div>
+                    </div>
+                  ) : (
+                    <AssistantTurn key={t.id} turn={t} openDetail={openDetail} />
+                  ),
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="print:hidden">
+          <Composer
+            input={input}
+            setInput={setInput}
+            onKeyDown={onKeyDown}
+            onSend={() => void send()}
+            streaming={streaming}
+            taRef={taRef}
+            attachments={attachments}
+            setAttachments={setAttachments}
+            focusProjects={focusProjects}
+            setFocusProjects={setFocusProjects}
+            focusTags={focusTags}
+            setFocusTags={setFocusTags}
+          />
+        </div>
+      </div>
+
+      {panelOpen && (
+        <aside className="hidden w-[300px] shrink-0 flex-col border-l border-border bg-surface2/40 lg:flex print:hidden">
+          {panelMode === "sessions" ? (
+            <SessionsPanel
+              activeId={sessionId}
+              onPick={loadSession}
+              onClose={() => setPanelOpen(false)}
+            />
+          ) : (
+            <ContextPanel sources={liveSources} openDetail={openDetail} />
+          )}
+        </aside>
+      )}
+    </div>
+  );
+}
+
+// MARK: - Composer (textarea + 📎 + @ + 🎤)
+
+// Matches an in-progress @-mention at the end of the input: an "@" at a word
+// boundary (start of line or after whitespace) followed by any run of
+// non-whitespace, non-"@" characters. Broader than \w so tag names with ":",
+// "-", "/", "." or accents stay searchable; the boundary keeps email addresses
+// like "john@gmail.com" from triggering the picker. Group 1 is the query.
+const MENTION_RE = /(?:^|\s)@([^\s@]*)$/;
+
+// Strips the trailing "@token" the user typed (keeps any preceding whitespace).
+const MENTION_STRIP_RE = /@[^\s@]*$/;
+
+function Composer({
+  input,
+  setInput,
+  onKeyDown,
+  onSend,
+  streaming,
+  taRef,
+  attachments,
+  setAttachments,
+  focusProjects,
+  setFocusProjects,
+  focusTags,
+  setFocusTags,
+}: {
+  input: string;
+  setInput: (v: string) => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  onSend: () => void;
+  streaming: boolean;
+  taRef: React.RefObject<HTMLTextAreaElement | null>;
+  attachments: AttachmentRef[];
+  setAttachments: React.Dispatch<React.SetStateAction<AttachmentRef[]>>;
+  focusProjects: ProjectFocus[];
+  setFocusProjects: React.Dispatch<React.SetStateAction<ProjectFocus[]>>;
+  focusTags: ProjectFocus[];
+  setFocusTags: React.Dispatch<React.SetStateAction<ProjectFocus[]>>;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // @-mention state.
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const { data: mentionData, isFetching: mentionsLoading } = useQuery({
+    queryKey: ["mentions", mentionQuery],
+    queryFn: () => api.mentions(mentionQuery ?? ""),
+    enabled: mentionQuery !== null,
+  });
+  const mentions = mentionData?.mentions ?? [];
+
+  // 🎤 dictation.
+  const [recording, setRecording] = useState(false);
+  const dictationBase = useRef("");
+  useEffect(() => {
+    if (!native.dictationAvailable) return;
+    return native.dictation.listen((text, isFinal) => {
+      const base = dictationBase.current;
+      setInput(base ? `${base} ${text}` : text);
+      if (isFinal) setRecording(false);
+    });
+  }, [setInput]);
+
+  function onChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const v = e.target.value;
+    setInput(v);
+    // Capture everything after "@" up to the next whitespace or "@" — not just
+    // \w — so queries with ":", "-", "/", "." or accents (common in tag names
+    // like "mail:facture" or "RH-contact") keep the picker open and searchable.
+    const m = MENTION_RE.exec(v);
+    setMentionQuery(m ? m[1] : null);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape" && mentionQuery !== null) {
+      setMentionQuery(null);
+      return;
+    }
+    onKeyDown(e);
+  }
+
+  // Opens the context picker without needing to type "@" — the button users
+  // reach for. Shows recent notes/mails/docs/projects/tags to pick from.
+  function toggleMentionPicker() {
+    setMentionQuery((prev) => (prev === null ? "" : null));
+    taRef.current?.focus();
+  }
+
+  function pickMention(m: Mention) {
+    // Drop the trailing "@token" the user typed.
+    setInput(input.replace(MENTION_STRIP_RE, ""));
+    setMentionQuery(null);
+    if (m.type === "project") {
+      setFocusProjects((prev) =>
+        prev.some((p) => p.id === m.id) ? prev : [...prev, { id: m.id, name: m.title }],
+      );
+    } else if (m.type === "tag") {
+      setFocusTags((prev) =>
+        prev.some((t) => t.id === m.id) ? prev : [...prev, { id: m.id, name: m.title }],
+      );
+    } else {
+      setAttachments((prev) =>
+        prev.some((a) => a.content_id === m.id)
+          ? prev
+          : [...prev, { type: "document", content_id: m.id, title: m.title }],
+      );
+    }
+    taRef.current?.focus();
+  }
+
+  async function onFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploadError(null);
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const res = await api.uploadFile(file);
+        setAttachments((prev) => [
+          ...prev,
+          { type: "document", content_id: res.content_id, title: res.title || file.name },
+        ]);
+      }
+    } catch (e) {
+      setUploadError((e as Error).message);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function toggleMic() {
+    if (recording) {
+      await native.dictation.stop();
+      setRecording(false);
+    } else {
+      dictationBase.current = input;
+      const ok = await native.dictation.start();
+      if (ok) setRecording(true);
+    }
+  }
+
+  const hasChips =
+    attachments.length > 0 || focusProjects.length > 0 || focusTags.length > 0;
+
+  return (
+    <div className="border-t border-border bg-bg/85 px-7 py-4 backdrop-blur">
+      <div className="relative mx-auto max-w-[760px]">
+        {mentionQuery !== null && (
+          <ul className="absolute bottom-full z-30 mb-2 max-h-64 w-full overflow-auto rounded-xl border border-border bg-surface py-1 shadow-lg">
+            {mentions.length > 0 ? (
+              mentions.map((m) => (
+                <li key={`${m.type}-${m.id}`}>
+                  <button
+                    onClick={() => pickMention(m)}
+                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px] transition-colors hover:bg-accent-weak/60"
+                  >
+                    <MentionIcon type={m.type} />
+                    <span className="truncate">{m.title}</span>
+                    <span className="ml-auto text-[11px] uppercase tracking-wide text-faint">
+                      {m.type}
+                    </span>
+                  </button>
+                </li>
+              ))
+            ) : (
+              <li className="px-3.5 py-2 text-[13px] text-muted">
+                {mentionsLoading
+                  ? "Searching…"
+                  : "No matches — type to find notes, mails, docs & projects"}
+              </li>
+            )}
+          </ul>
+        )}
+
+        {hasChips && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {focusProjects.map((p) => (
+              <Chip
+                key={`p-${p.id}`}
+                icon={<FolderKanban size={12} strokeWidth={2} />}
+                label={p.name}
+                onRemove={() =>
+                  setFocusProjects((prev) => prev.filter((x) => x.id !== p.id))
+                }
+              />
+            ))}
+            {focusTags.map((t) => (
+              <Chip
+                key={`t-${t.id}`}
+                icon={<TagIcon size={12} strokeWidth={2} />}
+                label={t.name}
+                onRemove={() =>
+                  setFocusTags((prev) => prev.filter((x) => x.id !== t.id))
+                }
+              />
+            ))}
+            {attachments.map((a) => (
+              <Chip
+                key={`a-${a.content_id}`}
+                icon={<Paperclip size={12} strokeWidth={2} />}
+                label={a.title ?? a.content_id}
+                onRemove={() =>
+                  setAttachments((prev) =>
+                    prev.filter((x) => x.content_id !== a.content_id),
+                  )
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        {uploadError && (
+          <div className="mb-2">
+            <ErrorBanner message={`Upload failed: ${uploadError}`} />
+          </div>
+        )}
+
+        <div className="flex items-end gap-1.5 rounded-2xl border border-border bg-surface py-2 pl-2 pr-2 focus-within:border-accent">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => void onFiles(e.target.files)}
+          />
+          <ComposerIcon
+            label="Attach a document"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            spinning={uploading}
+          >
+            <Paperclip size={17} strokeWidth={1.9} />
+          </ComposerIcon>
+          <ComposerIcon
+            label="Add context (notes, mails, projects, tags)"
+            onClick={toggleMentionPicker}
+            active={mentionQuery !== null}
+          >
+            <AtSign size={17} strokeWidth={1.9} />
+          </ComposerIcon>
+
+          <textarea
+            ref={taRef}
+            rows={1}
+            value={input}
+            onChange={onChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask anything — @ to add context, 📎 to attach…"
+            className="max-h-[168px] flex-1 resize-none bg-transparent py-1.5 text-[14.5px] text-text outline-none placeholder:text-faint"
+          />
+
+          {native.dictationAvailable && (
+            <ComposerIcon
+              label={recording ? "Stop dictation" : "Dictate"}
+              onClick={() => void toggleMic()}
+              active={recording}
+            >
+              <Mic size={17} strokeWidth={1.9} />
+            </ComposerIcon>
+          )}
+
+          <button
+            onClick={onSend}
+            disabled={streaming || !input.trim()}
+            aria-label="Send"
+            className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+          >
+            <ArrowUp size={18} strokeWidth={2.2} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComposerIcon({
+  children,
+  label,
+  onClick,
+  disabled,
+  active,
+  spinning,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  spinning?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={`grid size-9 shrink-0 place-items-center rounded-xl transition-colors disabled:opacity-40 ${
+        active
+          ? "bg-accent text-white"
+          : "text-muted hover:bg-surface2 hover:text-text"
+      } ${spinning ? "animate-pulse" : ""}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Chip({
+  icon,
+  label,
+  onRemove,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onRemove: () => void;
+}) {
+  return (
+    <span className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-border bg-surface py-1 pl-2.5 pr-1.5 text-[12.5px]">
+      <span className="text-accent">{icon}</span>
+      <span className="truncate">{label}</span>
+      <button
+        onClick={onRemove}
+        aria-label="Remove"
+        className="rounded-full p-0.5 text-faint transition-colors hover:bg-surface2 hover:text-danger"
+      >
+        <X size={12} strokeWidth={2} />
+      </button>
+    </span>
+  );
+}
+
+function MentionIcon({ type }: { type: Mention["type"] }) {
+  const cls = "shrink-0 text-faint";
+  if (type === "project")
+    return <FolderKanban size={15} strokeWidth={1.75} className={cls} />;
+  if (type === "tag") return <TagIcon size={15} strokeWidth={1.75} className={cls} />;
+  if (type === "note")
+    return <StickyNote size={15} strokeWidth={1.75} className={cls} />;
+  if (type === "mail") return <Mail size={15} strokeWidth={1.75} className={cls} />;
+  return <FileText size={15} strokeWidth={1.75} className={cls} />;
+}
+
+// MARK: - Right panel
+
+function SessionsPanel({
+  activeId,
+  onPick,
+  onClose,
+}: {
+  activeId: string;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["sessions"],
+    queryFn: () => api.sessions(),
+  });
+  const sessions: SessionSummary[] = data?.sessions ?? [];
+
+  async function remove(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await api.deleteSession(id);
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <span className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
+          Conversations
+        </span>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text"
+        >
+          <X size={15} strokeWidth={1.75} />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2">
+        {isLoading ? (
+          <p className="px-2 py-3 text-[13px] text-muted">Loading…</p>
+        ) : sessions.length === 0 ? (
+          <p className="px-2 py-3 text-[13px] text-muted">No past conversations yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-0.5">
+            {sessions.map((s) => (
+              <li key={s.id}>
+                <button
+                  onClick={() => onPick(s.id)}
+                  className={`group flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                    s.id === activeId
+                      ? "bg-accent-weak"
+                      : "hover:bg-surface2"
+                  }`}
+                >
+                  <span className="flex w-full items-center gap-2">
+                    <span className="truncate text-[13.5px] font-medium">
+                      {s.title || "Untitled"}
+                    </span>
+                    <span
+                      onClick={(e) => void remove(s.id, e)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Delete conversation"
+                      className="ml-auto rounded p-0.5 text-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                    >
+                      <X size={13} strokeWidth={2} />
+                    </span>
+                  </span>
+                  {s.last_message && (
+                    <span className="line-clamp-1 text-[12px] text-muted">
+                      {s.last_message}
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ContextPanel({
+  sources,
+  openDetail,
+}: {
+  sources: RagSource[];
+  openDetail: (d: { title: string; meta: string[]; body: string }) => void;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="border-b border-border px-4 py-3">
+        <span className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
+          Building context
+        </span>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3">
+        {sources.length === 0 ? (
+          <div className="flex items-center gap-2 px-1 py-3 text-[13px] text-muted">
+            <span className="size-1.5 animate-pulse rounded-full bg-accent" />
+            Searching your data…
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {sources.map((s, i) => (
+              <li key={`${s.content_id}-${i}`}>
+                <button
+                  onClick={() =>
+                    openDetail({
+                      title: s.title,
+                      meta: [
+                        srcLabel(s.source_type),
+                        fmtDate(s.mail_date),
+                        s.mail_from ? `from ${s.mail_from}` : "",
+                      ].filter(Boolean),
+                      body: s.excerpt,
+                    })
+                  }
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent/40"
+                >
+                  <span className="line-clamp-1 text-[13px] font-medium">
+                    {s.title || "(untitled)"}
+                  </span>
+                  <span className="mt-0.5 line-clamp-2 text-[12px] text-muted">
+                    {s.excerpt}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantTurn({
+  turn,
+  openDetail,
+}: {
+  turn: Turn;
+  openDetail: (d: { title: string; meta: string[]; body: string }) => void;
+}) {
+  const streaming = turn.activity !== undefined && turn.content === "";
+  const sourceRows: RecordRow[] = (turn.sources ?? []).map((s, i) => ({
+    id: `${s.content_id}-${i}`,
+    title: s.title,
+    badge: srcLabel(s.source_type),
+    meta: fmtDate(s.mail_date),
+    excerpt: s.excerpt,
+    onClick: () =>
+      openDetail({
+        title: s.title,
+        meta: [
+          srcLabel(s.source_type),
+          fmtDate(s.mail_date),
+          s.mail_from ? `from ${s.mail_from}` : "",
+        ].filter(Boolean),
+        body: s.excerpt,
+      }),
+  }));
+
+  return (
+    <div className="group">
+      {turn.activity && (
+        <div className="mb-2 flex items-center gap-2 text-[13px] text-muted">
+          <span className="size-1.5 animate-pulse rounded-full bg-accent" />
+          {turn.activity}
+        </div>
+      )}
+
+      {turn.content && (
+        <div className="prose-answer text-[14.5px] leading-relaxed">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.content}</ReactMarkdown>
+          {streaming && (
+            <span
+              className="ml-0.5 inline-block h-[1em] w-0.5 translate-y-0.5 bg-accent align-middle"
+              style={{ animation: "hygur-blink 1s steps(2) infinite" }}
+            />
+          )}
+        </div>
+      )}
+
+      {turn.content && !streaming && (
+        <div className="mt-1 print:hidden">
+          <CopyButton text={turn.content} title="Copy reply" />
+        </div>
+      )}
+
+      {turn.error && (
+        <div className="mt-2">
+          <ErrorBanner message={turn.error} />
+        </div>
+      )}
+
+      {sourceRows.length > 0 && (
+        <details className="group mt-4">
+          <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint hover:text-muted">
+            <ChevronRight
+              size={13}
+              strokeWidth={2}
+              className="transition-transform group-open:rotate-90"
+            />
+            {sourceRows.length} source{sourceRows.length === 1 ? "" : "s"}
+          </summary>
+          <div className="mt-1.5">
+            <RecordList rows={sourceRows} />
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}

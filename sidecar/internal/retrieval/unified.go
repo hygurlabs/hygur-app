@@ -60,6 +60,23 @@ func mapKeys(m map[string]struct{}) []string {
 	return out
 }
 
+// maxSectionExcerpt bounds how much of a section's full_text is returned as an
+// excerpt, so a pathologically large block can't blow up the LLM context.
+const maxSectionExcerpt = 6000
+
+// clampText truncates s to at most max bytes, stepping back to a UTF-8 rune
+// boundary, and appends an ellipsis when it had to cut.
+func clampText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
 // UnifiedSearchRequest represents a request to the unified search.
 type UnifiedSearchRequest struct {
 	Query    string                        `json:"query"`
@@ -236,15 +253,13 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		}
 	}
 
-	// Auto-apply date range from temporal intent
-	if detectedIntent != nil && detectedIntent.TemporalMode == intent.TemporalRange {
-		if req.DateFrom == nil && detectedIntent.DateFrom != nil {
-			req.DateFrom = detectedIntent.DateFrom
-		}
-		if req.DateTo == nil && detectedIntent.DateTo != nil {
-			req.DateTo = detectedIntent.DateTo
-		}
-	}
+	// NOTE: we deliberately do NOT auto-apply a hard date range from a temporal
+	// intent (e.g. "avril", "2026"). A year/month in a query usually refers to
+	// the SUBJECT (fiscal period, deadline) rather than the document's received
+	// date, so a hard mail-date filter wrongly drops relevant docs (e.g. a TVA
+	// 2026 notice received in 2025, or a deadline mail dated outside the month).
+	// Temporal relevance is handled by lexical/semantic matching + additive
+	// recency. Explicit req.DateFrom/DateTo from an API caller are still honored.
 
 	if weights == nil {
 		weights = intent.DefaultWeights
@@ -267,6 +282,10 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		searchKnowledge = true
 		searchMail = true
 	}
+	// The lexical (FTS) signal spans every source, so when the request narrows
+	// to a single family we must drop out-of-family hits it surfaces.
+	mailOnly := searchMail && !searchKnowledge
+	knowledgeOnly := searchKnowledge && !searchMail
 
 	if us.llm == nil {
 		return nil, ErrLLMClientRequired
@@ -322,13 +341,11 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		close(llmIntentDone)
 	}
 
-	// Query expansion for short/acronym queries (e.g. "TVA", "VAT").
-	// Short queries produce degenerate embeddings — expanding them to a descriptive
-	// phrase dramatically improves cosine similarity with relevant documents.
-	// Falls back to the original query if the LLM call fails.
-	embeddingQuery := expandQueryIfShort(ctx, us.llm, req.Query)
-
-	embedding, err := us.llm.GenerateEmbedding(ctx, embeddingQuery)
+	// NOTE: LLM query expansion was removed. The hybrid retriever now handles
+	// short/exact queries via the BM25/FTS lexical side, and on reasoning models
+	// the rewrite leaked the model's entire chain-of-thought into the embedding
+	// input (garbage vector + ~18s latency). Embed the raw query directly.
+	embedding, err := us.llm.GenerateEmbedding(ctx, req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
 	}
@@ -431,7 +448,10 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// Apply source weights to raw cosine scores, then merge and sort.
+	// Hybrid fusion. Blend the vector lists (knowledge + mail) with a lexical
+	// BM25/FTS list using Reciprocal Rank Fusion. Lexical recall is what rescues
+	// exact terms/codes/dates ("TVA", "avril", invoice numbers) that cosine
+	// similarity alone misses — the core fix for factual/temporal questions.
 	knowledgeWeight := weights[intent.SourceKnowledge]
 	mailWeight := weights[intent.SourceMail]
 	if knowledgeWeight == 0 {
@@ -441,19 +461,48 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		mailWeight = 0.5
 	}
 
+	// Lexical BM25 over the RAW query (exact terms, no embedding expansion).
+	// Fail-soft: a lexical error must never sink the whole search.
+	ftsResults, ftsErr := us.store.SearchChunksFTS(ctx, req.Query, fetchLimit)
+	if ftsErr != nil {
+		log.Printf("[UnifiedSearch] FTS lexical search failed (fail-soft, vector only): %v", ftsErr)
+	}
+
+	vecToRanked := func(vs []store.VecResult) []rankedChunk {
+		out := make([]rankedChunk, len(vs))
+		for i, v := range vs {
+			out[i] = rankedChunk{ChunkID: v.ChunkID, ContentID: v.ContentID}
+		}
+		return out
+	}
+	ftsRanked := make([]rankedChunk, len(ftsResults))
+	for i, f := range ftsResults {
+		ftsRanked[i] = rankedChunk{ChunkID: f.ChunkID, ContentID: f.ContentID}
+	}
+
+	fused := rrfFuse(
+		rankedList{Weight: knowledgeWeight, Hits: vecToRanked(knowledgeVecResults)},
+		rankedList{Weight: mailWeight, Hits: vecToRanked(mailVecResults)},
+		rankedList{Weight: ftsWeight, Hits: ftsRanked},
+	)
+	// Normalize to [0,1] (top = 1.0) so the downstream recency blend and boosts,
+	// which assume a cosine-like scale, behave as designed.
+	if len(fused) > 0 && fused[0].Score > 0 {
+		top := fused[0].Score
+		for i := range fused {
+			fused[i].Score /= top
+		}
+	}
+
 	type scoredChunk struct {
 		chunkID   string
 		contentID string
 		score     float64
 	}
-	combined := make([]scoredChunk, 0, len(knowledgeVecResults)+len(mailVecResults))
-	for _, r := range knowledgeVecResults {
-		combined = append(combined, scoredChunk{r.ChunkID, r.ContentID, r.Score * knowledgeWeight})
+	combined := make([]scoredChunk, len(fused))
+	for i, f := range fused {
+		combined[i] = scoredChunk{f.ChunkID, f.ContentID, f.Score}
 	}
-	for _, r := range mailVecResults {
-		combined = append(combined, scoredChunk{r.ChunkID, r.ContentID, r.Score * mailWeight})
-	}
-	sort.Slice(combined, func(i, j int) bool { return combined[i].score > combined[j].score })
 
 	// Deduplicate by content_id, keep best score per document.
 	docScores := make(map[string]float64)
@@ -527,14 +576,20 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		scoringMode = ScoringModeAdditive
 	}
 	hasTemporalMarker := IsCurrentStateQuery(req.Query)
+	// An explicit year/month in the query (e.g. "recharges 2026", "facture avril")
+	// names a SUBJECT period, not the document's received date. In that case we
+	// must NOT hard-drop by received date and we soften recency weighting, or we
+	// silently lose older-but-relevant mail (a March invoice asked about in June).
+	hasExplicitPeriod := QueryHasExplicitPeriod(req.Query)
+	recencyMarker := hasTemporalMarker && !hasExplicitPeriod
 	preFilterDays := 0
-	if hasTemporalMarker && req.CurrentStateFilterDays > 0 {
+	if hasTemporalMarker && !hasExplicitPeriod && req.CurrentStateFilterDays > 0 {
 		preFilterDays = req.CurrentStateFilterDays
 	}
 	queryEntityType := detectQueryEntityType(req.Query)
 
-	log.Printf("[UnifiedSearch] mode=%s temporal_marker=%v pre_filter_days=%d entity_type=%q",
-		scoringMode, hasTemporalMarker, preFilterDays, queryEntityType)
+	log.Printf("[UnifiedSearch] mode=%s temporal_marker=%v explicit_period=%v pre_filter_days=%d entity_type=%q",
+		scoringMode, hasTemporalMarker, hasExplicitPeriod, preFilterDays, queryEntityType)
 
 	// perResultDebug accumulates the scoring trace when req.Debug is on.
 	// Allocated lazily so the non-debug hot path stays cheap.
@@ -568,11 +623,29 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 			result.SourceType = item.SourceType
 			result.Metadata = item.Metadata
 
-			const maxDocLength = 2000
-			if len(item.NormalizedText) > maxDocLength {
-				result.Excerpt = item.NormalizedText[:maxDocLength] + "..."
-			} else {
-				result.Excerpt = item.NormalizedText
+			// Source-family filter: the lexical signal is source-agnostic, so a
+			// single-family request must drop out-of-family docs it surfaced.
+			isMailDoc := result.SourceType == "mail" || result.SourceType == "email" || result.SourceType == "thread"
+			if (mailOnly && !isMailDoc) || (knowledgeOnly && isMailDoc) {
+				continue
+			}
+
+			// Small-to-big: hand the model the matched chunk's COMPLETE section
+			// block rather than the whole document or an arbitrary fixed slice.
+			// Fall back to the chunk text, then a document prefix.
+			result.Excerpt = ""
+			if sec, secErr := us.store.GetSectionByChunkID(enrichCtx, doc.chunkID); secErr == nil && sec != nil && strings.TrimSpace(sec.FullText) != "" {
+				result.Excerpt = clampText(sec.FullText, maxSectionExcerpt)
+			}
+			if result.Excerpt == "" {
+				const maxDocLength = 2000
+				if ch, chErr := us.store.GetChunk(enrichCtx, doc.chunkID); chErr == nil && ch != nil && ch.Text != "" {
+					result.Excerpt = clampText(ch.Text, maxSectionExcerpt)
+				} else if len(item.NormalizedText) > maxDocLength {
+					result.Excerpt = item.NormalizedText[:maxDocLength] + "..."
+				} else {
+					result.Excerpt = item.NormalizedText
+				}
 			}
 
 			if item.MailFrom != "" || item.MailDate != "" || item.MailSubject != "" {
@@ -649,7 +722,7 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 			case ScoringModeMultiplicative:
 				result.Score = freshnessFactor(result.Score, result.ParsedDate, now, detectedIntent)
 			default:
-				result.Score = ApplyAdditiveScore(result.Score, result.ParsedDate, now, hasTemporalMarker)
+				result.Score = ApplyAdditiveScore(result.Score, result.ParsedDate, now, recencyMarker)
 			}
 
 			log.Printf("[UnifiedSearch] doc=%s title=%q date=%s sem=%.3f final=%.3f boosts=%v",

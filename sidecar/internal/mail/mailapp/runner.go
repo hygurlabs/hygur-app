@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	mailpkg "github.com/hygur/sidecar/internal/mail"
 )
@@ -15,6 +16,13 @@ import (
 // osascriptPath is the canonical path to the macOS scripting CLI. It is always
 // present on darwin systems and not user-relocatable.
 const osascriptPath = "/usr/bin/osascript"
+
+// maxOsascriptCall caps any single Apple Events call. Mail.app automation is
+// occasionally slow or wedged; without a ceiling one stuck call can hold the
+// connector's sync lock for the entire outer window, starving other providers.
+// It bounds each call independently, so a healthy batch of small calls is
+// unaffected.
+const maxOsascriptCall = 90 * time.Second
 
 // runner abstracts the underlying osascript invocation so tests can inject a
 // fake without spawning real processes.
@@ -43,6 +51,11 @@ func (r *osascriptRunner) run(ctx context.Context, script string, args map[strin
 	} else {
 		argsJSON = "{}"
 	}
+
+	// Bound every call so a wedged Mail.app can't hang the sync indefinitely.
+	// WithTimeout takes the earlier of this ceiling and any existing deadline.
+	ctx, cancel := context.WithTimeout(ctx, maxOsascriptCall)
+	defer cancel()
 
 	cmd := exec.CommandContext(ctx, osascriptPath, "-l", "JavaScript")
 	cmd.Stdin = strings.NewReader(script)

@@ -410,7 +410,7 @@ func (c *GmailConnector) GetMessages(ctx context.Context, threadID string) ([]ma
 	// Convert messages
 	messages := make([]mailpkg.Message, 0, len(thread.Messages))
 	for _, msg := range thread.Messages {
-		message := c.convertMessage(msg, threadID)
+		message := c.convertMessage(ctx, service, msg, threadID)
 		messages = append(messages, message)
 	}
 
@@ -561,8 +561,10 @@ func (c *GmailConnector) convertThread(thread *gmail.Thread) *mailpkg.Thread {
 	return result
 }
 
-// convertMessage converts a Gmail message to our Message type.
-func (c *GmailConnector) convertMessage(msg *gmail.Message, threadID string) mailpkg.Message {
+// convertMessage converts a Gmail message to our Message type. The service +
+// ctx are used to download small PDF attachment bytes so the indexer can
+// extract their text (totals/figures that live only in the attachment).
+func (c *GmailConnector) convertMessage(ctx context.Context, service *gmail.Service, msg *gmail.Message, threadID string) mailpkg.Message {
 	result := mailpkg.Message{
 		ID:       msg.Id,
 		ThreadID: threadID,
@@ -586,6 +588,25 @@ func (c *GmailConnector) convertMessage(msg *gmail.Message, threadID string) mai
 	// Extract body and attachments
 	result.Body, result.HTMLBody = c.extractBody(msg.Payload)
 	result.Attachments = c.extractAttachments(msg.Payload)
+
+	// Download small PDF attachments (separate Gmail API call — the part body
+	// only carries an attachment ID) so EmailIndexer can extract their text.
+	if service != nil {
+		for i := range result.Attachments {
+			att := &result.Attachments[i]
+			if att.ID == "" || !mailpkg.IsPDFAttachment(*att) {
+				continue
+			}
+			if att.Size > 0 && att.Size > mailpkg.MaxIndexableAttachmentBytes {
+				continue
+			}
+			body, aerr := service.Users.Messages.Attachments.Get("me", msg.Id, att.ID).Context(ctx).Do()
+			if aerr != nil || body == nil || body.Data == "" {
+				continue
+			}
+			att.Data = []byte(decodeBase64URL(body.Data))
+		}
+	}
 
 	return result
 }

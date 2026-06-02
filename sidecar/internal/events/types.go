@@ -44,6 +44,12 @@ const (
 	// EventTypeAgendaAlert signals that a high-priority action has a deadline
 	// within the next 48 hours. Emitted by the agenda scheduler.
 	EventTypeAgendaAlert EventType = "agenda_alert"
+
+	// EventTypeMeetingBriefing signals that a short RAG briefing was generated
+	// ahead of a calendar event or a mail-extracted deadline. Emitted by the
+	// MeetingBriefer (HTTP /brief/meeting for calendar events; the mail-deadline
+	// scheduler for due dates). The macOS app turns it into a notification.
+	EventTypeMeetingBriefing EventType = "meeting_briefing"
 )
 
 // AgendaAlertPayload carries the details of an imminent agenda deadline.

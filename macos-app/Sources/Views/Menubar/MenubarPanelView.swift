@@ -363,11 +363,7 @@ struct MenubarPanelView: View {
     // MARK: - Helpers
 
     private func openMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        // Find an existing window or open via app re-activation.
-        for window in NSApp.windows where window.canBecomeMain {
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
+        // Reveals the main window, recreating it if SwiftUI tore it down on close.
+        WindowAccess.shared.reveal()
     }
 }

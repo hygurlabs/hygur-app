@@ -49,9 +49,11 @@ func (s *EmbeddingService) BatchEmbedAndStore(ctx context.Context, chunks []stor
 		return nil
 	}
 
-	// Process in batches
-	for i := 0; i < len(chunks); i += MaxBatchSize {
-		end := i + MaxBatchSize
+	// Process in batches of the configured size (fewer HTTP round-trips on
+	// bulk indexing; see DefaultEmbeddingBatchSize / lm_studio.embedding_batch_size).
+	step := s.client.EmbeddingBatchSize()
+	for i := 0; i < len(chunks); i += step {
+		end := i + step
 		if end > len(chunks) {
 			end = len(chunks)
 		}

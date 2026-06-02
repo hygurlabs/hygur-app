@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import EventKit
+import AppKit
 
 /// Lazy wrapper around `EKEventStore` for reading and writing macOS Calendar
 /// events. Permission is requested the first time a method that needs access
@@ -165,6 +166,86 @@ final class CalendarService {
             cal.title.compare(name, options: .caseInsensitive) == .orderedSame
         }
     }
+
+    // MARK: - Snapshots for the web bridge
+
+    /// Sendable, JSON-encodable list of the user's calendars, for the WebUI's
+    /// calendar picker. Triggers the permission prompt the first time it runs;
+    /// returns an empty list if access is denied.
+    func calendarSnapshots() async -> [CalendarSnapshot] {
+        guard await ensureAuthorized() else { return [] }
+        return store.calendars(for: .event).map { c in
+            CalendarSnapshot(
+                id: c.calendarIdentifier,
+                title: c.title,
+                color: Self.hexColor(c.color),
+                writable: c.allowsContentModifications
+            )
+        }
+    }
+
+    /// Sendable, JSON-encodable upcoming events, optionally narrowed to a set
+    /// of calendar identifiers (empty = all visible calendars). EKEvent isn't
+    /// Sendable, so we flatten to value types here on the main actor.
+    func eventSnapshots(within hours: Int, calendarIDs: [String]) async throws -> [EventSnapshot] {
+        guard await ensureAuthorized() else {
+            throw CalendarServiceError.notAuthorized
+        }
+        let now = Date()
+        let end = Calendar.current.date(byAdding: .hour, value: hours, to: now)
+            ?? now.addingTimeInterval(TimeInterval(hours) * 3600)
+        let cals: [EKCalendar]? = calendarIDs.isEmpty
+            ? nil
+            : store.calendars(for: .event).filter { calendarIDs.contains($0.calendarIdentifier) }
+        let predicate = store.predicateForEvents(withStart: now, end: end, calendars: cals)
+        let iso = ISO8601DateFormatter()
+        return store.events(matching: predicate)
+            .sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
+            .map { e in
+                EventSnapshot(
+                    title: e.title ?? "(no title)",
+                    start: e.startDate.map { iso.string(from: $0) } ?? "",
+                    end: e.endDate.map { iso.string(from: $0) } ?? "",
+                    location: e.location ?? "",
+                    notes: e.notes ?? "",
+                    calendarId: e.calendar?.calendarIdentifier ?? "",
+                    calendarTitle: e.calendar?.title ?? "",
+                    attendees: (e.attendees ?? []).compactMap { $0.name },
+                    allDay: e.isAllDay
+                )
+            }
+    }
+
+    /// EKCalendar.color is an NSColor on macOS; convert to "#RRGGBB" for the
+    /// web layer. Falls back to a neutral grey for unusual colour spaces.
+    private static func hexColor(_ color: NSColor?) -> String {
+        guard let rgb = color?.usingColorSpace(.sRGB) else { return "#8A8A8A" }
+        let r = Int((rgb.redComponent * 255).rounded())
+        let g = Int((rgb.greenComponent * 255).rounded())
+        let b = Int((rgb.blueComponent * 255).rounded())
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+}
+
+/// Sendable snapshot of an `EKCalendar` for the JS↔Swift bridge.
+struct CalendarSnapshot: Sendable, Encodable {
+    let id: String
+    let title: String
+    let color: String
+    let writable: Bool
+}
+
+/// Sendable snapshot of an `EKEvent` for the JS↔Swift bridge.
+struct EventSnapshot: Sendable, Encodable {
+    let title: String
+    let start: String
+    let end: String
+    let location: String
+    let notes: String
+    let calendarId: String
+    let calendarTitle: String
+    let attendees: [String]
+    let allDay: Bool
 }
 
 /// Typed errors so the chat layer can render context-specific messages
