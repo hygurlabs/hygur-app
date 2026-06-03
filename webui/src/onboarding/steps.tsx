@@ -16,6 +16,7 @@ import { api } from "../lib/api";
 import { native } from "../lib/native";
 import type { SidecarConfig } from "../lib/types";
 import { Button, TextInput } from "../components/ui";
+import logo from "../assets/logo.png";
 
 /** Navigation/lifecycle handed to every step by the wizard container. */
 export interface StepContext {
@@ -30,18 +31,25 @@ export interface StepContext {
 
 function StepHeader({
   icon,
+  image,
   title,
   subtitle,
 }: {
-  icon: ReactNode;
+  icon?: ReactNode;
+  /** When set, shows this image (e.g. the app logo) instead of the icon box. */
+  image?: string;
   title: string;
   subtitle?: string;
 }) {
   return (
     <div className="mb-7 flex flex-col items-center text-center">
-      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-accent-weak text-accent">
-        {icon}
-      </div>
+      {image ? (
+        <img src={image} alt="" className="mb-4 size-20 rounded-[22%] shadow-sm" />
+      ) : (
+        <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-accent-weak text-accent">
+          {icon}
+        </div>
+      )}
       <h1 className="font-display text-[26px] font-semibold leading-tight tracking-tight">
         {title}
       </h1>
@@ -91,7 +99,7 @@ export function StepWelcome() {
   return (
     <div>
       <StepHeader
-        icon={<Sparkles size={26} strokeWidth={1.6} />}
+        image={logo}
         title="Welcome to Hygur"
         subtitle="Your local digital twin — a private memory of your documents, mail and notes, powered by your own LLM. Everything runs on this Mac. No cloud, no account."
       />
