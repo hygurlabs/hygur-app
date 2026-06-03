@@ -1,4 +1,5 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
+import { apiBase, apiKey } from "./connection";
 import type {
   AgendaAction,
   Briefing,
@@ -23,24 +24,19 @@ import type {
   Tag,
 } from "./types";
 
-/** Reads the API token injected into the page by the sidecar at serve time.
- *  On the Vite dev server the placeholder survives untouched → empty token. */
-function readToken(): string {
-  const meta = document.querySelector('meta[name="hygur-token"]');
-  const t = meta?.getAttribute("content") ?? "";
-  return t === "__HYGUR_TOKEN__" ? "" : t;
-}
-
-export const TOKEN = readToken();
-
 /** API contract version this client speaks. The server advertises its own via
  *  the X-Hygur-API response header and refuses clients older than its minimum
  *  with HTTP 426 (see internal/version.APIVersion). Bump in lock-step with the
  *  Go constant on a breaking contract change. */
 export const API_VERSION = "1";
 
+/** Prepends the configured API base ("" = same-origin local sidecar, or a
+ *  remote endpoint like https://app.hygur.eu). Resolved per call so a connection
+ *  change takes effect without reloading the module. */
+const u = (path: string): string => apiBase() + path;
+
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  return { "X-Hygur-Token": TOKEN, "X-Hygur-API": API_VERSION, ...(extra ?? {}) };
+  return { "X-Hygur-Token": apiKey(), "X-Hygur-API": API_VERSION, ...(extra ?? {}) };
 }
 
 /** Maps a non-OK response to an Error, with a friendly message for the
@@ -53,7 +49,7 @@ function httpError(r: Response): Error {
 }
 
 async function getJSON<T>(path: string): Promise<T> {
-  const r = await fetch(path, { headers: authHeaders() });
+  const r = await fetch(u(path), { headers: authHeaders() });
   if (!r.ok) throw httpError(r);
   return (await r.json()) as T;
 }
@@ -63,7 +59,7 @@ async function sendJSON<T>(
   path: string,
   body: unknown,
 ): Promise<T> {
-  const r = await fetch(path, {
+  const r = await fetch(u(path), {
     method,
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
@@ -80,12 +76,12 @@ const putJSON = <T>(path: string, body: unknown) =>
   sendJSON<T>("PUT", path, body);
 
 async function del(path: string): Promise<void> {
-  const r = await fetch(path, { method: "DELETE", headers: authHeaders() });
+  const r = await fetch(u(path), { method: "DELETE", headers: authHeaders() });
   if (!r.ok) throw httpError(r);
 }
 
 async function patchJSON(path: string, body: unknown): Promise<void> {
-  const r = await fetch(path, {
+  const r = await fetch(u(path), {
     method: "PATCH",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
@@ -101,7 +97,7 @@ function cidPath(id: string): string {
 }
 
 export const api = {
-  health: () => fetch("/health").then((r) => r.json()),
+  health: () => fetch(u("/health")).then((r) => r.json()),
   search: (query: string, topK = 15) =>
     postJSON<SearchResponse>("/search", { query, top_k: topK }),
   knowledgeItems: (limit = 200, sourceType?: string) =>
@@ -247,7 +243,7 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     if (projectId) form.append("project_id", projectId);
-    const r = await fetch("/knowledge/upload", {
+    const r = await fetch(u("/knowledge/upload"), {
       method: "POST",
       headers: authHeaders(), // no Content-Type — the browser sets the boundary
       body: form,
@@ -279,7 +275,7 @@ export async function streamChat(
   signal: AbortSignal,
   opts?: ChatOptions,
 ): Promise<void> {
-  await fetchEventSource("/chat", {
+  await fetchEventSource(u("/chat"), {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({

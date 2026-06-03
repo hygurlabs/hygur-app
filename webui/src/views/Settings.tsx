@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
+import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
 import type { SidecarConfig } from "../lib/types";
 import {
   Button,
@@ -70,6 +71,69 @@ function Toggle({
         }`}
       />
     </button>
+  );
+}
+
+// MARK: - Connection (local sidecar vs remote endpoint + key)
+
+function ConnectionSection() {
+  const initial = getConnection();
+  const [endpoint, setEndpoint] = useState(initial.endpoint);
+  const [key, setKey] = useState(initial.key);
+  const remote = isRemote();
+
+  const connect = () => {
+    setConnection(endpoint, key);
+    // Reload so every query refetches against the new base origin.
+    window.location.reload();
+  };
+  const disconnect = () => {
+    clearConnection();
+    window.location.reload();
+  };
+
+  return (
+    <Section title="Connection">
+      <Row
+        label="Mode"
+        hint={
+          remote
+            ? `Remote — ${initial.endpoint}`
+            : "Local — served by the sidecar on this machine"
+        }
+      >
+        {remote && (
+          <Button variant="ghost" onClick={disconnect}>
+            Disconnect
+          </Button>
+        )}
+      </Row>
+      <Row label="Server endpoint" hint="Empty = local sidecar. e.g. https://app.hygur.eu">
+        <TextInput
+          value={endpoint}
+          spellCheck={false}
+          autoCapitalize="off"
+          placeholder="https://app.hygur.eu"
+          onChange={(e) => setEndpoint(e.target.value)}
+          className="w-64"
+        />
+      </Row>
+      <Row label="API key" hint="Sent as X-Hygur-Token. Stored on this device only.">
+        <TextInput
+          type="password"
+          value={key}
+          spellCheck={false}
+          autoCapitalize="off"
+          onChange={(e) => setKey(e.target.value)}
+          className="w-64"
+        />
+      </Row>
+      <Row label="Apply">
+        <Button onClick={connect} disabled={!endpoint.trim()}>
+          {remote ? "Update & reconnect" : "Connect"}
+        </Button>
+      </Row>
+    </Section>
   );
 }
 
@@ -153,6 +217,8 @@ export function Settings() {
       {save.error && (
         <ErrorBanner message={`Couldn't save: ${(save.error as Error).message}`} />
       )}
+
+      <ConnectionSection />
 
       <Section title="AI runtime">
         <Row label="Inference URL" hint="OpenAI-compatible chat endpoint (LM Studio, vLLM…)">
