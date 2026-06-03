@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/hygur/sidecar/internal/api/handlers"
+	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/rs/zerolog"
@@ -45,7 +46,8 @@ type Server struct {
 	mentionsHandler  *handlers.MentionsHandler
 	interactionsHandler *handlers.InteractionsHandler
 	insightsHandler  *handlers.InsightsHandler
-	token            string // Authentication token for API access
+	token            string             // Static token (local mode) + WebUI bootstrap
+	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
 }
 
 // NewServer creates a new API server instance.
@@ -56,6 +58,9 @@ func NewServer(cfg *config.Config, logger zerolog.Logger, token string) *Server 
 		logger: logger.With().Str("component", "api").Logger(),
 		router: chi.NewRouter(),
 		token:  token,
+		// Default to the loopback single-token scheme. Remote (JWT) auth is
+		// opted into in main via SetAuthenticator when auth.mode == "remote".
+		authenticator: auth.LocalTokenAuth{Token: token},
 		// Initialise the health handler eagerly with a nil LLM client so the
 		// /health endpoint reports `version` + `lm_studio: disconnected` even
 		// before SetLLMClient is called (e.g. during tests or boot warmup).
@@ -66,6 +71,15 @@ func NewServer(cfg *config.Config, logger zerolog.Logger, token string) *Server 
 	s.setupRoutes()
 
 	return s
+}
+
+// SetAuthenticator overrides the request authenticator. main calls this when
+// auth.mode == "remote" to swap the default loopback token scheme for per-device
+// JWT verification.
+func (s *Server) SetAuthenticator(a auth.Authenticator) {
+	if a != nil {
+		s.authenticator = a
+	}
 }
 
 // SetLLMClient sets the LLM client for the server.

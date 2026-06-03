@@ -38,6 +38,30 @@ type Config struct {
 
 	// Mail configures mail-sync behaviour.
 	Mail MailConfig `mapstructure:"mail" yaml:"mail,omitempty"`
+
+	// Auth configures request authentication (local single-token vs remote
+	// per-device JWT). Defaults to "local" so the bundled/embedded mode is
+	// unchanged.
+	Auth AuthConfig `mapstructure:"auth" yaml:"auth,omitempty"`
+}
+
+// AuthConfig configures how the server authenticates requests.
+//
+//   - mode "local"  (default): a single static token in X-Hygur-Token. This is
+//     the loopback trust model used by the embedded/desktop mode.
+//   - mode "remote": per-device EdDSA JWTs, verified against PublicKey, with
+//     expiry and a jti revocation list checked locally. Used when the server is
+//     exposed beyond loopback (self-host / Hygur Cloud).
+type AuthConfig struct {
+	Mode string `mapstructure:"mode" yaml:"mode,omitempty"`
+	// PublicKey is the PEM-encoded Ed25519 public key verifying device tokens.
+	// Required when mode == "remote".
+	PublicKey string `mapstructure:"public_key" yaml:"public_key,omitempty"`
+	// PrivateKey is the PEM-encoded Ed25519 private key used ONLY by the
+	// `issue-token` CLI for self-hosted issuance. Never needed to serve.
+	PrivateKey string `mapstructure:"private_key" yaml:"private_key,omitempty"`
+	// RevokedJTIs lists token ids to reject even when otherwise valid.
+	RevokedJTIs []string `mapstructure:"revoked_jtis" yaml:"revoked_jtis,omitempty"`
 }
 
 // MailConfig configures mail-sync behaviour.

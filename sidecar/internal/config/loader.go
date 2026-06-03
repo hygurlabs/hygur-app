@@ -106,6 +106,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.write_timeout", DefaultWriteTimeout)
 	v.SetDefault("server.shutdown_timeout", DefaultShutdownTimeout)
 
+	// Auth defaults — local single-token by default (embedded/loopback mode).
+	v.SetDefault("auth.mode", "local")
+
 	// LM Studio defaults
 	v.SetDefault("lm_studio.url", DefaultLMStudioURL)
 	v.SetDefault("lm_studio.embedding_url", "")
@@ -237,6 +240,17 @@ func validate(cfg *Config) error {
 
 	if cfg.LMStudio.MaxRetries < 0 {
 		return fmt.Errorf("%w: lm_studio.max_retries must be non-negative", ErrInvalidConfig)
+	}
+
+	switch cfg.Auth.Mode {
+	case "", "local":
+		// loopback single-token — no key required.
+	case "remote":
+		if cfg.Auth.PublicKey == "" {
+			return fmt.Errorf("%w: auth.public_key is required when auth.mode is \"remote\"", ErrInvalidConfig)
+		}
+	default:
+		return fmt.Errorf("%w: auth.mode must be \"local\" or \"remote\", got %q", ErrInvalidConfig, cfg.Auth.Mode)
 	}
 
 	return nil

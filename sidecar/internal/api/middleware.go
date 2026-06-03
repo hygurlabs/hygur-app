@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -55,22 +56,24 @@ func (s *Server) loggerMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// authMiddleware validates the authentication token from the request.
-// Requests must include the X-Hygur-Token header with a valid token.
+// authMiddleware authenticates the request via the configured Authenticator
+// (loopback single-token in local mode, per-device JWT in remote mode) and
+// attaches the resolved Identity to the request context for downstream handlers
+// and the per-identity store layer (P1.3).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("X-Hygur-Token")
-		if token == "" {
-			writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Missing X-Hygur-Token header")
+		id, err := s.authenticator.Authenticate(r)
+		if err != nil {
+			// Preserve the established client-facing messages.
+			if errors.Is(err, auth.ErrMissingToken) {
+				writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Missing X-Hygur-Token header")
+			} else {
+				writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid token")
+			}
 			return
 		}
 
-		if !auth.CompareTokens(token, s.token) {
-			writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid token")
-			return
-		}
-
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(auth.WithIdentity(r.Context(), id)))
 	})
 }
 

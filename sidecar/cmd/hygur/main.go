@@ -59,6 +59,19 @@ func main() {
 		return
 	}
 
+	// Operator/dev CLI for remote auth (self-hosting). These exit before any
+	// server startup (no port bind, no DB).
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "gen-auth-key":
+			runGenAuthKey()
+			return
+		case "issue-token":
+			runIssueToken(os.Args[2:])
+			return
+		}
+	}
+
 	// Set up signal handling for graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -542,6 +555,21 @@ func main() {
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)
+	// Remote auth mode: verify per-device EdDSA JWTs instead of the loopback
+	// static token. Fail fast on a bad key — silently falling back to local
+	// would mean serving with weaker auth than the operator asked for.
+	if cfg.Auth.Mode == "remote" {
+		pub, err := auth.ParseEd25519PublicKeyPEM(cfg.Auth.PublicKey)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("auth.mode=remote but auth.public_key is invalid")
+		}
+		revoked := make(map[string]bool, len(cfg.Auth.RevokedJTIs))
+		for _, jti := range cfg.Auth.RevokedJTIs {
+			revoked[jti] = true
+		}
+		server.SetAuthenticator(auth.JWTAuth{PublicKey: pub, Revoked: revoked})
+		logger.Info().Int("revoked", len(revoked)).Msg("remote auth enabled (per-device JWT)")
+	}
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)
