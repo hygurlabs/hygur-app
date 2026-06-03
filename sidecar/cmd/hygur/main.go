@@ -220,12 +220,17 @@ func main() {
 			Msg("LM Studio connection verified")
 	}
 
-	// Initialize SQLite store
-	db, err := store.NewDB(cfg.Store.Path)
+	// Initialize SQLite store via the per-identity Manager — the single seam
+	// that maps an identity to its database file (file-per-identity isolation,
+	// see store.Manager). Today there is one identity, so Default() returns the
+	// primary hygur.db and every consumer is wired to it exactly as before;
+	// multi-user routing onto per-identity handles is P5.
+	storeManager := store.NewManager(cfg.Store.Path)
+	db, err := storeManager.Default()
 	if err != nil {
 		logger.Fatal().Err(err).Str("path", cfg.Store.Path).Msg("failed to initialize database")
 	}
-	defer db.Close()
+	defer storeManager.Close()
 	logger.Info().Str("path", cfg.Store.Path).Msg("database initialized")
 
 	// Bridge the vision config to the env vars the PDF/image parsers read, so
