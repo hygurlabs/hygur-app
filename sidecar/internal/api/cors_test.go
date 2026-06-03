@@ -16,9 +16,10 @@ import (
 func TestCORS_TauriPreflight(t *testing.T) {
 	srv := NewServer(&config.Config{}, zerolog.Nop(), "tok")
 
+	// PATCH (used by /config) is non-simple → real preflight; it must be allowed.
 	req := httptest.NewRequest(http.MethodOptions, "/config", nil)
 	req.Header.Set("Origin", "tauri://localhost")
-	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Method", "PATCH")
 	req.Header.Set("Access-Control-Request-Headers", "x-hygur-token,x-hygur-api,content-type")
 	rec := httptest.NewRecorder()
 	srv.Router().ServeHTTP(rec, req)
@@ -31,6 +32,9 @@ func TestCORS_TauriPreflight(t *testing.T) {
 	}
 	if ah := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(ah, "X-Hygur-API") {
 		t.Fatalf("Allow-Headers missing X-Hygur-API: %q", ah)
+	}
+	if am := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(am, "PATCH") {
+		t.Fatalf("Allow-Methods missing PATCH (config save / writes break): %q", am)
 	}
 }
 
