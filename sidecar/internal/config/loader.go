@@ -107,7 +107,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.shutdown_timeout", DefaultShutdownTimeout)
 
 	// Auth defaults — local single-token by default (embedded/loopback mode).
+	// The empty defaults for the key fields are required so viper's AutomaticEnv
+	// actually binds HYGUR_AUTH_PUBLIC_KEY / HYGUR_AUTH_PRIVATE_KEY on Unmarshal
+	// (viper only env-binds keys it already knows via a default or BindEnv).
 	v.SetDefault("auth.mode", "local")
+	v.SetDefault("auth.public_key", "")
+	v.SetDefault("auth.private_key", "")
 
 	// LM Studio defaults
 	v.SetDefault("lm_studio.url", DefaultLMStudioURL)
