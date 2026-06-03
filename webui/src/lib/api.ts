@@ -33,13 +33,28 @@ function readToken(): string {
 
 export const TOKEN = readToken();
 
+/** API contract version this client speaks. The server advertises its own via
+ *  the X-Hygur-API response header and refuses clients older than its minimum
+ *  with HTTP 426 (see internal/version.APIVersion). Bump in lock-step with the
+ *  Go constant on a breaking contract change. */
+export const API_VERSION = "1";
+
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  return { "X-Hygur-Token": TOKEN, ...(extra ?? {}) };
+  return { "X-Hygur-Token": TOKEN, "X-Hygur-API": API_VERSION, ...(extra ?? {}) };
+}
+
+/** Maps a non-OK response to an Error, with a friendly message for the
+ *  version-skew case so the UI can prompt an update instead of a raw "HTTP 426". */
+function httpError(r: Response): Error {
+  if (r.status === 426) {
+    return new Error("This version of Hygur is too old for the server — please update the app.");
+  }
+  return new Error(`HTTP ${r.status}`);
 }
 
 async function getJSON<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: authHeaders() });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw httpError(r);
   return (await r.json()) as T;
 }
 
@@ -53,7 +68,7 @@ async function sendJSON<T>(
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw httpError(r);
   // Some endpoints (PUT) may return an empty body.
   const text = await r.text();
   return (text ? JSON.parse(text) : undefined) as T;
@@ -66,7 +81,7 @@ const putJSON = <T>(path: string, body: unknown) =>
 
 async function del(path: string): Promise<void> {
   const r = await fetch(path, { method: "DELETE", headers: authHeaders() });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw httpError(r);
 }
 
 async function patchJSON(path: string, body: unknown): Promise<void> {
@@ -75,7 +90,7 @@ async function patchJSON(path: string, body: unknown): Promise<void> {
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw httpError(r);
 }
 
 /** Percent-encodes a content_id for use in a path WITHOUT escaping ':' — the
@@ -237,7 +252,7 @@ export const api = {
       headers: authHeaders(), // no Content-Type — the browser sets the boundary
       body: form,
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) throw httpError(r);
     return r.json();
   },
 };

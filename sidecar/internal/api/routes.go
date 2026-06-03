@@ -14,6 +14,9 @@ func (s *Server) setupRoutes() {
 	// Health endpoint uses a handler that's updated when SetLLMClient is called
 	s.router.Get("/health", s.handleHealth)
 
+	// API version — public so clients can detect version skew before auth.
+	s.router.Get("/version", s.handleVersion)
+
 	// Web UI — the embedded single-page client that replaces the SwiftUI views.
 	// Public so it can bootstrap the API token into the page (see handleWebUI);
 	// the loopback bind is the trust boundary.
@@ -29,6 +32,7 @@ func (s *Server) setupRoutes() {
 	// inherits all parent middleware: once Timeout is applied, sub-Groups
 	// cannot opt out.
 	s.router.Group(func(r chi.Router) {
+		r.Use(s.apiVersionMiddleware)
 		r.Use(s.authMiddleware)
 		r.Post("/chat", s.handleChat)
 		r.Get("/events", s.handleEvents)
@@ -36,6 +40,7 @@ func (s *Server) setupRoutes() {
 
 	// Protected routes (authentication required) with standard timeout
 	s.router.Group(func(r chi.Router) {
+		r.Use(s.apiVersionMiddleware)
 		r.Use(s.authMiddleware)
 		r.Use(middleware.Timeout(s.cfg.Server.ReadTimeout))
 
