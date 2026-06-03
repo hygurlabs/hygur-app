@@ -271,13 +271,12 @@ async function waitForInference(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const r = await fetch("/health", { cache: "no-store" });
-      if (r.ok) {
-        const h = (await r.json()) as { inference?: string };
-        if (h.inference === "connected") return true;
-      }
+      // Use the API client so this honours the configured base URL — a raw
+      // fetch("/health") would hit tauri://localhost in the packaged client.
+      const h = (await api.health()) as { inference?: string };
+      if (h?.inference === "connected") return true;
     } catch {
-      /* sidecar is restarting — keep polling */
+      /* sidecar is restarting / transient — keep polling */
     }
     await sleep(700);
   }
