@@ -34,7 +34,8 @@ CODESIGN_ID    := Hygur Dev
 LOGIN_KEYCHAIN := $(HOME)/Library/Keychains/login.keychain-db
 
 .PHONY: all test test-go test-binary check-api dev open reset-db dev-cert \
-        webui build-sidecar build-app sign-app package-dmg verify-dmg release clean
+        webui build-sidecar build-app sign-app package-dmg verify-dmg release clean \
+        build-server docker-image
 
 all: test
 
@@ -139,6 +140,26 @@ webui:
 	@echo "→ Build WebUI (Vite + React + TypeScript)..."
 	@cd $(WEBUI) && (test -d node_modules || npm ci) && npm run build
 	@echo "✅ WebUI prête (embarquée dans le sidecar via go:embed)"
+
+# ── Hygur Server (headless) ─────────────────────────────────────────────────────
+
+## Build the standalone server binary for the current host. Depends on `webui`
+## so the embedded dist/ is fresh (go:embed needs it). For Linux/Windows builds,
+## use `make docker-image` (CGO toolchain per target lives in the build image)
+## or a per-OS CI runner — cross-compiling CGO+sqlite from macOS is brittle.
+build-server: webui
+	@echo "→ Build hygur-server (host natif)..."
+	cd $(SIDECAR) && CGO_ENABLED=1 go build -tags sqlite_fts5 \
+		-ldflags "-X github.com/hygur/sidecar/internal/version.Version=$(VERSION)" \
+		-o bin/hygur-server ./cmd/hygur
+	@echo "✅ $(SIDECAR)/bin/hygur-server"
+
+## Build the headless Linux server image (multi-stage: WebUI + CGO Go build).
+DOCKER_IMAGE ?= hygur-server:$(VERSION)
+docker-image:
+	@echo "→ Build image $(DOCKER_IMAGE)..."
+	docker build -t $(DOCKER_IMAGE) --build-arg VERSION=$(VERSION) .
+	@echo "✅ image $(DOCKER_IMAGE) — run: docker run -p 8420:8420 -v hygur-data:/data $(DOCKER_IMAGE)"
 
 build-sidecar: webui
 	@echo "→ Build sidecar universel..."
