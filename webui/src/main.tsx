@@ -5,7 +5,9 @@ import { HashRouter } from "react-router-dom";
 import "./index.css";
 import App from "./App.tsx";
 import { Onboarding } from "./onboarding/Onboarding";
+import { Connect } from "./onboarding/Connect";
 import { isOnboardingComplete } from "./lib/onboarding";
+import { needsConnection } from "./lib/connection";
 
 // HashRouter: the shell always loads at `/`, so client routes live in the hash
 // and need no server-side fallback — keeps the Go handler trivial.
@@ -31,6 +33,8 @@ function Root() {
     };
   }, []);
 
+  // No server reachable yet (packaged client / bare browser) → connect first.
+  if (needsConnection()) return <Connect />;
   if (done === null) return null;
   if (!done) return <Onboarding onComplete={() => setDone(true)} />;
   return <App />;

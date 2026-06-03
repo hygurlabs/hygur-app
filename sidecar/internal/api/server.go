@@ -167,6 +167,12 @@ func (s *Server) setupMiddleware() {
 	// Real IP extraction (for proxied requests)
 	s.router.Use(middleware.RealIP)
 
+	// CORS — required for cross-origin clients (the Tauri desktop shell serves
+	// its UI from tauri://localhost; vite dev from http://localhost:5173). Runs
+	// before auth so preflight OPTIONS needs no token. Same-origin clients (the
+	// sidecar-served UI) are unaffected.
+	s.router.Use(s.corsMiddleware)
+
 	// Custom zerolog logger middleware
 	s.router.Use(s.loggerMiddleware)
 

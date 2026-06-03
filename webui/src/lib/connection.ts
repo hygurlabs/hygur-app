@@ -49,6 +49,14 @@ export function isConfigured(): boolean {
   return !isRemote() || !!ls(API_KEY_KEY);
 }
 
+/** True when there is no way to reach the API yet: no remote endpoint configured
+ *  AND no same-origin token injected by a local sidecar. This is the case in a
+ *  packaged thin client (Tauri) or a bare browser, where the user must point at
+ *  a server first. */
+export function needsConnection(): boolean {
+  return !isRemote() && META_TOKEN === "";
+}
+
 /** Current remote connection (empty strings in local mode). */
 export function getConnection(): { endpoint: string; key: string } {
   return { endpoint: ls(ENDPOINT_KEY) ?? "", key: ls(API_KEY_KEY) ?? "" };

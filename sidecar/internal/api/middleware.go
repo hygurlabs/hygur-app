@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -90,22 +91,19 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 
-		// Only allow localhost origins
-		// http://localhost = 16 chars, http://localhost: = 17 chars
-		// http://127.0.0.1 = 16 chars, http://127.0.0.1: = 17 chars
-		allowed := origin == "http://localhost" || origin == "http://127.0.0.1"
-		if !allowed && len(origin) > 17 {
-			if len(origin) >= 17 && origin[:17] == "http://localhost:" {
-				allowed = true
-			} else if len(origin) >= 17 && origin[:17] == "http://127.0.0.1:" {
-				allowed = true
-			}
-		}
+		// Allow loopback origins (the sidecar-served UI and vite dev) plus the
+		// Tauri desktop shell, which serves its bundled UI from a custom scheme
+		// (tauri://localhost on Apple, https://tauri.localhost on Windows) and
+		// therefore calls this API cross-origin.
+		allowed := origin == "http://localhost" || origin == "http://127.0.0.1" ||
+			origin == "tauri://localhost" || origin == "https://tauri.localhost" ||
+			strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:")
 
 		if allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Hygur-Token")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Hygur-Token, X-Hygur-API")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 		}
 
