@@ -6,6 +6,8 @@ Hygur is a personal AI knowledge assistant that runs **entirely on your machine*
 documents, mail and calendar into a local knowledge base and answers questions over them with
 citations — using an LLM runtime you control. No cloud, no account, no data leaving your Mac.
 
+![Hygur's chat interface — ask in natural language, get answers cited from your own documents, mail and notes](hygur-client-interface.png)
+
 It ships as three pieces:
 
 - **`sidecar/`** — a Go backend that owns the SQLite + vector store, hybrid retrieval (BM25 + embeddings),
