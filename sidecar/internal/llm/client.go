@@ -157,45 +157,60 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		return json.Marshal(alias(m))
 	}
 
+	// Ordering matters for multimodal models (Gemma et al.): image content goes
+	// BEFORE the text prompt, audio content AFTER it. Document stubs are inert
+	// text and ride with the text block. (Mirrors the provider guidance:
+	// "image before text, audio after text".)
 	parts := make([]map[string]any, 0, 1+len(m.Attachments))
+
+	for _, att := range m.Attachments {
+		if att.Type != AttachmentTypeImage {
+			continue
+		}
+		mime := att.MimeType
+		if mime == "" {
+			mime = "image/png"
+		}
+		parts = append(parts, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": fmt.Sprintf("data:%s;base64,%s", mime, att.Data),
+			},
+		})
+	}
+
 	if m.Content != "" {
 		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
 	}
 	for _, att := range m.Attachments {
-		switch att.Type {
-		case AttachmentTypeImage:
-			mime := att.MimeType
-			if mime == "" {
-				mime = "image/png"
-			}
-			parts = append(parts, map[string]any{
-				"type": "image_url",
-				"image_url": map[string]any{
-					"url": fmt.Sprintf("data:%s;base64,%s", mime, att.Data),
-				},
-			})
-		case AttachmentTypeAudio:
-			format := att.Format
-			if format == "" {
-				format = "wav"
-			}
-			parts = append(parts, map[string]any{
-				"type": "input_audio",
-				"input_audio": map[string]any{
-					"data":   att.Data,
-					"format": format,
-				},
-			})
-		case AttachmentTypeDocument:
-			label := att.Title
-			if label == "" {
-				label = att.ContentID
-			}
-			parts = append(parts, map[string]any{
-				"type": "text",
-				"text": fmt.Sprintf("[document:%s]", label),
-			})
+		if att.Type != AttachmentTypeDocument {
+			continue
 		}
+		label := att.Title
+		if label == "" {
+			label = att.ContentID
+		}
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": fmt.Sprintf("[document:%s]", label),
+		})
+	}
+
+	for _, att := range m.Attachments {
+		if att.Type != AttachmentTypeAudio {
+			continue
+		}
+		format := att.Format
+		if format == "" {
+			format = "wav"
+		}
+		parts = append(parts, map[string]any{
+			"type": "input_audio",
+			"input_audio": map[string]any{
+				"data":   att.Data,
+				"format": format,
+			},
+		})
 	}
 
 	out := map[string]any{

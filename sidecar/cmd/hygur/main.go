@@ -265,6 +265,10 @@ func main() {
 	ingestor.RegisterParser(parsers.NewTXTParser())
 	ingestor.RegisterParser(parsers.NewPDFParser())
 	ingestor.RegisterParser(parsers.NewDOCXParser())
+	// Image OCR (.png/.jpg/.jpeg/.heic/.webp): Tesseract if installed, else the
+	// vision model (same endpoint/model the scanned-PDF OCR uses). Without this
+	// registration, image uploads fail with "no parser available for file type".
+	ingestor.RegisterParser(parsers.NewImageParserWithModel(visionURL, visionModel))
 
 	// Create the semantic (vector-only) searcher used by the legacy /knowledge/search endpoint.
 	searcher := retrieval.NewHybridSearcher(db, llmClient)
