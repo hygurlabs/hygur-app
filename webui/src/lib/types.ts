@@ -240,6 +240,35 @@ export interface SidecarConfig {
   mail: { reconcile_deletions: boolean };
 }
 
+/** Per-1M-token prices for the cost estimate (GET/PUT /usage). Chat is billed
+ *  per direction; embeddings + indexing share `ingest_per_1m`. */
+export interface TokenPricing {
+  chat_in_per_1m: number;
+  chat_out_per_1m: number;
+  ingest_per_1m: number;
+  currency: string;
+}
+
+/** Token totals for one period. Chat keeps IN/OUT split; embeddings/indexing
+ *  are reported as total tokens each. */
+export interface TokenPeriodUsage {
+  chat_in: number;
+  chat_out: number;
+  embedding: number;
+  indexing: number;
+}
+
+/** Response of GET /usage/tokens. */
+export interface TokenUsageResponse {
+  currency: string;
+  pricing: TokenPricing;
+  periods: {
+    today: TokenPeriodUsage;
+    this_week: TokenPeriodUsage;
+    this_month: TokenPeriodUsage;
+  };
+}
+
 export interface SidecarConfigPatch {
   lm_studio?: Partial<SidecarConfig["lm_studio"]>;
   logging?: Partial<SidecarConfig["logging"]>;

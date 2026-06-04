@@ -237,6 +237,17 @@ func main() {
 	defer db.Close()
 	logger.Info().Str("path", cfg.Store.Path).Msg("database initialized")
 
+	// Token-usage accounting: every chat/embedding/indexing completion records
+	// its token counts into SQLite so the Settings cost view persists across
+	// restarts. The main client covers chat + embeddings; a distinct indexing
+	// client (when configured) logs indexing completions under their own
+	// category. Set before the server starts serving requests.
+	usageSink := tokenUsageSink{db: db, logger: logger}
+	llmClient.SetUsageRecorder(usageSink, store.TokenCategoryChat)
+	if indexingClient != llmClient {
+		indexingClient.SetUsageRecorder(usageSink, store.TokenCategoryIndexing)
+	}
+
 	// Bridge the vision config to the env vars the PDF/image parsers read, so
 	// scanned-PDF and image OCR can use the local multimodal model (portable, no
 	// system Tesseract needed). Defaults to the inference endpoint + default
@@ -592,6 +603,7 @@ func main() {
 	server.SetConnectorHandler(connectorHandler)
 	server.SetMarketplaceHandler(marketplaceHandler)
 	server.SetConfigHandler(configHandler)
+	server.SetUsageHandler(handlers.NewUsageHandler(db, logger))
 
 	// Phase 1 (pair mode) — interaction logging + learning gauge.
 	interactionLogger := interactions.NewLogger(db)
@@ -712,6 +724,21 @@ func main() {
 	}
 
 	logger.Info().Msg("hygur sidecar stopped")
+}
+
+// tokenUsageSink adapts the store to llm.UsageRecorder. RecordUsage runs on
+// the request goroutine at completion time, so it must not block; it uses a
+// background context (the request ctx is often cancelled the instant the
+// stream ends) and swallows write errors after logging.
+type tokenUsageSink struct {
+	db     *store.DB
+	logger zerolog.Logger
+}
+
+func (s tokenUsageSink) RecordUsage(category string, tokensIn, tokensOut int) {
+	if err := s.db.RecordTokenUsage(context.Background(), category, tokensIn, tokensOut); err != nil {
+		s.logger.Warn().Err(err).Str("category", category).Msg("record token usage failed")
+	}
 }
 
 // watchParent polls the parent process ID every 2 seconds and triggers

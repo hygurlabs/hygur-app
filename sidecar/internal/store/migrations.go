@@ -179,6 +179,26 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, ordinal);
 `,
 	},
+	// Migration 11 adds persistent LLM token accounting (daily per-category
+	// counters, UPSERTed) and a generic key/value app_settings store used here
+	// for the cost-estimate pricing.
+	{
+		Version: 11,
+		Name:    "token_usage_and_settings",
+		SQL: `
+CREATE TABLE IF NOT EXISTS token_usage (
+    day        TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    tokens_in  INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, category)
+);
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
