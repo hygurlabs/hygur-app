@@ -34,13 +34,13 @@ func TestDetectHighPriority_AccountingKeyword(t *testing.T) {
 func TestDetectHighPriority_AccountingDomain(t *testing.T) {
 	subject := "Newsletter mensuelle"
 	body := "Découvrez nos nouveautés ce mois."
-	highPriority, hits := detectHighPriority(subject, body, "info@example.test")
+	highPriority, hits := detectHighPriority(subject, body, "info@securex.be")
 	if !highPriority {
 		t.Fatalf("expected high_priority=true for accounting domain, got false")
 	}
 	foundDomain := false
 	for _, h := range hits {
-		if h == "domain:example.test" {
+		if h == "domain:securex.be" {
 			foundDomain = true
 		}
 	}
@@ -69,7 +69,7 @@ func TestDetectHighPriority_PartialWordNoMatch(t *testing.T) {
 }
 
 func TestEnrichMetadataWithTier1_TVAEmail(t *testing.T) {
-	subject := "Déclaration TVA - 0x0800 - 1er trimestre 2026 [FID0000000]"
+	subject := "Déclaration TVA - EXMPL - 1er trimestre 2026 [FID0000000]"
 	body := `Cher Client,
 Montant : 7 421,85 €
 IBAN : BE68 5390 0754 7034

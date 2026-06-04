@@ -144,7 +144,7 @@ See also http://other.example.org.`
 func TestTier1_TVAPaymentEmail_Integration(t *testing.T) {
 	// Realistic TVA email body with all entity types.
 	text := `Cher Client,
-Sur base des documents et des informations reçus, nous avons envoyé la déclaration TVA de 0x0800.
+Sur base des documents et des informations reçus, nous avons envoyé la déclaration TVA de EXMPL.
 Il en ressort que vous restez redevable de la somme de 7 421,85 €.
 
 Instructions de paiement

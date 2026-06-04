@@ -66,9 +66,9 @@ The query must include the subject from the conversation context. Output ONLY th
 Example 1:
 Conversation:
 User: what is the VAT I should send to?
-Assistant: IBAN BE68 5390 0754 7034 for TVA 0x0800 Q1 2026
+Assistant: IBAN BE68 5390 0754 7034 for TVA EXMPL Q1 2026
 Follow-up: "Okay, and can you show me the account number?"
-Query: TVA 0x0800 1er trimestre 2026 IBAN numéro compte paiement
+Query: TVA EXMPL 1er trimestre 2026 IBAN numéro compte paiement
 
 Example 2:
 Conversation:

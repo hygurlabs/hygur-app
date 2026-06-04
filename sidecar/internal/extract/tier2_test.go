@@ -51,7 +51,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *llm.Client {
 
 func TestExtractTier2_BasicEntities(t *testing.T) {
 	body := `{
-		"persons": ["Jean Dupont", "Jean Dupont"],
+		"persons": ["Jean Dupont", "Marie Martin"],
 		"organizations": ["Acme Compta", "SPF Finances"],
 		"event_dates": [{"date":"2026-04-30","context":"déclaration TVA Q1"}],
 		"projects": ["Hygur"],
