@@ -305,6 +305,7 @@ func main() {
 	embeddingService := llm.NewEmbeddingService(llmClient, db)
 	threadNormalizer := mail.NewThreadNormalizer()
 	emailIndexer := mail.NewEmailIndexer(db, threadNormalizer, embeddingService, logger)
+	emailIndexer.SetNotifyRecencyDays(cfg.Mail.NotifyRecencyDays)
 	summarizeTool := tools.NewSummarizeThreadTool(llmClient, db)
 
 	// Create mail connectors wrapped with MailSession for auto-reconnection.

@@ -184,7 +184,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			// guidance they burn the entire token budget in `reasoning`
 			// and return `content: null` — the empty-brief regression. The
 			// system prompt asks the model to keep reasoning short.
-			{Role: "system", Content: "You produce concise summaries. Keep any internal reasoning short. Always return the final answer as Markdown bullets in the user's language."},
+			{Role: "system", Content: "Tu es l'assistant d'un indépendant. Tu produis un brief court et hiérarchisé qui met d'abord en avant ce qui compte vraiment : actions à mener, décisions à prendre, échéances proches. Tu ignores le bruit. Garde tout raisonnement interne très bref et réponds en Markdown dans la langue de l'utilisateur."},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -533,33 +533,33 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 		if hours == 0 {
 			hours = 168
 		}
-		days := hours / 24
-		if days <= 1 {
-			sb.WriteString("Voici l'activité des dernières 24 h ")
+		if hours <= 72 {
+			sb.WriteString("Voici l'activité des dernières ")
+			sb.WriteString(strconv.Itoa(hours))
+			sb.WriteString(" h ")
 		} else {
 			sb.WriteString("Voici l'activité des ")
-			sb.WriteString(strconv.Itoa(days))
+			sb.WriteString(strconv.Itoa(hours / 24))
 			sb.WriteString(" derniers jours ")
 		}
-		sb.WriteString("dans la base personnelle de l'utilisateur. ")
-		sb.WriteString("Génère un brief opérationnel et exécutif en français, structuré exactement ainsi :\n\n")
-		sb.WriteString("## Synthèse exécutive\n")
-		sb.WriteString("3-5 puces : priorités du jour, risques, décisions à prendre.\n\n")
-		sb.WriteString("## Plan d'action\n")
-		sb.WriteString("- **À faire ce matin :** tâches concrètes (paiements urgents, réponses bloquantes).\n")
-		sb.WriteString("- **À faire cet après-midi :** suivis, lectures, validations.\n")
-		sb.WriteString("- **Cette semaine :** échéances et travaux de fond.\n\n")
-		sb.WriteString("## Emails à traiter\n")
-		sb.WriteString("Pour chaque email du contexte qui attend une réponse : « De [expéditeur] — [sujet] → [action recommandée] ». Ne mentionne pas les emails purement informatifs.\n\n")
-		sb.WriteString("## À ajouter dans la task list\n")
-		sb.WriteString("Tâches à créer (verbe d'action en tête), avec échéance et montant quand ils sont présents.\n\n")
+		sb.WriteString("dans la base personnelle de l'utilisateur (emails, notes, documents). ")
+		sb.WriteString("Génère un brief opérationnel en français qui commence par l'essentiel. Structure :\n\n")
+		sb.WriteString("## Points importants\n")
+		sb.WriteString("Les 3 à 6 éléments qui comptent vraiment sur la période : ce qui demande une action, une décision, ou approche d'une échéance. Une puce par élément, avec l'enjeu et l'action recommandée si pertinent. Si vraiment rien de notable, écris une seule puce : « RAS — rien de critique sur la période. »\n\n")
+		sb.WriteString("## À traiter maintenant\n")
+		sb.WriteString("- Paiements / factures : montant, échéance, à qui.\n")
+		sb.WriteString("- Emails attendant une réponse : « De [expéditeur] — [sujet] → [action recommandée] ».\n")
+		sb.WriteString("- Échéances administratives, fiscales ou juridiques proches.\n\n")
+		sb.WriteString("## Tâches à créer\n")
+		sb.WriteString("Actions à ajouter à la todo (verbe d'action en tête), avec échéance et montant quand ils sont présents.\n\n")
 		sb.WriteString("## Sources\n")
 		sb.WriteString("Tags et projets impliqués dans ce brief, séparés par des virgules.\n")
 	}
-	sb.WriteString("\nRègles strictes :\n")
+	sb.WriteString("\nRègles :\n")
+	sb.WriteString("- Priorise : ce qui est urgent ou actionnable d'abord ; le bruit, jamais.\n")
 	sb.WriteString("- N'invente rien. Chaque puce doit pouvoir s'appuyer sur un élément du contexte ci-dessous.\n")
-	sb.WriteString("- Ignore les éléments en dehors de ta fenêtre de pertinence (vieille correspondance, accusés de réception, newsletters non-actionnables).\n")
-	sb.WriteString("- Si une section est vide, écris « *Aucun élément* » plutôt que d'inventer du contenu.\n")
+	sb.WriteString("- Ignore newsletters, accusés de réception, notifications automatiques et vieille correspondance.\n")
+	sb.WriteString("- Omets entièrement une section qui n'a aucun contenu pertinent : pas de section vide, pas de remplissage.\n")
 	sb.WriteString("- Output : Markdown brut, sans préambule, sans bloc de code.\n\n")
 	sb.WriteString("Contexte (")
 	sb.WriteString(strconv.Itoa(len(items)))
