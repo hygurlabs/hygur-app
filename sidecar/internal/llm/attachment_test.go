@@ -64,15 +64,16 @@ func TestMessageMarshal_ImageAttachment_EmitsMultimodalArray(t *testing.T) {
 	if len(probe.Content) != 2 {
 		t.Fatalf("expected 2 content parts, got %d: %s", len(probe.Content), b)
 	}
-	if probe.Content[0].Type != "text" || probe.Content[0].Text != "what's in this image?" {
-		t.Errorf("first part should be text, got %+v", probe.Content[0])
-	}
-	if probe.Content[1].Type != "image_url" {
-		t.Errorf("second part should be image_url, got %s", probe.Content[1].Type)
+	// Image must come BEFORE the text prompt (multimodal ordering).
+	if probe.Content[0].Type != "image_url" {
+		t.Errorf("first part should be image_url (image before text), got %s", probe.Content[0].Type)
 	}
 	want := "data:image/png;base64,AAA="
-	if probe.Content[1].ImageURL.URL != want {
-		t.Errorf("image url = %q, want %q", probe.Content[1].ImageURL.URL, want)
+	if probe.Content[0].ImageURL.URL != want {
+		t.Errorf("image url = %q, want %q", probe.Content[0].ImageURL.URL, want)
+	}
+	if probe.Content[1].Type != "text" || probe.Content[1].Text != "what's in this image?" {
+		t.Errorf("second part should be the text prompt, got %+v", probe.Content[1])
 	}
 }
 

@@ -52,6 +52,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/items", s.handleKnowledgeList)
 			r.Get("/diagnostic", s.handleKnowledgeDiagnostic)
 			r.Post("/ingest", s.handleKnowledgeIngest)
+			r.Post("/ingest-text", s.handleKnowledgeIngestText)
 			r.Post("/ingest-folder", s.handleKnowledgeIngestFolder)
 			r.Post("/upload", s.handleKnowledgeUpload)
 			r.Post("/search", s.handleKnowledgeSearch)
@@ -180,6 +181,11 @@ func (s *Server) setupRoutes() {
 		r.Get("/config", s.handleGetConfig)
 		r.Patch("/config", s.handlePatchConfig)
 
+		// Token usage + cost. Pricing lives in the DB, not config.yaml, so
+		// saving it never restarts the sidecar.
+		r.Get("/usage/tokens", s.handleGetTokenUsage)
+		r.Put("/usage/pricing", s.handleSetTokenPricing)
+
 		// Phase 1 (pair mode) — append-only interaction signals + learning gauge.
 		r.Post("/interactions", s.handleInteractionsAppend)
 		r.Get("/insights/learning-progress", s.handleLearningProgress)
@@ -279,6 +285,16 @@ func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKnowledgeIngest(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.Ingest(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeIngestText handles POST /knowledge/ingest-text.
+// It delegates to the KnowledgeHandler.
+func (s *Server) handleKnowledgeIngestText(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.IngestText(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

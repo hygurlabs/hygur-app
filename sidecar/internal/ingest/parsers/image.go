@@ -176,10 +176,12 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 			{
 				"role": "user",
 				"content": []map[string]any{
-					{"type": "text", "text": prompt},
+					// Image before text: multimodal models (Gemma, etc.) extract
+					// best when the image precedes the prompt.
 					{"type": "image_url", "image_url": map[string]string{
 						"url": "data:image/png;base64," + encoded,
 					}},
+					{"type": "text", "text": prompt},
 				},
 			},
 		},

@@ -213,6 +213,71 @@ func TestGenerateEmbeddings_ContextOverflowGivesUp(t *testing.T) {
 	}
 }
 
+// Regression: llama.cpp surfaces a ubatch overflow as a 500 "too large to
+// process / physical batch size", not a 400. It was previously not recognised
+// as an overflow, so the shrink-and-retry never fired and the whole knowledge
+// item was rolled back. It must now recover by shrinking, like the 400 case.
+func TestGenerateEmbeddings_BatchSizeOverflow500Recovery(t *testing.T) {
+	const fitsAt = 100
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var req EmbeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		for _, in := range req.Input {
+			if len(in) > fitsAt {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error":{"message":"input (548 tokens) is too large to process. increase the physical batch size (current batch size: 512)"}}`))
+				return
+			}
+		}
+		data := make([]EmbeddingData, len(req.Input))
+		for i := range req.Input {
+			data[i] = EmbeddingData{Object: "embedding", Index: i, Embedding: make([]float32, ExpectedEmbeddingDimension)}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(EmbeddingResponse{Object: "list", Data: data, Model: req.Model})
+	}))
+	defer server.Close()
+
+	client := NewClientWithHTTP(server.URL, 5*time.Second, 0, server.Client())
+	long := strings.Repeat("https://tracking.example.com/AS8PR03MB6855/click?id=", 8)
+	embeddings, err := client.GenerateEmbeddings(context.Background(), []string{long})
+	if err != nil {
+		t.Fatalf("expected recovery via shrink on the 500 batch-size overflow, got: %v", err)
+	}
+	if len(embeddings) != 1 || len(embeddings[0]) != ExpectedEmbeddingDimension {
+		t.Fatalf("expected 1 embedding of dim %d, got %d", ExpectedEmbeddingDimension, len(embeddings))
+	}
+	if calls < 2 {
+		t.Errorf("expected a shrink-retry, server saw %d call(s)", calls)
+	}
+}
+
+func TestIsContextOverflowError(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+		msg  string
+		want bool
+	}{
+		{"400 max context size", http.StatusBadRequest, "input (534 tokens) is larger than the max context size (512 tokens)", true},
+		{"500 too large / physical batch", http.StatusInternalServerError, "input (548 tokens) is too large to process. increase the physical batch size (current batch size: 512)", true},
+		{"400 context length", http.StatusBadRequest, "this model's maximum context length is 512 tokens", true},
+		{"500 generic server error is NOT overflow", http.StatusInternalServerError, "internal server error", false},
+		{"400 model not found is NOT overflow", http.StatusBadRequest, "the model `x` does not exist", false},
+		{"503 unavailable is NOT overflow", http.StatusServiceUnavailable, "service unavailable", false},
+	}
+	for _, tc := range cases {
+		if got := isContextOverflowError(&APIError{StatusCode: tc.code, Message: tc.msg}); got != tc.want {
+			t.Errorf("%s: isContextOverflowError(%d,%q) = %v, want %v", tc.name, tc.code, tc.msg, got, tc.want)
+		}
+	}
+}
+
 func TestGenerateEmbeddings_BatchTooLarge(t *testing.T) {
 	client := NewClientWithHTTP("http://localhost", 5*time.Second, 0, http.DefaultClient)
 

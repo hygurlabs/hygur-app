@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -90,6 +91,108 @@ func (s *MailSummarizer) SummarizeMailOneLiner(ctx context.Context, item *store.
 		subject = subject[:summarizerMaxOneLiner-1] + "…"
 	}
 	return "📧 " + subject, nil
+}
+
+// notificationJudgeSystemPrompt asks the model to BOTH decide relevance and
+// write the one-liner in a single call. Broadens importance beyond the
+// accounting-keyword rule: the LLM flags any genuinely actionable/time-
+// sensitive mail and vetoes informational noise.
+const notificationJudgeSystemPrompt = `/no_think
+Tu décides si un email mérite une notification immédiate à un indépendant qui gère son activité, puis tu le résumes en une ligne.
+
+NOTIFIE (notify=true) seulement si l'email demande une ACTION ou est temporel/important : facture ou paiement à régler, échéance (fiscale, administrative, juridique), demande directe nécessitant une réponse, rendez-vous, document officiel, problème urgent.
+NE NOTIFIE PAS (notify=false) : newsletters, promotions, notifications automatiques, accusés de réception, confirmations sans action, emails purement informatifs.
+
+Réponds UNIQUEMENT en JSON, sans texte autour :
+{"notify": true|false, "line": "<emoji> <quoi> : <détail clé>"}
+La ligne fait au plus 110 caractères. N'invente rien.`
+
+// SummarizeForNotification decides whether a freshly-indexed priority candidate
+// is worth a notification and returns its one-liner. The recency gate already
+// ran upstream; this is the relevance judgment:
+//   - Templated entities (amount / due-date / org) → clearly actionable → notify.
+//   - Else the LLM judges relevance AND writes the line in one call.
+//   - No LLM or unparseable response → fall back to notifying (the upstream
+//     gate already required recency + an actionable signal), subject as line.
+func (s *MailSummarizer) SummarizeForNotification(ctx context.Context, item *store.KnowledgeItem) (string, bool) {
+	if item == nil {
+		return "", false
+	}
+	if line, ok := s.renderFromEntities(item); ok {
+		return line, true
+	}
+	if s.llm != nil {
+		if line, notify, err := s.judgeViaLLM(ctx, item); err == nil && line != "" {
+			return line, notify
+		}
+	}
+	subject := strings.TrimSpace(item.Title)
+	if subject == "" {
+		subject = "(sans objet)"
+	}
+	return clip("📧 " + subject), true
+}
+
+// judgeViaLLM asks the model for {notify, line} in one call.
+func (s *MailSummarizer) judgeViaLLM(ctx context.Context, item *store.KnowledgeItem) (string, bool, error) {
+	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	body := strings.TrimSpace(item.NormalizedText)
+	if len(body) > 800 {
+		body = body[:800] + "…"
+	}
+	from, _ := item.Metadata["mail_from"].(string)
+
+	var b strings.Builder
+	b.WriteString("Sujet: ")
+	b.WriteString(item.Title)
+	if from != "" {
+		b.WriteString("\nDe: ")
+		b.WriteString(from)
+	}
+	b.WriteString("\n\nCorps:\n")
+	b.WriteString(body)
+
+	resp, err := s.llm.Chat(llmCtx, llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: "system", Content: notificationJudgeSystemPrompt},
+			{Role: "user", Content: b.String()},
+		},
+		Stream:             false,
+		Temperature:        0,
+		MaxTokens:          120,
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if resp == nil || len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
+		return "", false, fmt.Errorf("empty llm response")
+	}
+	notify, line, ok := parseJudgeJSON(resp.Choices[0].Message.Content)
+	if !ok {
+		return "", false, fmt.Errorf("could not parse judge response")
+	}
+	return clip(line), notify, nil
+}
+
+// parseJudgeJSON extracts the {notify, line} object from a model reply,
+// tolerating surrounding prose or code fences.
+func parseJudgeJSON(raw string) (notify bool, line string, ok bool) {
+	start := strings.IndexByte(raw, '{')
+	end := strings.LastIndexByte(raw, '}')
+	if start < 0 || end <= start {
+		return false, "", false
+	}
+	var parsed struct {
+		Notify bool   `json:"notify"`
+		Line   string `json:"line"`
+	}
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &parsed); err != nil {
+		return false, "", false
+	}
+	return parsed.Notify, cleanLLMLine(parsed.Line), true
 }
 
 // renderFromEntities returns a templated one-liner when the metadata has

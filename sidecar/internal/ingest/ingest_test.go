@@ -44,6 +44,24 @@ func (m *mockParser) Parse(ctx context.Context, r io.Reader) (string, Metadata, 
 	return m.content, m.metadata, nil
 }
 
+// Regression: uploading "IMG_0090.JPG" failed with "no parser available for
+// file type: .JPG". The lookup must be case-insensitive (normalizeExtension
+// lowercases), so an uppercase extension resolves to a parser registered for
+// the lowercase form.
+func TestGetParser_CaseInsensitiveExtension(t *testing.T) {
+	ing := NewIngestor()
+	ing.RegisterParser(&mockParser{extensions: []string{".jpg"}})
+
+	// normalizeExtension lowercases at the registry boundary, so the original
+	// failing case (".JPG", from IMG_0090.JPG) resolves to the ".jpg" parser.
+	if ing.GetParser(".JPG") == nil {
+		t.Error(`GetParser(".JPG") = nil, want the parser registered for ".jpg"`)
+	}
+	if ing.GetParser(".gif") != nil {
+		t.Error(`GetParser(".gif") should be nil — no parser registered for it`)
+	}
+}
+
 func TestValidatePath(t *testing.T) {
 	// Create a temporary directory for test files
 	tmpDir := t.TempDir()

@@ -46,6 +46,7 @@ type Server struct {
 	mentionsHandler  *handlers.MentionsHandler
 	interactionsHandler *handlers.InteractionsHandler
 	insightsHandler  *handlers.InsightsHandler
+	usageHandler     *handlers.UsageHandler
 	token            string             // Static token (local mode) + WebUI bootstrap
 	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
 }
@@ -469,6 +470,27 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "config handler not configured")
+}
+
+// SetUsageHandler attaches the token-usage / cost handler.
+func (s *Server) SetUsageHandler(handler *handlers.UsageHandler) {
+	s.usageHandler = handler
+}
+
+func (s *Server) handleGetTokenUsage(w http.ResponseWriter, r *http.Request) {
+	if s.usageHandler != nil {
+		s.usageHandler.GetTokens(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "usage handler not configured")
+}
+
+func (s *Server) handleSetTokenPricing(w http.ResponseWriter, r *http.Request) {
+	if s.usageHandler != nil {
+		s.usageHandler.SetPricing(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "usage handler not configured")
 }
 
 // SetMentionsHandler attaches the mentions autocomplete handler.

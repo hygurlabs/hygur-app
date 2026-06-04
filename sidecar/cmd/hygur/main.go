@@ -255,6 +255,17 @@ func main() {
 	defer storeManager.Close()
 	logger.Info().Str("path", cfg.Store.Path).Msg("database initialized")
 
+	// Token-usage accounting: every chat/embedding/indexing completion records
+	// its token counts into SQLite so the Settings cost view persists across
+	// restarts. The main client covers chat + embeddings; a distinct indexing
+	// client (when configured) logs indexing completions under their own
+	// category. Set before the server starts serving requests.
+	usageSink := tokenUsageSink{db: db, logger: logger}
+	llmClient.SetUsageRecorder(usageSink, store.TokenCategoryChat)
+	if indexingClient != llmClient {
+		indexingClient.SetUsageRecorder(usageSink, store.TokenCategoryIndexing)
+	}
+
 	// Bridge the vision config to the env vars the PDF/image parsers read, so
 	// scanned-PDF and image OCR can use the local multimodal model (portable, no
 	// system Tesseract needed). Defaults to the inference endpoint + default
@@ -283,6 +294,20 @@ func main() {
 	ingestor.RegisterParser(parsers.NewTXTParser())
 	ingestor.RegisterParser(parsers.NewPDFParser())
 	ingestor.RegisterParser(parsers.NewDOCXParser())
+	// Image OCR (.png/.jpg/.jpeg/.heic/.webp): Tesseract if installed, else the
+	// vision model (same endpoint/model the scanned-PDF OCR uses). Without this
+	// registration, image uploads fail with "no parser available for file type".
+	ingestor.RegisterParser(parsers.NewImageParserWithModel(visionURL, visionModel))
+	// Audio transcription (.mp3/.m4a/.wav/.ogg). Primary path: native ASR via the
+	// multimodal chat model (gemma-4-12B-it does ASR) using Google's ASR prompt;
+	// falls back to a Whisper /v1/audio/transcriptions endpoint if that fails.
+	// HYGUR_AUDIO_ENDPOINT overrides the endpoint (defaults to the inference URL);
+	// HYGUR_ASR_LANGUAGE sets the transcription language (default "French").
+	audioURL := os.Getenv("HYGUR_AUDIO_ENDPOINT")
+	if audioURL == "" {
+		audioURL = cfg.LMStudio.URL
+	}
+	ingestor.RegisterParser(parsers.NewAudioParserWithModel(audioURL, cfg.LMStudio.ModelDefault))
 
 	// Create the semantic (vector-only) searcher used by the legacy /knowledge/search endpoint.
 	searcher := retrieval.NewHybridSearcher(db, llmClient)
@@ -298,6 +323,7 @@ func main() {
 	embeddingService := llm.NewEmbeddingService(llmClient, db)
 	threadNormalizer := mail.NewThreadNormalizer()
 	emailIndexer := mail.NewEmailIndexer(db, threadNormalizer, embeddingService, logger)
+	emailIndexer.SetNotifyRecencyDays(cfg.Mail.NotifyRecencyDays)
 	summarizeTool := tools.NewSummarizeThreadTool(llmClient, db)
 
 	// Create mail connectors wrapped with MailSession for auto-reconnection.
@@ -611,6 +637,7 @@ func main() {
 	server.SetConnectorHandler(connectorHandler)
 	server.SetMarketplaceHandler(marketplaceHandler)
 	server.SetConfigHandler(configHandler)
+	server.SetUsageHandler(handlers.NewUsageHandler(db, logger))
 
 	// Phase 1 (pair mode) — interaction logging + learning gauge.
 	interactionLogger := interactions.NewLogger(db)
@@ -731,6 +758,21 @@ func main() {
 	}
 
 	logger.Info().Msg("hygur sidecar stopped")
+}
+
+// tokenUsageSink adapts the store to llm.UsageRecorder. RecordUsage runs on
+// the request goroutine at completion time, so it must not block; it uses a
+// background context (the request ctx is often cancelled the instant the
+// stream ends) and swallows write errors after logging.
+type tokenUsageSink struct {
+	db     *store.DB
+	logger zerolog.Logger
+}
+
+func (s tokenUsageSink) RecordUsage(category string, tokensIn, tokensOut int) {
+	if err := s.db.RecordTokenUsage(context.Background(), category, tokensIn, tokensOut); err != nil {
+		s.logger.Warn().Err(err).Str("category", category).Msg("record token usage failed")
+	}
 }
 
 // watchParent polls the parent process ID every 2 seconds and triggers

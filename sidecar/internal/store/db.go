@@ -235,6 +235,46 @@ func (d *DB) GetKnowledgeItemByHash(ctx context.Context, contentHash string) (*K
 	return item, nil
 }
 
+// GetKnowledgeItemBySourceRef retrieves a knowledge item by its source_ref
+// (stored in metadata). Enables idempotent re-ingestion: the same source_ref
+// updates the existing item instead of creating a duplicate. Returns (nil, nil)
+// when none matches.
+func (d *DB) GetKnowledgeItemBySourceRef(ctx context.Context, sourceRef string) (*KnowledgeItem, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		FROM knowledge_items
+		WHERE json_extract(metadata, '$.source_ref') = ?
+		LIMIT 1
+	`, sourceRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query knowledge item by source_ref: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, nil
+	}
+
+	item := &KnowledgeItem{}
+	var metadataStr sql.NullString
+	var sourcePath sql.NullString
+	if err := rows.Scan(
+		&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
+		&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
+	); err != nil {
+		return nil, fmt.Errorf("failed to scan knowledge item: %w", err)
+	}
+	if sourcePath.Valid {
+		item.SourcePath = &sourcePath.String
+	}
+	if metadataStr.Valid && metadataStr.String != "" {
+		if err := json.Unmarshal([]byte(metadataStr.String), &item.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
+	}
+	return item, nil
+}
+
 // DeleteKnowledgeItem deletes a knowledge item and its associated chunks (via CASCADE).
 func (d *DB) DeleteKnowledgeItem(ctx context.Context, contentID string) error {
 	result, err := d.db.ExecContext(ctx, "DELETE FROM knowledge_items WHERE content_id = ?", contentID)

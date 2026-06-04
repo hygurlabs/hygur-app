@@ -40,6 +40,42 @@ type Client struct {
 	// every request. Hosted providers (Mistral, OpenAI…) require it; local
 	// runtimes (LM Studio, Ollama, vLLM) ignore it.
 	apiKey string
+	// usageRecorder, when set, receives token counts after each completion and
+	// embedding call. chatCategory labels this client's chat completions
+	// ("chat" for the main model, "indexing" for the ingestion model);
+	// embeddings are always recorded under "embedding".
+	usageRecorder UsageRecorder
+	chatCategory  string
+}
+
+// UsageRecorder receives token usage observed by the client. Implementations
+// must be safe for concurrent use and must not block. category is one of
+// "chat", "indexing" (chat completions) or "embedding".
+type UsageRecorder interface {
+	RecordUsage(category string, tokensIn, tokensOut int)
+}
+
+// SetUsageRecorder attaches a usage recorder. chatCategory labels chat
+// completions from this client (e.g. "chat" or "indexing"); pass "" for the
+// default "chat". Passing a nil recorder disables recording.
+func (c *Client) SetUsageRecorder(r UsageRecorder, chatCategory string) {
+	if chatCategory == "" {
+		chatCategory = "chat"
+	}
+	c.usageRecorder = r
+	c.chatCategory = chatCategory
+}
+
+// recordChatUsage forwards a completion's token counts to the recorder, if any.
+func (c *Client) recordChatUsage(u *Usage) {
+	if c.usageRecorder == nil || u == nil {
+		return
+	}
+	cat := c.chatCategory
+	if cat == "" {
+		cat = "chat"
+	}
+	c.usageRecorder.RecordUsage(cat, u.PromptTokens, u.CompletionTokens)
 }
 
 // setAuthHeader adds the bearer Authorization header when an API key is
@@ -157,45 +193,60 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		return json.Marshal(alias(m))
 	}
 
+	// Ordering matters for multimodal models (Gemma et al.): image content goes
+	// BEFORE the text prompt, audio content AFTER it. Document stubs are inert
+	// text and ride with the text block. (Mirrors the provider guidance:
+	// "image before text, audio after text".)
 	parts := make([]map[string]any, 0, 1+len(m.Attachments))
+
+	for _, att := range m.Attachments {
+		if att.Type != AttachmentTypeImage {
+			continue
+		}
+		mime := att.MimeType
+		if mime == "" {
+			mime = "image/png"
+		}
+		parts = append(parts, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": fmt.Sprintf("data:%s;base64,%s", mime, att.Data),
+			},
+		})
+	}
+
 	if m.Content != "" {
 		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
 	}
 	for _, att := range m.Attachments {
-		switch att.Type {
-		case AttachmentTypeImage:
-			mime := att.MimeType
-			if mime == "" {
-				mime = "image/png"
-			}
-			parts = append(parts, map[string]any{
-				"type": "image_url",
-				"image_url": map[string]any{
-					"url": fmt.Sprintf("data:%s;base64,%s", mime, att.Data),
-				},
-			})
-		case AttachmentTypeAudio:
-			format := att.Format
-			if format == "" {
-				format = "wav"
-			}
-			parts = append(parts, map[string]any{
-				"type": "input_audio",
-				"input_audio": map[string]any{
-					"data":   att.Data,
-					"format": format,
-				},
-			})
-		case AttachmentTypeDocument:
-			label := att.Title
-			if label == "" {
-				label = att.ContentID
-			}
-			parts = append(parts, map[string]any{
-				"type": "text",
-				"text": fmt.Sprintf("[document:%s]", label),
-			})
+		if att.Type != AttachmentTypeDocument {
+			continue
 		}
+		label := att.Title
+		if label == "" {
+			label = att.ContentID
+		}
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": fmt.Sprintf("[document:%s]", label),
+		})
+	}
+
+	for _, att := range m.Attachments {
+		if att.Type != AttachmentTypeAudio {
+			continue
+		}
+		format := att.Format
+		if format == "" {
+			format = "wav"
+		}
+		parts = append(parts, map[string]any{
+			"type": "input_audio",
+			"input_audio": map[string]any{
+				"data":   att.Data,
+				"format": format,
+			},
+		})
 	}
 
 	out := map[string]any{
@@ -269,6 +320,16 @@ type ChatRequest struct {
 	// models (nemotron, Qwen3) from emitting <think> blocks that waste the token
 	// budget and break strict-JSON callers. Omitted when nil.
 	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+	// StreamOptions asks a streaming completion to emit a terminal usage chunk
+	// (token counts). Set automatically by the streaming path when a usage
+	// recorder is attached; otherwise omitted. vLLM/Mistral/LM Studio honour it.
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+}
+
+// StreamOptions mirrors OpenAI's stream_options object.
+type StreamOptions struct {
+	// IncludeUsage requests a final SSE chunk carrying token usage.
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 // ChatResponse represents a response from the chat completions endpoint.
@@ -387,7 +448,12 @@ type StreamHandler func(delta string, done bool, usage *Usage) error
 // StreamChat sends a streaming chat request and calls the handler for each chunk.
 func (c *Client) StreamChat(ctx context.Context, req ChatRequest, handler StreamHandler) error {
 	return c.streamWith(ctx, req, func(body io.Reader) error {
-		return processSSEStream(body, handler)
+		return processSSEStream(body, func(delta string, done bool, usage *Usage) error {
+			if done {
+				c.recordChatUsage(usage)
+			}
+			return handler(delta, done, usage)
+		})
 	})
 }
 
@@ -397,7 +463,12 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, handler Stream
 // callers that don't need tool-call observability.
 func (c *Client) StreamChatRich(ctx context.Context, req ChatRequest, handler StreamRichHandler) error {
 	return c.streamWith(ctx, req, func(body io.Reader) error {
-		return processSSEStreamRich(body, handler)
+		return processSSEStreamRich(body, func(evt StreamEvent) error {
+			if evt.Done {
+				c.recordChatUsage(evt.Usage)
+			}
+			return handler(evt)
+		})
 	})
 }
 
@@ -406,6 +477,11 @@ func (c *Client) StreamChatRich(ctx context.Context, req ChatRequest, handler St
 // body; this function closes it after the parser returns.
 func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.Reader) error) error {
 	req.Stream = true
+	// Only opt into the terminal usage chunk when we have somewhere to record
+	// it — keeps the request identical to before for callers without a recorder.
+	if c.usageRecorder != nil && req.StreamOptions == nil {
+		req.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -540,6 +616,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 			return nil, fmt.Errorf("failed to decode response: %w", err)
 		}
 
+		c.recordChatUsage(chatResp.Usage)
 		return &chatResp, nil
 	}
 

@@ -50,6 +50,9 @@ type EmailIndexer struct {
 	autoTagger       *ingest.AutoTagger
 	broker           *events.Broker
 	logger           zerolog.Logger
+	// notifyRecencyDays bounds priority_mail emission to mail received within
+	// this many days. <= 0 disables the gate (emit regardless of mail age).
+	notifyRecencyDays int
 }
 
 // NewEmailIndexer creates a new EmailIndexer.
@@ -74,6 +77,26 @@ func NewEmailIndexer(store *store.DB, normalizer *ThreadNormalizer, embSvc *llm.
 // events for freshly-indexed actionable emails. Pass nil to detach.
 func (idx *EmailIndexer) SetBroker(b *events.Broker) {
 	idx.broker = b
+}
+
+// SetNotifyRecencyDays bounds priority_mail emission to mail received within
+// the given number of days. <= 0 disables the recency gate.
+func (idx *EmailIndexer) SetNotifyRecencyDays(days int) {
+	idx.notifyRecencyDays = days
+}
+
+// mailIsRecentEnough reports whether a mail of the given date may trigger a
+// notification. With the gate disabled (days <= 0) everything passes; with it
+// enabled, an undated mail is treated as too old (we won't notify on mail we
+// can't date — that's exactly the backfill case we want to suppress).
+func (idx *EmailIndexer) mailIsRecentEnough(mailDate time.Time) bool {
+	if idx.notifyRecencyDays <= 0 {
+		return true
+	}
+	if mailDate.IsZero() {
+		return false
+	}
+	return time.Since(mailDate) <= time.Duration(idx.notifyRecencyDays)*24*time.Hour
 }
 
 // CountItems returns the total number of email knowledge_items in the DB.
@@ -357,11 +380,15 @@ func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messag
 		_, _ = idx.autoTagger.TagMail(ctx, contentID, senderEmail, mailboxPath)
 	}
 
-	// Step 10: Emit priority_mail event if this is a fresh insert AND the
-	// email is actionable (high_priority + amount or due_date present).
-	// Only "indexed" status fires — re-indexes ("updated") are noisy and
-	// duplicates already returned earlier in the function.
-	if idx.broker != nil && status == "indexed" && highPriority {
+	// Step 10: Emit a priority_mail candidate when this is a fresh insert, the
+	// mail was RECEIVED recently (recency gate — stops a backfill of last
+	// year's mail from notifying), it is high-priority (accounting keywords /
+	// known sender), AND it is actionable (amount or due date). The post-sync
+	// digest then has the LLM judge each candidate for real notification-
+	// worthiness, vetoing receipts/confirmations and writing the one-liner.
+	// Only "indexed" status fires — re-indexes are noisy and duplicates
+	// already returned earlier in the function.
+	if idx.broker != nil && status == "indexed" && highPriority && idx.mailIsRecentEnough(mailDate) {
 		hasAmount := len(tier1.Amounts) > 0
 		hasDueDate := len(tier1.DueDates) > 0
 		if hasAmount || hasDueDate {

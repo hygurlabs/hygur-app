@@ -4,13 +4,15 @@
 
 export type Role = "user" | "assistant" | "system";
 
-/** A document reference attached to a chat message (📎 upload or @-mention of a
- *  note/mail/doc). Resolved to inline text by the sidecar before the LLM sees it. */
-export interface AttachmentRef {
-  type: "document";
-  content_id: string;
-  title?: string;
-}
+/** An attachment on a chat message. Mirrors the sidecar's llm.Attachment.
+ *  - "document": a KB reference (📎 upload of a doc / @-mention). The sidecar
+ *    resolves it to inline text before the LLM sees it.
+ *  - "image" / "audio": live media sent to the multimodal model directly
+ *    (base64), so Gemma can see/hear it (e.g. transcribe an audio, read a photo). */
+export type AttachmentRef =
+  | { type: "document"; content_id: string; title?: string }
+  | { type: "image"; data: string; mime_type: string; title?: string }
+  | { type: "audio"; data: string; format: string; title?: string };
 
 export interface ChatMessage {
   role: Role;
@@ -236,6 +238,35 @@ export interface SidecarConfig {
     entity_search_min_score: number;
   };
   mail: { reconcile_deletions: boolean };
+}
+
+/** Per-1M-token prices for the cost estimate (GET/PUT /usage). Chat is billed
+ *  per direction; embeddings + indexing share `ingest_per_1m`. */
+export interface TokenPricing {
+  chat_in_per_1m: number;
+  chat_out_per_1m: number;
+  ingest_per_1m: number;
+  currency: string;
+}
+
+/** Token totals for one period. Chat keeps IN/OUT split; embeddings/indexing
+ *  are reported as total tokens each. */
+export interface TokenPeriodUsage {
+  chat_in: number;
+  chat_out: number;
+  embedding: number;
+  indexing: number;
+}
+
+/** Response of GET /usage/tokens. */
+export interface TokenUsageResponse {
+  currency: string;
+  pricing: TokenPricing;
+  periods: {
+    today: TokenPeriodUsage;
+    this_week: TokenPeriodUsage;
+    this_month: TokenPeriodUsage;
+  };
 }
 
 export interface SidecarConfigPatch {

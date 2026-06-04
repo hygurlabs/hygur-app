@@ -73,6 +73,12 @@ type MailConfig struct {
 	// partial sync could otherwise purge valid items; the reconcile only runs
 	// when the sweep had no thread limit.
 	ReconcileDeletions bool `mapstructure:"reconcile_deletions" yaml:"reconcile_deletions"`
+
+	// NotifyRecencyDays bounds "important mail" notifications to recently
+	// RECEIVED mail: a mail whose actual date (mail_date) is older than this
+	// many days never triggers a notification, even when freshly indexed (e.g.
+	// during a backfill). Default 14; set <= 0 to disable the recency gate.
+	NotifyRecencyDays int `mapstructure:"notify_recency_days" yaml:"notify_recency_days,omitempty"`
 }
 
 // DailyBriefConfig configures the scheduled daily activity digest task.

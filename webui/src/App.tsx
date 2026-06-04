@@ -3,7 +3,6 @@ import { Sidebar } from "./components/Sidebar";
 import { DetailPanelProvider } from "./components/DetailPanel";
 import { ActivityProvider } from "./lib/activity";
 import { Ask } from "./views/Ask";
-import { SearchView } from "./views/Search";
 import { Library } from "./views/Library";
 import { Notes } from "./views/Notes";
 import { Projects } from "./views/Projects";
@@ -22,7 +21,8 @@ export default function App() {
           <main className="relative min-w-0 overflow-hidden">
             <Routes>
               <Route path="/" element={<Ask />} />
-              <Route path="/search" element={<SearchView />} />
+              {/* Search merged into Library; redirect old links. */}
+              <Route path="/search" element={<Navigate to="/library" replace />} />
               <Route path="/library" element={<Library />} />
               <Route path="/notes" element={<Notes />} />
               <Route path="/projects" element={<Projects />} />

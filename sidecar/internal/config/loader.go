@@ -141,11 +141,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("retrieval.entity_search_fallback", true)
 	v.SetDefault("retrieval.entity_search_min_score", 0.5)
 
-	// DailyBrief defaults — opt-in.
+	// DailyBrief defaults — opt-in. 48 h window so the brief catches the last
+	// two days of activity rather than collapsing on a quiet 24 h.
 	v.SetDefault("daily_brief.enabled", false)
 	v.SetDefault("daily_brief.hour_local", "08:00")
 	v.SetDefault("daily_brief.max_items", 50)
-	v.SetDefault("daily_brief.lookback_hours", 24)
+	v.SetDefault("daily_brief.lookback_hours", 48)
+
+	// Mail: only notify on mail received within the last 14 days.
+	v.SetDefault("mail.notify_recency_days", 14)
 }
 
 // SaveConnectorsConfig persiste la map des ConnectorSettings dans config.yaml

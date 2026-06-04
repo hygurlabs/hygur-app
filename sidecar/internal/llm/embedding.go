@@ -141,16 +141,28 @@ func (c *Client) capInputToBudget(text string) string {
 }
 
 // isContextOverflowError reports whether an API error is the server rejecting
-// an input for exceeding the embedding model's context window. The wording
-// varies across servers (llama.cpp, LM Studio), so we match on stable phrases.
+// an input for being too big to embed — recoverable by shrinking + retrying.
+// llama.cpp surfaces this two ways depending on which limit is hit:
+//   - 400 "input (N tokens) is larger than the max context size (...)"  → n_ctx
+//   - 500 "input (N tokens) is too large to process. increase the physical
+//     batch size (current batch size: ...)"                             → n_ubatch
+// Both are size rejections, so we accept either status and match on stable
+// size/batch phrases. (A 500 was previously dropped here, so the existing
+// shrink-and-retry never fired and the whole knowledge item was rolled back.)
 func isContextOverflowError(apiErr *APIError) bool {
-	if apiErr == nil || apiErr.StatusCode != http.StatusBadRequest {
+	if apiErr == nil {
+		return false
+	}
+	if apiErr.StatusCode != http.StatusBadRequest && apiErr.StatusCode != http.StatusInternalServerError {
 		return false
 	}
 	m := strings.ToLower(apiErr.Message)
 	return strings.Contains(m, "context size") ||
 		strings.Contains(m, "max context") ||
 		strings.Contains(m, "context length") ||
+		strings.Contains(m, "too large to process") ||
+		strings.Contains(m, "physical batch size") ||
+		(strings.Contains(m, "batch size") && strings.Contains(m, "increase")) ||
 		(strings.Contains(m, "larger than") && strings.Contains(m, "token"))
 }
 
@@ -316,6 +328,10 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 			return nil, fmt.Errorf("failed to decode embedding response: %w", err)
 		}
 		resp.Body.Close()
+
+		if c.usageRecorder != nil && embResp.Usage != nil {
+			c.usageRecorder.RecordUsage("embedding", embResp.Usage.PromptTokens, 0)
+		}
 
 		if len(embResp.Data) == 0 {
 			return nil, ErrEmptyEmbedding

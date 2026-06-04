@@ -22,6 +22,8 @@ import type {
   SidecarConfig,
   SidecarConfigPatch,
   Tag,
+  TokenPricing,
+  TokenUsageResponse,
 } from "./types";
 
 /** API contract version this client speaks. The server advertises its own via
@@ -234,6 +236,11 @@ export const api = {
   // Sidecar config.
   config: () => getJSON<SidecarConfig>("/config"),
   patchConfig: (patch: SidecarConfigPatch) => patchJSON("/config", patch),
+
+  // Token usage + cost pricing.
+  getTokenUsage: () => getJSON<TokenUsageResponse>("/usage/tokens"),
+  setTokenPricing: (p: TokenPricing) =>
+    putJSON<{ status: string }>("/usage/pricing", p),
 
   /** Uploads + ingests a file (📎). Returns the new content_id to attach. */
   uploadFile: async (

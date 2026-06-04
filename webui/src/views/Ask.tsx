@@ -43,6 +43,9 @@ interface Turn {
   sources?: RagSource[];
   activity?: string;
   error?: string;
+  // Attachments carried on a user turn so they persist across the conversation
+  // (F1): follow-up questions about an attached image keep its context.
+  attachments?: AttachmentRef[];
 }
 
 interface ProjectFocus {
@@ -104,8 +107,15 @@ function CopyButton({ text, title = "Copy" }: { text: string; title?: string }) 
 function buildChatMarkdown(turns: Turn[]): string {
   const out: string[] = ["# Conversation Hygur", ""];
   for (const t of turns) {
-    if (!t.content) continue;
-    out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "", t.content, "");
+    const images = (t.attachments ?? []).filter(
+      (a): a is Extract<AttachmentRef, { type: "image" }> => a.type === "image",
+    );
+    if (!t.content && images.length === 0) continue;
+    out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "");
+    for (const a of images) {
+      out.push(`_[Image jointe : ${a.title || "image"}]_`, "");
+    }
+    if (t.content) out.push(t.content, "");
     if (t.role === "assistant" && t.sources?.length) {
       out.push("**Sources:**");
       for (const s of t.sources) {
@@ -194,7 +204,7 @@ export function Ask() {
     lastAttach.current = attach;
     const title = params.get("attachTitle") ?? undefined;
     setAttachments((prev) =>
-      prev.some((a) => a.content_id === attach)
+      prev.some((a) => a.type === "document" && a.content_id === attach)
         ? prev
         : [...prev, { type: "document", content_id: attach, title }],
     );
@@ -259,7 +269,12 @@ export function Ask() {
     setPanelMode("context");
     setPanelOpen(true);
 
-    const userTurn: Turn = { id: nextId(), role: "user", content: q };
+    const userTurn: Turn = {
+      id: nextId(),
+      role: "user",
+      content: q,
+      ...(msgAttachments.length ? { attachments: msgAttachments } : {}),
+    };
     const assistantTurn: Turn = {
       id: nextId(),
       role: "assistant",
@@ -269,7 +284,18 @@ export function Ask() {
     setTurns((prev) => [...prev, userTurn, assistantTurn]);
 
     const history: ChatMessage[] = [
-      ...turns.map((t) => ({ role: t.role, content: t.content })),
+      ...turns.map((t) => {
+        // Carry document + image attachments across turns (F1) so follow-ups
+        // keep their context. Audio is excluded: it's transcribed once and the
+        // transcript lives in the reply, so re-sending the bytes each turn is
+        // wasteful.
+        const carried = t.attachments?.filter((a) => a.type !== "audio");
+        return {
+          role: t.role,
+          content: t.content,
+          ...(carried && carried.length ? { attachments: carried } : {}),
+        };
+      }),
       {
         role: "user" as const,
         content: q,
@@ -439,14 +465,37 @@ export function Ask() {
                   t.role === "user" ? (
                     <div
                       key={t.id}
-                      className="group flex max-w-[86%] flex-col items-end gap-1 self-end print:max-w-none"
+                      className="group flex max-w-[86%] flex-col items-end gap-1.5 self-end print:max-w-none"
                     >
-                      <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
-                        {t.content}
-                      </div>
-                      <div className="print:hidden">
-                        <CopyButton text={t.content} title="Copy message" />
-                      </div>
+                      {/* Sent images render with the message (and in the print/PDF
+                          transcript) so you can see what the turn is about. */}
+                      {t.attachments?.some((a) => a.type === "image") && (
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {t.attachments
+                            .filter(
+                              (a): a is Extract<AttachmentRef, { type: "image" }> =>
+                                a.type === "image",
+                            )
+                            .map((a, i) => (
+                              <img
+                                key={i}
+                                src={`data:${a.mime_type};base64,${a.data}`}
+                                alt={a.title || "image"}
+                                className="max-h-52 max-w-full rounded-xl border border-border object-contain print:max-h-none"
+                              />
+                            ))}
+                        </div>
+                      )}
+                      {t.content && (
+                        <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
+                          {t.content}
+                        </div>
+                      )}
+                      {t.content && (
+                        <div className="print:hidden">
+                          <CopyButton text={t.content} title="Copy message" />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <AssistantTurn key={t.id} turn={t} openDetail={openDetail} />
@@ -595,7 +644,7 @@ function Composer({
       );
     } else {
       setAttachments((prev) =>
-        prev.some((a) => a.content_id === m.id)
+        prev.some((a) => a.type === "document" && a.content_id === m.id)
           ? prev
           : [...prev, { type: "document", content_id: m.id, title: m.title }],
       );
@@ -609,11 +658,49 @@ function Composer({
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
-        const res = await api.uploadFile(file);
-        setAttachments((prev) => [
-          ...prev,
-          { type: "document", content_id: res.content_id, title: res.title || file.name },
-        ]);
+        const mime = file.type || "";
+        const ext = (file.name.split(".").pop() || "").toLowerCase();
+        if (mime.startsWith("image/")) {
+          // Live image → multimodal model sees it directly (F3).
+          const data = await fileToBase64(file);
+          setAttachments((prev) => [
+            ...prev,
+            { type: "image", data, mime_type: mime, title: file.name },
+          ]);
+        } else if (
+          mime.startsWith("audio/") ||
+          ["m4a", "mp3", "wav", "ogg", "mp4", "aac", "m4b", "flac", "opus"].includes(ext)
+        ) {
+          // Live audio → model transcribes it directly (F3); no ingest round-trip.
+          // Gemma's vLLM audio loader can't decode the m4a/AAC container — it
+          // silently drops the audio so the model answers "no audio attached".
+          // WebKit *can* decode it, so we transcode AAC (and any unknown
+          // container) to 16 kHz mono WAV here. ogg/mp3/wav/flac decode
+          // server-side fine and pass through untouched.
+          const knownGood = ["ogg", "mp3", "mpeg", "wav", "flac", "opus"];
+          const isAac =
+            ["m4a", "mp4", "m4b", "aac"].includes(ext) || /mp4|aac|x-m4a/.test(mime);
+          let data: string;
+          let format: string;
+          if (!isAac && knownGood.includes(ext)) {
+            data = await fileToBase64(file);
+            format = ext === "mpeg" ? "mp3" : ext;
+          } else {
+            data = await transcodeToWav16kMono(file);
+            format = "wav";
+          }
+          setAttachments((prev) => [
+            ...prev,
+            { type: "audio", data, format, title: file.name },
+          ]);
+        } else {
+          // Documents (PDF/DOCX/text) → index in the KB, attach by reference.
+          const res = await api.uploadFile(file);
+          setAttachments((prev) => [
+            ...prev,
+            { type: "document", content_id: res.content_id, title: res.title || file.name },
+          ]);
+        }
       }
     } catch (e) {
       setUploadError((e as Error).message);
@@ -621,6 +708,87 @@ function Composer({
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+
+  // Reads a file as raw (un-prefixed) base64 for inline image/audio attachments.
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result as string;
+        const comma = res.indexOf(",");
+        resolve(comma >= 0 ? res.slice(comma + 1) : res);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Decodes any browser-playable audio file and re-encodes it as 16 kHz mono
+  // 16-bit PCM WAV (un-prefixed base64). Used for m4a/AAC, which Gemma's vLLM
+  // can't decode but WebKit can. Throws a clear error if decoding fails.
+  async function transcodeToWav16kMono(file: File): Promise<string> {
+    const Ctx: typeof AudioContext =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    const Offline: typeof OfflineAudioContext =
+      window.OfflineAudioContext ||
+      (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
+        .webkitOfflineAudioContext;
+    if (!Ctx || !Offline) {
+      throw new Error(`Audio "${file.name}" : transcodage non supporté par ce navigateur`);
+    }
+    const buf = await file.arrayBuffer();
+    const decodeCtx = new Ctx();
+    let decoded: AudioBuffer;
+    try {
+      decoded = await decodeCtx.decodeAudioData(buf.slice(0));
+    } catch {
+      throw new Error(`Audio "${file.name}" : format non décodable`);
+    } finally {
+      void decodeCtx.close();
+    }
+    const rate = 16000;
+    const off = new Offline(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    return wavBase64FromBuffer(await off.startRendering());
+  }
+
+  // Encodes a mono AudioBuffer as a 16-bit PCM WAV file, returning un-prefixed base64.
+  function wavBase64FromBuffer(buf: AudioBuffer): string {
+    const ch = buf.getChannelData(0);
+    const n = ch.length;
+    const view = new DataView(new ArrayBuffer(44 + n * 2));
+    const str = (o: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+    };
+    str(0, "RIFF");
+    view.setUint32(4, 36 + n * 2, true);
+    str(8, "WAVE");
+    str(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, buf.sampleRate, true);
+    view.setUint32(28, buf.sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits/sample
+    str(36, "data");
+    view.setUint32(40, n * 2, true);
+    let o = 44;
+    for (let i = 0; i < n; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      o += 2;
+    }
+    const u8 = new Uint8Array(view.buffer);
+    let bin = "";
+    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin);
   }
 
   async function toggleMic() {
@@ -689,15 +857,13 @@ function Composer({
                 }
               />
             ))}
-            {attachments.map((a) => (
+            {attachments.map((a, i) => (
               <Chip
-                key={`a-${a.content_id}`}
+                key={`a-${i}-${a.title ?? (a.type === "document" ? a.content_id : a.type)}`}
                 icon={<Paperclip size={12} strokeWidth={2} />}
-                label={a.title ?? a.content_id}
+                label={a.title ?? (a.type === "document" ? a.content_id : a.type)}
                 onRemove={() =>
-                  setAttachments((prev) =>
-                    prev.filter((x) => x.content_id !== a.content_id),
-                  )
+                  setAttachments((prev) => prev.filter((_, j) => j !== i))
                 }
               />
             ))}

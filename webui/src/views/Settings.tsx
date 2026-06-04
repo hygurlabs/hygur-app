@@ -3,7 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
 import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
-import type { SidecarConfig } from "../lib/types";
+import type {
+  SidecarConfig,
+  TokenPeriodUsage,
+  TokenPricing,
+  TokenUsageResponse,
+} from "../lib/types";
 import {
   Button,
   ErrorBanner,
@@ -395,9 +400,153 @@ export function Settings() {
         </Row>
       </Section>
 
+      <TokenUsageSection />
       <NotificationsSection />
       <PermissionsSection />
     </Page>
+  );
+}
+
+// MARK: - Token usage & cost
+
+// A locale-tolerant decimal input. `type="number"` rejects comma decimals
+// (French keyboards) and a controlled numeric value clobbers half-typed states
+// like "0,"; so this is an uncontrolled text field that accepts both "," and
+// "." and reports the parsed number upward. Seeded once at mount.
+function PriceField({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      defaultValue={value ? String(value).replace(".", ",") : ""}
+      placeholder="0"
+      onChange={(e) => {
+        const n = parseFloat(e.target.value.replace(",", "."));
+        onChange(Number.isFinite(n) ? n : 0);
+      }}
+      className="w-28 rounded-lg border border-border bg-surface px-2 py-1 text-right text-sm tabular-nums outline-none focus:border-accent"
+    />
+  );
+}
+
+function TokenUsageSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["usage"],
+    queryFn: api.getTokenUsage,
+  });
+  // Local draft of the price fields, seeded once from the server values.
+  const [price, setPrice] = useState<TokenPricing | null>(null);
+  useEffect(() => {
+    if (data?.pricing) setPrice((p) => p ?? data.pricing);
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: (p: TokenPricing) => api.setTokenPricing(p),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["usage"] }),
+  });
+
+  if (!data || !price) {
+    return (
+      <Section title="Token usage & cost">
+        <Row label="Usage">
+          <span className="text-[12.5px] text-faint">loading…</span>
+        </Row>
+      </Section>
+    );
+  }
+
+  const cur = price.currency || data.currency || "€";
+  const fmtTok = (n: number) => n.toLocaleString("fr-FR");
+  const money = (n: number) => `${n.toFixed(n > 0 && n < 1 ? 4 : 2)} ${cur}`;
+  const chatCost = (p: TokenPeriodUsage) =>
+    (p.chat_in / 1e6) * price.chat_in_per_1m +
+    (p.chat_out / 1e6) * price.chat_out_per_1m;
+  const ingestCost = (p: TokenPeriodUsage) =>
+    ((p.embedding + p.indexing) / 1e6) * price.ingest_per_1m;
+
+  const periods: { key: keyof TokenUsageResponse["periods"]; label: string }[] = [
+    { key: "today", label: "Today" },
+    { key: "this_week", label: "This week" },
+    { key: "this_month", label: "This month" },
+  ];
+  const dirty = JSON.stringify(price) !== JSON.stringify(data.pricing);
+
+  return (
+    <Section title="Token usage & cost">
+      <div className="overflow-x-auto px-4 py-3">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wide text-faint">
+              <th className="pb-2 text-left font-medium">Period</th>
+              <th className="pb-2 text-right font-medium">Chat IN</th>
+              <th className="pb-2 text-right font-medium">Chat OUT</th>
+              <th className="pb-2 text-right font-medium">Embeddings</th>
+              <th className="pb-2 text-right font-medium">Indexing</th>
+              <th className="pb-2 text-right font-medium">Cost</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {periods.map(({ key, label }) => {
+              const p = data.periods[key];
+              return (
+                <tr key={key}>
+                  <td className="py-1.5">{label}</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtTok(p.chat_in)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtTok(p.chat_out)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtTok(p.embedding)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtTok(p.indexing)}</td>
+                  <td className="py-1.5 text-right font-medium tabular-nums">
+                    {money(chatCost(p) + ingestCost(p))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <Row label="Chat IN price" hint={`Per 1M tokens (${cur})`}>
+        <PriceField
+          value={price.chat_in_per_1m}
+          onChange={(n) => setPrice({ ...price, chat_in_per_1m: n })}
+        />
+      </Row>
+      <Row label="Chat OUT price" hint={`Per 1M tokens (${cur})`}>
+        <PriceField
+          value={price.chat_out_per_1m}
+          onChange={(n) => setPrice({ ...price, chat_out_per_1m: n })}
+        />
+      </Row>
+      <Row
+        label="Embeddings & indexing price"
+        hint={`Per 1M tokens (${cur}) — applied to both`}
+      >
+        <PriceField
+          value={price.ingest_per_1m}
+          onChange={(n) => setPrice({ ...price, ingest_per_1m: n })}
+        />
+      </Row>
+      <div className="flex items-center justify-end gap-3 px-4 py-3">
+        {save.error && (
+          <span className="text-[12.5px] text-danger">
+            {(save.error as Error).message}
+          </span>
+        )}
+        <Button
+          onClick={() => save.mutate(price)}
+          disabled={!dirty || save.isPending}
+        >
+          {save.isPending ? "Saving…" : "Save prices"}
+        </Button>
+      </div>
+    </Section>
   );
 }
 

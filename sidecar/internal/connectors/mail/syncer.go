@@ -1641,7 +1641,13 @@ func (c *MailConnector) captureAndPublishDigest(ctx context.Context, runCycle fu
 			c.logger.Warn().Err(err).Str("content_id", contentID).Msg("digest: item lookup failed")
 			continue
 		}
-		oneLiner, _ := summarizer.SummarizeMailOneLiner(summarizeCtx, item)
+		// The LLM judges relevance (and writes the line) in one call; drop
+		// candidates it deems not notification-worthy — this is what keeps the
+		// digest relevant beyond the cheap keyword pre-filter.
+		oneLiner, notify := summarizer.SummarizeForNotification(summarizeCtx, item)
+		if !notify {
+			continue
+		}
 		if oneLiner == "" {
 			oneLiner = "📧 " + item.Title
 		}
