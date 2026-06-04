@@ -116,6 +116,11 @@ func setDefaults(v *viper.Viper) {
 
 	// LM Studio defaults
 	v.SetDefault("lm_studio.url", DefaultLMStudioURL)
+	// Empty default so viper's AutomaticEnv binds HYGUR_LMSTUDIO_API_KEY (it only
+	// env-binds keys it already knows). The key is a secret: when set via env it
+	// is the operator path (server/cloud); otherwise it comes from the credential
+	// store at startup. It is never persisted to config.yaml.
+	v.SetDefault("lm_studio.api_key", "")
 	v.SetDefault("lm_studio.embedding_url", "")
 	v.SetDefault("lm_studio.model_default", "")
 	v.SetDefault("lm_studio.embedding_max_tokens", DefaultEmbeddingMaxTokens)

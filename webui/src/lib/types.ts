@@ -216,6 +216,10 @@ export interface SidecarConfig {
     embedding_batch_size: number;
     timeout_seconds: number;
     max_retries: number;
+    /** GET only: whether a provider API key is stored. The value is never returned. */
+    api_key_set: boolean;
+    /** PATCH only: set the provider API key ("" clears it). Stored encrypted, never in config.yaml. */
+    api_key?: string;
   };
   logging: { level: string };
   daily_brief: {

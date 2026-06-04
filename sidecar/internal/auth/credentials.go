@@ -31,6 +31,17 @@ const (
 
 	// CredentialDirPerms are the permissions for the credentials directory.
 	CredentialDirPerms = 0700
+
+	// LLMCredentialID is the reserved connector-credential id under which the
+	// LLM provider API key (the Authorization bearer token for hosted runtimes
+	// like Mistral/OpenAI) is stored. It reuses the connector-credential
+	// mechanism (encrypted at rest as connector_llm.enc) rather than living in
+	// config.yaml, mirroring the rule that secrets never touch the config file.
+	LLMCredentialID = "llm"
+
+	// LLMCredentialField is the field name holding the API key inside the LLM
+	// connector credential.
+	LLMCredentialField = "api_key"
 )
 
 // Credential errors.

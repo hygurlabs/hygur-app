@@ -145,6 +145,9 @@ export function Settings() {
   });
 
   const [draft, setDraft] = useState<SidecarConfig | null>(null);
+  // The API key is never returned by GET (only api_key_set), so it has its own
+  // write-only draft: empty = leave the stored key untouched.
+  const [apiKey, setApiKey] = useState("");
   useEffect(() => {
     if (data) setDraft(data);
   }, [data]);
@@ -161,6 +164,8 @@ export function Settings() {
           embedding_model: cfg.lm_studio.embedding_model,
           embedding_max_tokens: cfg.lm_studio.embedding_max_tokens,
           embedding_batch_size: cfg.lm_studio.embedding_batch_size,
+          // Only send the key when the user typed one; empty leaves it untouched.
+          ...(apiKey.trim() !== "" ? { api_key: apiKey.trim() } : {}),
         },
         logging: { level: cfg.logging.level },
         daily_brief: {
@@ -175,7 +180,10 @@ export function Settings() {
         },
         mail: { reconcile_deletions: cfg.mail.reconcile_deletions },
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["config"] }),
+    onSuccess: () => {
+      setApiKey("");
+      qc.invalidateQueries({ queryKey: ["config"] });
+    },
   });
 
   if (isLoading || !draft) {
@@ -200,7 +208,7 @@ export function Settings() {
     patch: Partial<SidecarConfig[K]>,
   ) => setDraft((d) => (d ? { ...d, [section]: { ...d[section], ...patch } } : d));
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(data);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(data) || apiKey.trim() !== "";
 
   return (
     <Page>
@@ -225,6 +233,24 @@ export function Settings() {
           <TextInput
             value={draft.lm_studio.url}
             onChange={(e) => set("lm_studio", { url: e.target.value })}
+            className="w-64"
+          />
+        </Row>
+        <Row
+          label="API key"
+          hint={
+            draft.lm_studio.api_key_set
+              ? "A key is saved. Type a new one to replace it, or leave empty to keep it."
+              : "Only for hosted providers (Mistral, OpenAI…). Local runtimes need none."
+          }
+        >
+          <TextInput
+            type="password"
+            value={apiKey}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={draft.lm_studio.api_key_set ? "•••••••• (saved)" : "sk-…"}
+            onChange={(e) => setApiKey(e.target.value)}
             className="w-64"
           />
         </Row>

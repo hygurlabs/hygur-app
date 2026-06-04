@@ -288,6 +288,7 @@ export function StepModel({ ctx }: { ctx: StepContext }) {
   const [chatModel, setChatModel] = useState("");
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [embeddingUrl, setEmbeddingUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<ModelStatus>({ kind: "idle" });
 
   useEffect(() => {
@@ -321,6 +322,8 @@ export function StepModel({ ctx }: { ctx: StepContext }) {
           model_default: chatModel.trim(),
           embedding_model: embeddingModel.trim(),
           embedding_url: embeddingUrl.trim(),
+          // Sent only when provided; hosted providers (Mistral…) need it, local ones don't.
+          ...(apiKey.trim() !== "" ? { api_key: apiKey.trim() } : {}),
         },
       });
     } catch (e) {
@@ -375,6 +378,20 @@ export function StepModel({ ctx }: { ctx: StepContext }) {
             autoCapitalize="off"
             onChange={(e) => setChatModel(e.target.value)}
             placeholder="e.g. llama-3.1-8b-instruct"
+          />
+        </Field>
+        <Field
+          label="API key"
+          hint="Optional — only for hosted providers like Mistral or OpenAI. Local runtimes need none."
+        >
+          <TextInput
+            type="password"
+            value={apiKey}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="sk-… (leave empty for local models)"
           />
         </Field>
         <Field

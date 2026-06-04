@@ -36,6 +36,19 @@ type Client struct {
 	embeddingModel     string
 	embeddingMaxTokens int
 	embeddingBatchSize int
+	// apiKey, when non-empty, is sent as `Authorization: Bearer <apiKey>` on
+	// every request. Hosted providers (Mistral, OpenAI…) require it; local
+	// runtimes (LM Studio, Ollama, vLLM) ignore it.
+	apiKey string
+}
+
+// setAuthHeader adds the bearer Authorization header when an API key is
+// configured. Local runtimes need no key, so the header is omitted when apiKey
+// is empty — leaving the loopback/LAN setups byte-for-byte unchanged.
+func (c *Client) setAuthHeader(req *http.Request) {
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 }
 
 // EmbeddingBatchSize returns the number of texts to send per embedding request,
@@ -332,6 +345,7 @@ func NewClient(cfg *config.LMStudioConfig) *Client {
 		embeddingModel:     cfg.EmbeddingModel,
 		embeddingMaxTokens: maxTokens,
 		embeddingBatchSize: cfg.EmbeddingBatchSize,
+		apiKey:             cfg.APIKey,
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
@@ -405,6 +419,7 @@ func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
+		c.setAuthHeader(httpReq)
 		return httpReq, nil
 	}
 
@@ -481,6 +496,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	c.setAuthHeader(httpReq)
 
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -497,6 +513,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 				return nil, fmt.Errorf("failed to create request: %w", err)
 			}
 			httpReq.Header.Set("Content-Type", "application/json")
+			c.setAuthHeader(httpReq)
 		}
 
 		resp, err := c.httpClient.Do(httpReq)
@@ -550,6 +567,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
+		c.setAuthHeader(httpReq)
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -589,23 +607,28 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 // Ping checks if the inference endpoint is available by making a quick
 // request to /v1/models. Returns true if the server responds with 200.
 func (c *Client) Ping(ctx context.Context) (bool, error) {
-	return pingURL(ctx, c.httpClient, c.baseURL)
+	return pingURL(ctx, c.httpClient, c.baseURL, c.apiKey)
 }
 
 // PingEmbedding checks if the embedding endpoint is reachable. It returns the
 // same value as Ping when no dedicated embedding endpoint is configured.
 func (c *Client) PingEmbedding(ctx context.Context) (bool, error) {
-	return pingURL(ctx, c.httpClient, c.embeddingURL())
+	return pingURL(ctx, c.httpClient, c.embeddingURL(), c.apiKey)
 }
 
-// pingURL probes an OpenAI-compatible endpoint via /v1/models.
-func pingURL(ctx context.Context, httpClient *http.Client, baseURL string) (bool, error) {
+// pingURL probes an OpenAI-compatible endpoint via /v1/models. apiKey is sent
+// as a bearer token when non-empty, so probes against hosted providers
+// (Mistral, OpenAI…) aren't rejected with 401.
+func pingURL(ctx context.Context, httpClient *http.Client, baseURL, apiKey string) (bool, error) {
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(pingCtx, http.MethodGet, baseURL+"/v1/models", nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create request: %w", err)
+	}
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := httpClient.Do(httpReq)
