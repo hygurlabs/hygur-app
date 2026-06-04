@@ -107,8 +107,15 @@ function CopyButton({ text, title = "Copy" }: { text: string; title?: string }) 
 function buildChatMarkdown(turns: Turn[]): string {
   const out: string[] = ["# Conversation Hygur", ""];
   for (const t of turns) {
-    if (!t.content) continue;
-    out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "", t.content, "");
+    const images = (t.attachments ?? []).filter(
+      (a): a is Extract<AttachmentRef, { type: "image" }> => a.type === "image",
+    );
+    if (!t.content && images.length === 0) continue;
+    out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "");
+    for (const a of images) {
+      out.push(`_[Image jointe : ${a.title || "image"}]_`, "");
+    }
+    if (t.content) out.push(t.content, "");
     if (t.role === "assistant" && t.sources?.length) {
       out.push("**Sources:**");
       for (const s of t.sources) {
@@ -458,14 +465,37 @@ export function Ask() {
                   t.role === "user" ? (
                     <div
                       key={t.id}
-                      className="group flex max-w-[86%] flex-col items-end gap-1 self-end print:max-w-none"
+                      className="group flex max-w-[86%] flex-col items-end gap-1.5 self-end print:max-w-none"
                     >
-                      <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
-                        {t.content}
-                      </div>
-                      <div className="print:hidden">
-                        <CopyButton text={t.content} title="Copy message" />
-                      </div>
+                      {/* Sent images render with the message (and in the print/PDF
+                          transcript) so you can see what the turn is about. */}
+                      {t.attachments?.some((a) => a.type === "image") && (
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {t.attachments
+                            .filter(
+                              (a): a is Extract<AttachmentRef, { type: "image" }> =>
+                                a.type === "image",
+                            )
+                            .map((a, i) => (
+                              <img
+                                key={i}
+                                src={`data:${a.mime_type};base64,${a.data}`}
+                                alt={a.title || "image"}
+                                className="max-h-52 max-w-full rounded-xl border border-border object-contain print:max-h-none"
+                              />
+                            ))}
+                        </div>
+                      )}
+                      {t.content && (
+                        <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
+                          {t.content}
+                        </div>
+                      )}
+                      {t.content && (
+                        <div className="print:hidden">
+                          <CopyButton text={t.content} title="Copy message" />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <AssistantTurn key={t.id} turn={t} openDetail={openDetail} />
