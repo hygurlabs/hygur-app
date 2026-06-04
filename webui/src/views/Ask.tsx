@@ -43,6 +43,9 @@ interface Turn {
   sources?: RagSource[];
   activity?: string;
   error?: string;
+  // Attachments carried on a user turn so they persist across the conversation
+  // (F1): follow-up questions about an attached image keep its context.
+  attachments?: AttachmentRef[];
 }
 
 interface ProjectFocus {
@@ -194,7 +197,7 @@ export function Ask() {
     lastAttach.current = attach;
     const title = params.get("attachTitle") ?? undefined;
     setAttachments((prev) =>
-      prev.some((a) => a.content_id === attach)
+      prev.some((a) => a.type === "document" && a.content_id === attach)
         ? prev
         : [...prev, { type: "document", content_id: attach, title }],
     );
@@ -259,7 +262,12 @@ export function Ask() {
     setPanelMode("context");
     setPanelOpen(true);
 
-    const userTurn: Turn = { id: nextId(), role: "user", content: q };
+    const userTurn: Turn = {
+      id: nextId(),
+      role: "user",
+      content: q,
+      ...(msgAttachments.length ? { attachments: msgAttachments } : {}),
+    };
     const assistantTurn: Turn = {
       id: nextId(),
       role: "assistant",
@@ -269,7 +277,18 @@ export function Ask() {
     setTurns((prev) => [...prev, userTurn, assistantTurn]);
 
     const history: ChatMessage[] = [
-      ...turns.map((t) => ({ role: t.role, content: t.content })),
+      ...turns.map((t) => {
+        // Carry document + image attachments across turns (F1) so follow-ups
+        // keep their context. Audio is excluded: it's transcribed once and the
+        // transcript lives in the reply, so re-sending the bytes each turn is
+        // wasteful.
+        const carried = t.attachments?.filter((a) => a.type !== "audio");
+        return {
+          role: t.role,
+          content: t.content,
+          ...(carried && carried.length ? { attachments: carried } : {}),
+        };
+      }),
       {
         role: "user" as const,
         content: q,
@@ -595,7 +614,7 @@ function Composer({
       );
     } else {
       setAttachments((prev) =>
-        prev.some((a) => a.content_id === m.id)
+        prev.some((a) => a.type === "document" && a.content_id === m.id)
           ? prev
           : [...prev, { type: "document", content_id: m.id, title: m.title }],
       );
@@ -609,11 +628,30 @@ function Composer({
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
-        const res = await api.uploadFile(file);
-        setAttachments((prev) => [
-          ...prev,
-          { type: "document", content_id: res.content_id, title: res.title || file.name },
-        ]);
+        const mime = file.type || "";
+        const ext = (file.name.split(".").pop() || "").toLowerCase();
+        if (mime.startsWith("image/")) {
+          // Live image → multimodal model sees it directly (F3).
+          const data = await fileToBase64(file);
+          setAttachments((prev) => [
+            ...prev,
+            { type: "image", data, mime_type: mime, title: file.name },
+          ]);
+        } else if (mime.startsWith("audio/") || ["m4a", "mp3", "wav", "ogg"].includes(ext)) {
+          // Live audio → model transcribes it directly (F3); no ingest round-trip.
+          const data = await fileToBase64(file);
+          setAttachments((prev) => [
+            ...prev,
+            { type: "audio", data, format: ext || "m4a", title: file.name },
+          ]);
+        } else {
+          // Documents (PDF/DOCX/text) → index in the KB, attach by reference.
+          const res = await api.uploadFile(file);
+          setAttachments((prev) => [
+            ...prev,
+            { type: "document", content_id: res.content_id, title: res.title || file.name },
+          ]);
+        }
       }
     } catch (e) {
       setUploadError((e as Error).message);
@@ -621,6 +659,20 @@ function Composer({
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+
+  // Reads a file as raw (un-prefixed) base64 for inline image/audio attachments.
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result as string;
+        const comma = res.indexOf(",");
+        resolve(comma >= 0 ? res.slice(comma + 1) : res);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
   }
 
   async function toggleMic() {
@@ -689,15 +741,13 @@ function Composer({
                 }
               />
             ))}
-            {attachments.map((a) => (
+            {attachments.map((a, i) => (
               <Chip
-                key={`a-${a.content_id}`}
+                key={`a-${i}-${a.title ?? (a.type === "document" ? a.content_id : a.type)}`}
                 icon={<Paperclip size={12} strokeWidth={2} />}
-                label={a.title ?? a.content_id}
+                label={a.title ?? (a.type === "document" ? a.content_id : a.type)}
                 onRemove={() =>
-                  setAttachments((prev) =>
-                    prev.filter((x) => x.content_id !== a.content_id),
-                  )
+                  setAttachments((prev) => prev.filter((_, j) => j !== i))
                 }
               />
             ))}

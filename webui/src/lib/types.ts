@@ -4,13 +4,15 @@
 
 export type Role = "user" | "assistant" | "system";
 
-/** A document reference attached to a chat message (📎 upload or @-mention of a
- *  note/mail/doc). Resolved to inline text by the sidecar before the LLM sees it. */
-export interface AttachmentRef {
-  type: "document";
-  content_id: string;
-  title?: string;
-}
+/** An attachment on a chat message. Mirrors the sidecar's llm.Attachment.
+ *  - "document": a KB reference (📎 upload of a doc / @-mention). The sidecar
+ *    resolves it to inline text before the LLM sees it.
+ *  - "image" / "audio": live media sent to the multimodal model directly
+ *    (base64), so Gemma can see/hear it (e.g. transcribe an audio, read a photo). */
+export type AttachmentRef =
+  | { type: "document"; content_id: string; title?: string }
+  | { type: "image"; data: string; mime_type: string; title?: string }
+  | { type: "audio"; data: string; format: string; title?: string };
 
 export interface ChatMessage {
   role: Role;

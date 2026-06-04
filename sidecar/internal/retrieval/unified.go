@@ -901,7 +901,11 @@ func (us *UnifiedSearcher) FetchByContentIDs(ctx context.Context, ids []string) 
 			MailDate:    item.MailDate,
 			MailSubject: item.MailSubject,
 		}
-		const maxDocLength = 2000
+		// Generous cap: these records hydrate attachment/source context fed to the
+		// LLM, so we want (nearly) the full document — an audio transcript or an
+		// OCR'd image must not lose its address/details to a short excerpt.
+		// Bounded to avoid blowing the context on huge PDFs.
+		const maxDocLength = 16000
 		if len(item.NormalizedText) > maxDocLength {
 			r.Excerpt = item.NormalizedText[:maxDocLength] + "..."
 		} else {
