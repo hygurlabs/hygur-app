@@ -258,6 +258,7 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 			return nil, fmt.Errorf("failed to create embedding request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		c.setAuthHeader(httpReq)
 
 		resp, err := embHTTP.Do(httpReq)
 		if err != nil {

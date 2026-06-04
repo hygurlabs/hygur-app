@@ -161,6 +161,15 @@ type LMStudioConfig struct {
 	// URL is the inference endpoint (chat completions and model listing).
 	URL string `mapstructure:"url"`
 
+	// APIKey is the bearer token sent as `Authorization: Bearer <key>` on every
+	// OpenAI-compatible request (chat, models, embeddings). Hosted providers
+	// (Mistral, OpenAI, Together…) require it; local runtimes (LM Studio, Ollama,
+	// vLLM, llama.cpp) leave it empty. It is a SECRET: populated at startup from
+	// the HYGUR_LMSTUDIO_API_KEY env var or the encrypted credential store, and
+	// NEVER written to config.yaml (yaml:"-") — secrets live in the
+	// CredentialStore, mirroring the connector-credential rule above.
+	APIKey string `mapstructure:"api_key" yaml:"-"`
+
 	// EmbeddingURL is the embeddings endpoint. Optional — falls back to URL.
 	EmbeddingURL string `mapstructure:"embedding_url"`
 

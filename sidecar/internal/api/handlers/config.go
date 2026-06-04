@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
@@ -23,6 +25,7 @@ type ConfigHandler struct {
 	configPath string
 	mu         sync.RWMutex
 	onChange   func(*config.Config)
+	credStore  *auth.CredentialStore
 	logger     zerolog.Logger
 }
 
@@ -33,6 +36,27 @@ func NewConfigHandler(cfg *config.Config, configPath string, logger zerolog.Logg
 // SetOnChange registers a callback fired after a successful PATCH so runtime
 // components (e.g. the mail connector) can pick up changes without a restart.
 func (h *ConfigHandler) SetOnChange(fn func(*config.Config)) { h.onChange = fn }
+
+// SetCredentialStore wires the encrypted credential store so secret fields
+// (the LLM API key) are persisted there — never in config.yaml.
+func (h *ConfigHandler) SetCredentialStore(cs *auth.CredentialStore) { h.credStore = cs }
+
+// llmKeySet reports whether an LLM API key is configured, without exposing its
+// value. True when resolved at startup (env or store) or freshly saved to the
+// credential store via PATCH (before the restart reloads cfg).
+func (h *ConfigHandler) llmKeySet() bool {
+	if strings.TrimSpace(h.cfg.LMStudio.APIKey) != "" {
+		return true
+	}
+	if h.credStore == nil {
+		return false
+	}
+	fields, err := h.credStore.GetConnectorCredential(auth.LLMCredentialID)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(fields[auth.LLMCredentialField]) != ""
+}
 
 // MARK: - Response / request shapes
 
@@ -59,6 +83,9 @@ type LMStudioCfgResp struct {
 	EmbeddingBatchSize int    `json:"embedding_batch_size"`
 	TimeoutSeconds     int    `json:"timeout_seconds"`
 	MaxRetries         int    `json:"max_retries"`
+	// APIKeySet reports whether a provider API key is stored. The value itself
+	// is never returned — only whether the field is populated.
+	APIKeySet bool `json:"api_key_set"`
 }
 
 type LoggingCfgResp struct {
@@ -95,6 +122,9 @@ type PatchMail struct {
 
 type PatchLMStudio struct {
 	URL                *string `json:"url,omitempty"`
+	// APIKey, when present, is written to the encrypted credential store (empty
+	// string clears it). It is never persisted to config.yaml.
+	APIKey             *string `json:"api_key,omitempty"`
 	EmbeddingURL       *string `json:"embedding_url,omitempty"`
 	IndexingURL        *string `json:"indexing_url,omitempty"`
 	ModelDefault       *string `json:"model_default,omitempty"`
@@ -145,6 +175,7 @@ func (h *ConfigHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 			EmbeddingBatchSize: h.cfg.LMStudio.EmbeddingBatchSize,
 			TimeoutSeconds:     int(h.cfg.LMStudio.Timeout.Seconds()),
 			MaxRetries:         h.cfg.LMStudio.MaxRetries,
+			APIKeySet:          h.llmKeySet(),
 		},
 		Logging: LoggingCfgResp{
 			Level: h.cfg.Logging.Level,
@@ -185,6 +216,32 @@ func (h *ConfigHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Apply patches to in-memory config.
 	if lm := body.LMStudio; lm != nil {
+		// The API key is a secret: route it to the encrypted credential store,
+		// never to config.yaml. Handle it first so a storage failure short-circuits
+		// before any other field is mutated. The restart at the end reloads it.
+		if lm.APIKey != nil {
+			if h.credStore == nil {
+				h.logger.Error().Msg("cannot save LLM API key: credential storage unavailable")
+				http.Error(w, `{"error":"credential storage unavailable"}`, http.StatusServiceUnavailable)
+				return
+			}
+			key := strings.TrimSpace(*lm.APIKey)
+			if key == "" {
+				if err := h.credStore.DeleteConnectorCredential(auth.LLMCredentialID); err != nil {
+					h.logger.Error().Err(err).Msg("failed to clear LLM API key")
+					http.Error(w, `{"error":"failed to clear API key"}`, http.StatusInternalServerError)
+					return
+				}
+				h.cfg.LMStudio.APIKey = ""
+			} else {
+				if err := h.credStore.SaveConnectorCredential(auth.LLMCredentialID, map[string]string{auth.LLMCredentialField: key}); err != nil {
+					h.logger.Error().Err(err).Msg("failed to save LLM API key")
+					http.Error(w, `{"error":"failed to save API key"}`, http.StatusInternalServerError)
+					return
+				}
+				h.cfg.LMStudio.APIKey = key
+			}
+		}
 		if lm.URL != nil {
 			h.cfg.LMStudio.URL = *lm.URL
 		}

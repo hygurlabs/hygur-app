@@ -167,6 +167,28 @@ func main() {
 		Str("token_file", tokenPath).
 		Msg("authentication token initialized")
 
+	// Initialize the credential store (encrypted at rest). With HYGUR_CRED_KEY
+	// unset it falls back to a machine-local key, so it is always available —
+	// connector secrets and the LLM API key both live here, never in config.yaml.
+	credStore, err := auth.NewCredentialStore(dataDir)
+	if err != nil {
+		logger.Warn().Err(err).Msg("credential storage not available")
+	}
+
+	// Resolve the LLM API key before building the client. Hosted providers
+	// (Mistral, OpenAI…) need a bearer token; local runtimes don't. Precedence:
+	// HYGUR_LMSTUDIO_API_KEY env (operator path — already bound into cfg by
+	// viper) then the credential store (UI-entered, local desktop). config.yaml
+	// is never consulted for it.
+	if cfg.LMStudio.APIKey == "" && credStore != nil {
+		if fields, gErr := credStore.GetConnectorCredential(auth.LLMCredentialID); gErr == nil {
+			cfg.LMStudio.APIKey = fields[auth.LLMCredentialField]
+		}
+	}
+	if cfg.LMStudio.APIKey != "" {
+		logger.Info().Msg("LLM API key configured — bearer auth enabled for the inference endpoint")
+	}
+
 	// Create LLM client
 	llmClient := llm.NewClient(&cfg.LMStudio)
 
@@ -278,11 +300,8 @@ func main() {
 	mailHandler.SetIndexer(emailIndexer)
 	mailHandler.SetSummarizeTool(summarizeTool)
 
-	// Initialize credential store if HYGUR_CRED_KEY is set
-	credStore, err := auth.NewCredentialStore(dataDir)
-	if err != nil {
-		logger.Warn().Err(err).Msg("credential storage not available - set HYGUR_CRED_KEY to enable")
-	} else {
+	// Wire the credential store (created above) into the mail handler.
+	if credStore != nil {
 		mailHandler.SetCredentialStore(credStore)
 		logger.Info().Msg("credential storage initialized")
 	}
@@ -444,6 +463,8 @@ func main() {
 
 	connectorHandler := handlers.NewConnectorHandler(pluginManager, credStore, configPath, logger)
 	configHandler := handlers.NewConfigHandler(cfg, configPath, logger)
+	// Secret config fields (LLM API key) are persisted to the credential store.
+	configHandler.SetCredentialStore(credStore)
 	// Apply runtime-relevant config changes from PATCH /config without a restart.
 	configHandler.SetOnChange(func(c *config.Config) {
 		for _, mc := range mailProviders {
