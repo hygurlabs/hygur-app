@@ -343,6 +343,32 @@ export function Settings() {
 
 // MARK: - Token usage & cost
 
+// A locale-tolerant decimal input. `type="number"` rejects comma decimals
+// (French keyboards) and a controlled numeric value clobbers half-typed states
+// like "0,"; so this is an uncontrolled text field that accepts both "," and
+// "." and reports the parsed number upward. Seeded once at mount.
+function PriceField({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      defaultValue={value ? String(value).replace(".", ",") : ""}
+      placeholder="0"
+      onChange={(e) => {
+        const n = parseFloat(e.target.value.replace(",", "."));
+        onChange(Number.isFinite(n) ? n : 0);
+      }}
+      className="w-28 rounded-lg border border-border bg-surface px-2 py-1 text-right text-sm tabular-nums outline-none focus:border-accent"
+    />
+  );
+}
+
 function TokenUsageSection() {
   const qc = useQueryClient();
   const { data } = useQuery({
@@ -386,17 +412,6 @@ function TokenUsageSection() {
   ];
   const dirty = JSON.stringify(price) !== JSON.stringify(data.pricing);
 
-  const priceInput = (value: number, onChange: (n: number) => void) => (
-    <input
-      type="number"
-      min={0}
-      step="0.01"
-      value={Number.isFinite(value) ? value : 0}
-      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-      className="w-28 rounded-lg border border-border bg-surface px-2 py-1 text-right text-sm tabular-nums outline-none focus:border-accent"
-    />
-  );
-
   return (
     <Section title="Token usage & cost">
       <div className="overflow-x-auto px-4 py-3">
@@ -432,22 +447,25 @@ function TokenUsageSection() {
       </div>
 
       <Row label="Chat IN price" hint={`Per 1M tokens (${cur})`}>
-        {priceInput(price.chat_in_per_1m, (n) =>
-          setPrice({ ...price, chat_in_per_1m: n }),
-        )}
+        <PriceField
+          value={price.chat_in_per_1m}
+          onChange={(n) => setPrice({ ...price, chat_in_per_1m: n })}
+        />
       </Row>
       <Row label="Chat OUT price" hint={`Per 1M tokens (${cur})`}>
-        {priceInput(price.chat_out_per_1m, (n) =>
-          setPrice({ ...price, chat_out_per_1m: n }),
-        )}
+        <PriceField
+          value={price.chat_out_per_1m}
+          onChange={(n) => setPrice({ ...price, chat_out_per_1m: n })}
+        />
       </Row>
       <Row
         label="Embeddings & indexing price"
         hint={`Per 1M tokens (${cur}) — applied to both`}
       >
-        {priceInput(price.ingest_per_1m, (n) =>
-          setPrice({ ...price, ingest_per_1m: n }),
-        )}
+        <PriceField
+          value={price.ingest_per_1m}
+          onChange={(n) => setPrice({ ...price, ingest_per_1m: n })}
+        />
       </Row>
       <div className="flex items-center justify-end gap-3 px-4 py-3">
         {save.error && (
