@@ -9,7 +9,7 @@ func TestCanAnswerFromContext_KnownIBAN(t *testing.T) {
 	ctx := &SessionContext{}
 	ctx.AppendResolvedQuery(ResolvedQuery{
 		Question: "what is the VAT I should send to?",
-		Answer:   "IBAN BE68 5390 0754 7034 for TVA 0x0800 Q1 2026",
+		Answer:   "IBAN BE68 5390 0754 7034 for TVA EXMPL Q1 2026",
 	}, "TVA Q1 2026")
 	ctx.AddEntity(Entity{Type: EntityIBAN, Value: "BE68539007547034", Source: "email:tva-1"})
 
@@ -70,8 +70,8 @@ func TestCanAnswerFromContext_FrenchEntityFollowUp_FiresEvenWithCommonNouns(t *t
 	ctx := &SessionContext{}
 	ctx.AppendResolvedQuery(ResolvedQuery{
 		Question: "Donne moi le montant de la dernière TVA que je dois payer",
-		Answer:   "Le montant est 7421.85 EUR pour la TVA 0x0800 Q1 2026",
-	}, "TVA 0x0800")
+		Answer:   "Le montant est 7421.85 EUR pour la TVA EXMPL Q1 2026",
+	}, "TVA EXMPL")
 	ctx.AddEntity(Entity{Type: EntityStructuredCom, Value: "+++090/9337/55493+++", Source: "email:tva-payment"})
 
 	ans, ok := CanAnswerFromContext("Sur quel compte et quelle communication je dois ajouter pour le virement ?", ctx)

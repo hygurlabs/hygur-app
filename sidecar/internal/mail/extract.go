@@ -23,8 +23,6 @@ var accountingKeywords = []string{
 // accountingDomains is a hardcoded list of senders known to send accounting
 // or HR-related correspondence. Extending this list is a config follow-up.
 var accountingDomains = []string{
-	"example.test",
-	"example.test",
 	"securex.be",
 	"partena.be",
 	"acerta.be",

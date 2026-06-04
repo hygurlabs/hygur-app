@@ -671,7 +671,7 @@ func TestEmailIndexer_EmitsPriorityMail_WhenAccountingAndAmount(t *testing.T) {
 	now := time.Now()
 	thread := &Thread{
 		ID:           "thread-tva-1",
-		Subject:      "Déclaration TVA - 0x0800 - 1er trimestre 2026",
+		Subject:      "Déclaration TVA - EXMPL - 1er trimestre 2026",
 		Participants: []string{"compta@example.test"},
 		DateRange:    [2]time.Time{now, now},
 		MessageCount: 1,
