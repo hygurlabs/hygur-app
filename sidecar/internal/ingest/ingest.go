@@ -419,6 +419,129 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 }
 
 // hashContent returns the SHA-256 hash of the text.
+// IngestTextInput is a pre-extracted text document pushed by a client (the
+// "Add files" path / future edge agent) — the server does NO file parsing.
+type IngestTextInput struct {
+	Title      string
+	Text       string         // already-extracted plain text
+	SourceType string         // "file" | "mail" | "note" | "event" | … (default "text")
+	SourceRef  string         // idempotency key, e.g. "files:/path" or "imap:<id>"
+	URL        string
+	Author     string
+	Metadata   map[string]any // extra fields merged into the item metadata
+	CreatedAt  time.Time      // zero → now
+}
+
+// IngestText indexes a text document supplied directly by a client, reusing the
+// chunk → embed → store pipeline but skipping file parsing (VDSL-friendly: only
+// text crosses the wire). Idempotent by SourceRef: re-pushing the same ref
+// updates the existing item in place (stable content_id); identical text is a
+// no-op ("duplicate"). On embed failure the item is kept (FTS-searchable) rather
+// than rolled back — a failed embed must never delete content (RELIABILITY R2).
+func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestResult, error) {
+	text := strings.TrimSpace(in.Text)
+	if text == "" {
+		return nil, ErrEmptyContent
+	}
+	if i.store == nil {
+		return nil, fmt.Errorf("store not configured")
+	}
+
+	contentHash := hashContent(text)
+	now := time.Now()
+	created := now
+	if !in.CreatedAt.IsZero() {
+		created = in.CreatedAt
+	}
+
+	contentID := uuid.New().String()
+	status := "indexed"
+
+	switch {
+	case in.SourceRef != "":
+		existing, err := i.store.GetKnowledgeItemBySourceRef(ctx, in.SourceRef)
+		if err == nil && existing != nil {
+			if h, _ := existing.Metadata["content_hash"].(string); h == contentHash {
+				return &IngestResult{ContentID: existing.ContentID, Status: "duplicate", ChunkCount: 0}, nil
+			}
+			// Content changed for this source_ref → replace in place, keeping the
+			// content_id so existing references stay stable.
+			contentID = existing.ContentID
+			status = "updated"
+			if delErr := i.store.DeleteKnowledgeItem(ctx, existing.ContentID); delErr != nil {
+				return nil, fmt.Errorf("replacing item for source_ref %q: %w", in.SourceRef, delErr)
+			}
+		}
+	default:
+		if existing, err := i.store.GetKnowledgeItemByHash(ctx, contentHash); err == nil && existing != nil {
+			return &IngestResult{ContentID: existing.ContentID, Status: "duplicate", ChunkCount: 0}, nil
+		}
+	}
+
+	sourceType := strings.TrimSpace(in.SourceType)
+	if sourceType == "" {
+		sourceType = "text"
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = text
+		if nl := strings.IndexByte(title, '\n'); nl >= 0 {
+			title = title[:nl]
+		}
+		if r := []rune(strings.TrimSpace(title)); len(r) > 80 {
+			title = string(r[:80])
+		}
+		if strings.TrimSpace(title) == "" {
+			title = "Untitled"
+		}
+	}
+
+	metadata := map[string]any{
+		"content_hash":   contentHash,
+		"canonical_date": created.UTC().Format(time.RFC3339),
+	}
+	if in.SourceRef != "" {
+		metadata["source_ref"] = in.SourceRef
+	}
+	if in.URL != "" {
+		metadata["url"] = in.URL
+	}
+	if in.Author != "" {
+		metadata["author"] = in.Author
+	}
+	for k, v := range in.Metadata {
+		if k != "content_hash" && k != "source_ref" {
+			metadata[k] = v
+		}
+	}
+
+	// Tier 1 entity extraction (regex) for entity_search parity with file/mail ingest.
+	extract.EnrichMetadataWithTier1(metadata, text)
+
+	item := &store.KnowledgeItem{
+		ContentID:      contentID,
+		SourceType:     sourceType,
+		Title:          title,
+		NormalizedText: text,
+		Metadata:       metadata,
+		VersionID:      contentHash[:16],
+		CreatedAt:      created,
+		UpdatedAt:      now,
+	}
+	if err := i.store.InsertKnowledgeItem(ctx, item); err != nil {
+		return nil, fmt.Errorf("failed to insert knowledge item: %w", err)
+	}
+
+	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, text, DefaultChunkTokenBudget, now)
+	if idxErr != nil {
+		// Keep the item (chunks are FTS-indexed); do NOT roll back on embed
+		// failure — that would delete content. A re-push or re-embed fills vectors.
+		slog.WarnContext(ctx, "ingest_text.embed_failed", "content_id", contentID, "source_ref", in.SourceRef, "err", idxErr)
+	}
+
+	return &IngestResult{ContentID: contentID, Status: status, ChunkCount: chunkCount}, nil
+}
+
 func hashContent(text string) string {
 	h := sha256.New()
 	h.Write([]byte(text))

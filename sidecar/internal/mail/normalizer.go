@@ -130,6 +130,10 @@ func (tn *ThreadNormalizer) NormalizeMessage(msg *Message) string {
 		body = removeQuotedReplies(body)
 	}
 
+	// Strip residual marketing-mail noise (zero-width chars, leaked CSS) that
+	// survives HTML stripping, before whitespace normalisation and chunking.
+	body = denoiseMailBody(body)
+
 	// Normalize whitespace
 	body = normalizeWhitespace(body)
 
@@ -226,6 +230,37 @@ func decodeHTMLEntities(s string) string {
 		"&apos;", "'",
 	)
 	return replacer.Replace(s)
+}
+
+// Residual-noise patterns: zero-width/formatting characters and leaked CSS rule
+// blocks that survive HTML stripping (inline <style> text, malformed HTML).
+var (
+	// ZWSP, ZWNJ, ZWJ, word-joiner, BOM/ZWNBSP, soft hyphen — pure noise that
+	// pollutes chunks and embeddings (and inflates chunk counts).
+	reZeroWidth = regexp.MustCompile(`[\x{200B}\x{200C}\x{200D}\x{2060}\x{FEFF}\x{00AD}]`)
+	// A `{ prop: value; … }` declaration block, optionally preceded by a single
+	// selector token. Requires both ':' and ';' so prose with braces (e.g.
+	// "{voir annexe}") is never matched; only one preceding word is consumed so
+	// surrounding sentences are preserved.
+	reCSSBlock = regexp.MustCompile(`(?s)(?:[.#]?[\w-]+\s+)?\{[^{}]*:[^{}]*;[^{}]*\}`)
+	// Runs of intra-line spaces/tabs left behind after removals.
+	reInlineSpaces = regexp.MustCompile(`[ \t]{2,}`)
+)
+
+// denoiseMailBody removes residual marketing-mail noise before chunking and
+// embedding: zero-width/formatting characters and leaked CSS rule blocks. It
+// preserves newlines so the paragraph sectioner still works; whitespace
+// collapse across lines is left to normalizeWhitespace.
+func denoiseMailBody(s string) string {
+	if s == "" {
+		return s
+	}
+	s = reZeroWidth.ReplaceAllString(s, "")
+	// Two passes catch simple nesting / adjacent blocks.
+	for i := 0; i < 2; i++ {
+		s = reCSSBlock.ReplaceAllString(s, " ")
+	}
+	return reInlineSpaces.ReplaceAllString(s, " ")
 }
 
 // Regex patterns for signature detection.

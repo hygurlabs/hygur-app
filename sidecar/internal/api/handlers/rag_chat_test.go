@@ -490,14 +490,15 @@ func TestRAGChatHandler_ImageAttachment_EmitsMultimodalArray(t *testing.T) {
 		t.Fatalf("expected 2 content parts (text + image), got %d: %v", len(parts), parts)
 	}
 
-	text := parts[0].(map[string]any)
-	if text["type"] != "text" || text["text"] != "What is in this image?" {
-		t.Errorf("part[0] not text/'What is in this image?': %v", text)
+	// Image comes BEFORE the text prompt (multimodal ordering for Gemma et al.).
+	img := parts[0].(map[string]any)
+	if img["type"] != "image_url" {
+		t.Errorf("part[0] type = %v, want image_url (image before text)", img["type"])
 	}
 
-	img := parts[1].(map[string]any)
-	if img["type"] != "image_url" {
-		t.Errorf("part[1] type = %v, want image_url", img["type"])
+	text := parts[1].(map[string]any)
+	if text["type"] != "text" || text["text"] != "What is in this image?" {
+		t.Errorf("part[1] not text/'What is in this image?': %v", text)
 	}
 	imgURL, _ := img["image_url"].(map[string]any)
 	url, _ := imgURL["url"].(string)
