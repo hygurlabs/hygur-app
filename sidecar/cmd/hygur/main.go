@@ -269,17 +269,16 @@ func main() {
 	// vision model (same endpoint/model the scanned-PDF OCR uses). Without this
 	// registration, image uploads fail with "no parser available for file type".
 	ingestor.RegisterParser(parsers.NewImageParserWithModel(visionURL, visionModel))
-	// Audio transcription (.mp3/.m4a/.wav/.ogg) via a Whisper-compatible endpoint
-	// (/v1/audio/transcriptions). NOTE: chat/vision models (Gemma) do NOT
-	// transcribe audio — point HYGUR_AUDIO_ENDPOINT at a Whisper server
-	// (whisper.cpp / faster-whisper / vLLM-whisper); it defaults to the inference
-	// URL. Without a real Whisper endpoint the audio indexes without a transcript
-	// (fail-soft) rather than failing the upload with a 500.
+	// Audio transcription (.mp3/.m4a/.wav/.ogg). Primary path: native ASR via the
+	// multimodal chat model (gemma-4-12B-it does ASR) using Google's ASR prompt;
+	// falls back to a Whisper /v1/audio/transcriptions endpoint if that fails.
+	// HYGUR_AUDIO_ENDPOINT overrides the endpoint (defaults to the inference URL);
+	// HYGUR_ASR_LANGUAGE sets the transcription language (default "French").
 	audioURL := os.Getenv("HYGUR_AUDIO_ENDPOINT")
 	if audioURL == "" {
 		audioURL = cfg.LMStudio.URL
 	}
-	ingestor.RegisterParser(parsers.NewAudioParser(audioURL))
+	ingestor.RegisterParser(parsers.NewAudioParserWithModel(audioURL, cfg.LMStudio.ModelDefault))
 
 	// Create the semantic (vector-only) searcher used by the legacy /knowledge/search endpoint.
 	searcher := retrieval.NewHybridSearcher(db, llmClient)
