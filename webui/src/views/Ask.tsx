@@ -637,12 +637,31 @@ function Composer({
             ...prev,
             { type: "image", data, mime_type: mime, title: file.name },
           ]);
-        } else if (mime.startsWith("audio/") || ["m4a", "mp3", "wav", "ogg"].includes(ext)) {
+        } else if (
+          mime.startsWith("audio/") ||
+          ["m4a", "mp3", "wav", "ogg", "mp4", "aac", "m4b", "flac", "opus"].includes(ext)
+        ) {
           // Live audio → model transcribes it directly (F3); no ingest round-trip.
-          const data = await fileToBase64(file);
+          // Gemma's vLLM audio loader can't decode the m4a/AAC container — it
+          // silently drops the audio so the model answers "no audio attached".
+          // WebKit *can* decode it, so we transcode AAC (and any unknown
+          // container) to 16 kHz mono WAV here. ogg/mp3/wav/flac decode
+          // server-side fine and pass through untouched.
+          const knownGood = ["ogg", "mp3", "mpeg", "wav", "flac", "opus"];
+          const isAac =
+            ["m4a", "mp4", "m4b", "aac"].includes(ext) || /mp4|aac|x-m4a/.test(mime);
+          let data: string;
+          let format: string;
+          if (!isAac && knownGood.includes(ext)) {
+            data = await fileToBase64(file);
+            format = ext === "mpeg" ? "mp3" : ext;
+          } else {
+            data = await transcodeToWav16kMono(file);
+            format = "wav";
+          }
           setAttachments((prev) => [
             ...prev,
-            { type: "audio", data, format: ext || "m4a", title: file.name },
+            { type: "audio", data, format, title: file.name },
           ]);
         } else {
           // Documents (PDF/DOCX/text) → index in the KB, attach by reference.
@@ -673,6 +692,73 @@ function Composer({
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
+  }
+
+  // Decodes any browser-playable audio file and re-encodes it as 16 kHz mono
+  // 16-bit PCM WAV (un-prefixed base64). Used for m4a/AAC, which Gemma's vLLM
+  // can't decode but WebKit can. Throws a clear error if decoding fails.
+  async function transcodeToWav16kMono(file: File): Promise<string> {
+    const Ctx: typeof AudioContext =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    const Offline: typeof OfflineAudioContext =
+      window.OfflineAudioContext ||
+      (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
+        .webkitOfflineAudioContext;
+    if (!Ctx || !Offline) {
+      throw new Error(`Audio "${file.name}" : transcodage non supporté par ce navigateur`);
+    }
+    const buf = await file.arrayBuffer();
+    const decodeCtx = new Ctx();
+    let decoded: AudioBuffer;
+    try {
+      decoded = await decodeCtx.decodeAudioData(buf.slice(0));
+    } catch {
+      throw new Error(`Audio "${file.name}" : format non décodable`);
+    } finally {
+      void decodeCtx.close();
+    }
+    const rate = 16000;
+    const off = new Offline(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    return wavBase64FromBuffer(await off.startRendering());
+  }
+
+  // Encodes a mono AudioBuffer as a 16-bit PCM WAV file, returning un-prefixed base64.
+  function wavBase64FromBuffer(buf: AudioBuffer): string {
+    const ch = buf.getChannelData(0);
+    const n = ch.length;
+    const view = new DataView(new ArrayBuffer(44 + n * 2));
+    const str = (o: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+    };
+    str(0, "RIFF");
+    view.setUint32(4, 36 + n * 2, true);
+    str(8, "WAVE");
+    str(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, buf.sampleRate, true);
+    view.setUint32(28, buf.sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits/sample
+    str(36, "data");
+    view.setUint32(40, n * 2, true);
+    let o = 44;
+    for (let i = 0; i < n; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      o += 2;
+    }
+    const u8 = new Uint8Array(view.buffer);
+    let bin = "";
+    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin);
   }
 
   async function toggleMic() {
