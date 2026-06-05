@@ -120,10 +120,12 @@ CREATE TABLE IF NOT EXISTS stripe_subscriptions (
   account_number      TEXT NOT NULL REFERENCES accounts(account_number),
   customer_id         TEXT NOT NULL DEFAULT '',
   checkout_session_id TEXT NOT NULL DEFAULT '',
+  provision_state     TEXT NOT NULL DEFAULT 'pending', -- pending|ready|deprovision|gone
   provisioned_at      TEXT,
   created_at          TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);`
+CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);
+CREATE INDEX IF NOT EXISTS idx_stripe_sub_state ON stripe_subscriptions(provision_state);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("controlplane: migrate: %w", err)
 	}

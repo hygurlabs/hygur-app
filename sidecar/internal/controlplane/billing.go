@@ -1,7 +1,6 @@
 package controlplane
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -9,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"strconv"
@@ -18,32 +18,25 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Provisioner creates the tenant's runtime (k8s namespace + workload). The real
-// implementation talks to the cluster; tests use a fake. It MUST be safe to call
-// for an already-provisioned account (the store's claim makes that rare, but a
-// belt-and-braces idempotent Provision is preferred).
-type Provisioner interface {
-	Provision(ctx context.Context, acc Account) error
-}
-
-// Billing turns Stripe subscription events into provisioned accounts. It is the
-// public, payment-facing half of the control plane (separate from the device
-// enroll/refresh Service). Invariants (per product spec):
+// Billing turns Stripe subscription events into accounts + provisioning requests.
+// Invariants (product spec):
 //   - act ONLY on a finalized, paid checkout — never on created/failed/unpaid;
-//   - idempotent on the Stripe subscription id — retries, replays and success-page
-//     reloads never create a second account or provision a second pod;
+//   - idempotent on the Stripe subscription id (PK) — retries, replays and
+//     success-page reloads never create a second account;
+//   - NEVER provision inline. The webhook records a 'pending' provisioning row;
+//     the out-of-band poller (which alone holds cluster rights — the
+//     internet-facing console has none) creates the pod and flips it to 'ready'.
 //   - no email — the enrollment code is delivered on the post-payment page.
 type Billing struct {
-	store       *Store
-	provisioner Provisioner
-	secret      string // Stripe webhook signing secret (whsec_…)
-	tolerance   time.Duration
-	now         func() time.Time
+	store     *Store
+	secret    string // Stripe webhook signing secret (whsec_…)
+	tolerance time.Duration
+	now       func() time.Time
 }
 
-// NewBilling wires the billing webhook to the admin store + a provisioner.
-func NewBilling(store *Store, webhookSecret string, p Provisioner) *Billing {
-	return &Billing{store: store, provisioner: p, secret: webhookSecret, tolerance: 5 * time.Minute, now: time.Now}
+// NewBilling wires the billing webhook + success page to the admin store.
+func NewBilling(store *Store, webhookSecret string) *Billing {
+	return &Billing{store: store, secret: webhookSecret, tolerance: 5 * time.Minute, now: time.Now}
 }
 
 func (b *Billing) clock() time.Time {
@@ -53,17 +46,17 @@ func (b *Billing) clock() time.Time {
 	return time.Now()
 }
 
-// Routes exposes the Stripe webhook. (The post-payment success page that surfaces
-// the enrollment code is wired separately, once the tenant host topology lands.)
+// Routes exposes the Stripe webhook + the post-payment success page.
 func (b *Billing) Routes() http.Handler {
 	r := chi.NewRouter()
 	b.Register(r)
 	return r
 }
 
-// Register mounts the Stripe webhook on r (compose alongside Service.Register).
+// Register mounts the billing routes on r (compose alongside Service.Register).
 func (b *Billing) Register(r chi.Router) {
 	r.Post("/stripe/webhook", b.handleWebhook)
+	r.Get("/subscribe/success", b.handleSuccess)
 }
 
 // --- Stripe event shapes (only the fields we use) ---------------------------
@@ -115,52 +108,33 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	switch ev.Type {
 	case "checkout.session.completed":
-		// Provision ONLY on a finalized, PAID subscription checkout. A declined /
-		// unpaid / retried / reloaded event is acknowledged but provisions nothing,
-		// and the claim makes the pod creation happen at most once.
+		// Record the account + a 'pending' provisioning row ONLY on a finalized,
+		// paid subscription checkout. Idempotent on the subscription id. The poller
+		// turns 'pending' into a live pod — nothing is provisioned here.
 		if obj.Mode != "subscription" || obj.PaymentStatus != "paid" ||
 			obj.Subscription == "" || obj.email() == "" {
 			break
 		}
-		acc, _, err := b.store.UpsertSubscriptionAccount(now, obj.Subscription, obj.Customer, obj.ID, obj.email(), nil)
-		if err != nil {
+		if _, _, err := b.store.UpsertSubscriptionAccount(now, obj.Subscription, obj.Customer, obj.ID, obj.email(), nil); err != nil {
 			writeErr(w, http.StatusInternalServerError, "account")
 			return
 		}
-		claimed, err := b.store.ClaimProvisioning(now, obj.Subscription)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "claim")
-			return
-		}
-		if claimed && b.provisioner != nil {
-			if perr := b.provisioner.Provision(r.Context(), acc); perr != nil {
-				_ = b.store.ReleaseProvisioning(obj.Subscription) // let a later event retry
-				writeErr(w, http.StatusInternalServerError, "provision")
-				return
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "account": acc.AccountNumber})
-		return
 
 	case "customer.subscription.deleted":
-		// Subscription ended → suspend (IsActive=false ⇒ tokens refused). data.object
-		// is the Subscription, so its id IS the subscription id. Pod reaping is the
-		// poller's job; this stops auth immediately.
+		// Suspend auth immediately + queue the pod for reaping by the poller.
 		if err := b.store.SetSubscriptionBySub(obj.ID, "canceled", &now); err != nil {
 			writeErr(w, http.StatusInternalServerError, "suspend")
 			return
 		}
+		_ = b.store.SetProvisionState(obj.ID, "deprovision")
 
 	case "invoice.payment_failed":
-		// Renewal payment failed → suspend until it recovers. data.object is the
-		// Invoice, whose `subscription` is the sub id.
 		if err := b.store.SetSubscriptionBySub(obj.Subscription, "past_due", &now); err != nil {
 			writeErr(w, http.StatusInternalServerError, "suspend")
 			return
 		}
 
 	case "invoice.paid":
-		// Renewal succeeded → re-activate (clears a prior past_due).
 		if err := b.store.SetSubscriptionBySub(obj.Subscription, "active", nil); err != nil {
 			writeErr(w, http.StatusInternalServerError, "reactivate")
 			return
@@ -168,6 +142,47 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+var successPage = template.Must(template.New("s").Parse(`<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hygur Cloud</title><style>
+body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0f0f10;color:#e9e9ea;display:grid;place-items:center;min-height:100vh;margin:0}
+.card{max-width:30rem;padding:2.5rem;text-align:center}
+h1{font-size:1.5rem;margin:0 0 .5rem}p{color:#9a9a9c;line-height:1.5}
+code{display:block;font-size:1.4rem;letter-spacing:.12em;background:#1b1b1d;border:1px solid #2a2a2d;border-radius:.6rem;padding:1rem;margin:1.5rem 0}
+.muted{font-size:.85rem}
+</style></head><body><div class="card">
+{{if .Ready}}<h1>Welcome to Hygur Cloud</h1>
+<p>Your private space is ready. Open the Hygur app and paste this one-time enrollment code:</p>
+<code>{{.Code}}</code>
+<p class="muted">The code expires in 30 minutes. Lost it? Reload this page.</p>
+{{else}}<h1>Setting up your space…</h1>
+<p>Payment received — we're preparing your private Hygur instance. This takes a moment; refresh this page shortly to get your enrollment code.</p>
+{{end}}</div></body></html>`))
+
+// handleSuccess is the Stripe post-payment landing. It resolves the checkout
+// session → account and, once the poller has provisioned the tenant (state
+// 'ready'), mints + shows a one-time enrollment code. No email.
+func (b *Billing) handleSuccess(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	sid := r.URL.Query().Get("session_id")
+	if sid == "" {
+		_ = successPage.Execute(w, map[string]any{"Ready": false})
+		return
+	}
+	acc, state, err := b.store.SubscriptionBySession(sid)
+	if err != nil || state != "ready" {
+		// Unknown session (webhook not arrived) or pod not provisioned yet.
+		_ = successPage.Execute(w, map[string]any{"Ready": false})
+		return
+	}
+	code, err := b.store.CreateEnrollCode(b.clock(), acc.AccountNumber, "web", 30*time.Minute)
+	if err != nil {
+		_ = successPage.Execute(w, map[string]any{"Ready": false})
+		return
+	}
+	_ = successPage.Execute(w, map[string]any{"Ready": true, "Code": code})
 }
 
 // verifyStripeSig validates a `Stripe-Signature: t=…,v1=…` header: HMAC-SHA256 of
@@ -203,7 +218,7 @@ func verifyStripeSig(header string, payload []byte, secret string, now time.Time
 			delta = -delta
 		}
 		if time.Duration(delta)*time.Second > tolerance {
-			return false // outside the replay window
+			return false
 		}
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -217,12 +232,21 @@ func verifyStripeSig(header string, payload []byte, secret string, now time.Time
 	return false
 }
 
-// --- Store: subscription → account idempotency ------------------------------
+// --- Store: subscription → account + provisioning state ---------------------
+
+// ProvisionRow is a tenant awaiting (or leaving) provisioning, for the poller.
+type ProvisionRow struct {
+	SubID     string
+	Account   string
+	TenantID  string
+	SessionID string
+	State     string
+}
 
 // UpsertSubscriptionAccount maps a Stripe subscription to an account, creating it
-// on first sight and returning the SAME account on every later call for that
-// subscription (idempotent). Always refreshes the billing status to active. The
-// bool is true only when a new account was created.
+// (with provision_state='pending') on first sight and returning the SAME account
+// on every later call for that subscription (idempotent). Always refreshes the
+// billing status to active. The bool is true only when a new account was created.
 func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sessionID, email string, validUntil *time.Time) (Account, bool, error) {
 	if subID == "" || email == "" {
 		return Account{}, false, errors.New("controlplane: subscription id + email required")
@@ -243,8 +267,6 @@ func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sess
 		return Account{}, false, fmt.Errorf("controlplane: lookup subscription: %w", err)
 	}
 
-	// First time for this subscription. Reuse an existing account for the same
-	// email (re-subscribe), else create one.
 	acc, cerr := s.CreateAccount(now, email, "active", validUntil)
 	if cerr != nil {
 		existing, gerr := s.getAccountByEmail(email)
@@ -255,7 +277,7 @@ func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sess
 		_ = s.SetSubscription(acc.AccountNumber, "active", validUntil)
 	}
 	if _, ierr := s.db.Exec(
-		`INSERT INTO stripe_subscriptions(stripe_sub_id,account_number,customer_id,checkout_session_id,provisioned_at,created_at) VALUES(?,?,?,?,NULL,?)`,
+		`INSERT INTO stripe_subscriptions(stripe_sub_id,account_number,customer_id,checkout_session_id,provision_state,created_at) VALUES(?,?,?,?, 'pending', ?)`,
 		subID, acc.AccountNumber, customerID, sessionID, now.UTC().Format(rfc),
 	); ierr != nil {
 		return Account{}, false, fmt.Errorf("controlplane: map subscription: %w", ierr)
@@ -263,32 +285,10 @@ func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sess
 	return acc, true, nil
 }
 
-// ClaimProvisioning atomically marks a subscription provisioned, returning true
-// only to the first caller — so the tenant pod is created exactly once even under
-// duplicate/replayed events. Reset with ReleaseProvisioning if provisioning fails.
-func (s *Store) ClaimProvisioning(now time.Time, subID string) (bool, error) {
-	res, err := s.db.Exec(
-		`UPDATE stripe_subscriptions SET provisioned_at=? WHERE stripe_sub_id=? AND provisioned_at IS NULL`,
-		now.UTC().Format(rfc), subID,
-	)
-	if err != nil {
-		return false, fmt.Errorf("controlplane: claim provisioning: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
-}
-
-// ReleaseProvisioning clears the provisioned claim so a later event retries.
-func (s *Store) ReleaseProvisioning(subID string) error {
-	_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provisioned_at=NULL WHERE stripe_sub_id=?`, subID)
-	return err
-}
-
 // SetSubscriptionBySub updates the account's billing status from a Stripe
-// lifecycle event (canceled / past_due / active). An unknown subscription is a
-// no-op (the event may predate our records). Suspension is immediate: a non
-// active/trialing status makes Account.IsActive false, so the control plane stops
-// issuing/refreshing tokens for that tenant.
+// lifecycle event (canceled / past_due / active). Unknown subscription = no-op.
+// A non active/trialing status makes Account.IsActive false, so the control plane
+// stops issuing/refreshing tokens for that tenant.
 func (s *Store) SetSubscriptionBySub(subID, status string, validUntil *time.Time) error {
 	if subID == "" {
 		return nil
@@ -296,12 +296,72 @@ func (s *Store) SetSubscriptionBySub(subID, status string, validUntil *time.Time
 	var accNum string
 	err := s.db.QueryRow(`SELECT account_number FROM stripe_subscriptions WHERE stripe_sub_id=?`, subID).Scan(&accNum)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil // unknown subscription → ignore
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("controlplane: lookup subscription: %w", err)
 	}
 	return s.SetSubscription(accNum, status, validUntil)
+}
+
+// SetProvisionState moves a subscription through pending→ready / →deprovision /
+// →gone. Setting 'ready' also stamps provisioned_at. Used by the poller.
+func (s *Store) SetProvisionState(subID, state string) error {
+	if state == "ready" {
+		_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provision_state=?, provisioned_at=? WHERE stripe_sub_id=?`,
+			state, time.Now().UTC().Format(rfc), subID)
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provision_state=? WHERE stripe_sub_id=?`, state, subID)
+	return err
+}
+
+// ListProvisions returns subscriptions in the given provision_state (e.g.
+// 'pending' to create, 'deprovision' to reap) — the poller's work queue.
+func (s *Store) ListProvisions(state string) ([]ProvisionRow, error) {
+	rows, err := s.db.Query(`
+		SELECT ss.stripe_sub_id, ss.account_number, a.tenant_id, ss.checkout_session_id, ss.provision_state
+		FROM stripe_subscriptions ss JOIN accounts a ON a.account_number = ss.account_number
+		WHERE ss.provision_state = ?`, state)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProvisionRow
+	for rows.Next() {
+		var r ProvisionRow
+		if err := rows.Scan(&r.SubID, &r.Account, &r.TenantID, &r.SessionID, &r.State); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CountActiveTenants counts subscriptions with a live (ready/pending) pod — the
+// poller enforces a cap against this to protect the single node.
+func (s *Store) CountActiveTenants() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM stripe_subscriptions WHERE provision_state IN ('pending','ready')`).Scan(&n)
+	return n, err
+}
+
+// SubscriptionBySession resolves a checkout session to its account + provision
+// state (for the post-payment success page).
+func (s *Store) SubscriptionBySession(sessionID string) (Account, string, error) {
+	if sessionID == "" {
+		return Account{}, "", ErrNotFound
+	}
+	var accNum, state string
+	err := s.db.QueryRow(`SELECT account_number, provision_state FROM stripe_subscriptions WHERE checkout_session_id=?`, sessionID).Scan(&accNum, &state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Account{}, "", ErrNotFound
+	}
+	if err != nil {
+		return Account{}, "", err
+	}
+	acc, gerr := s.GetAccount(accNum)
+	return acc, state, gerr
 }
 
 func (s *Store) getAccountByEmail(email string) (Account, error) {

@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -38,13 +37,15 @@ func main() {
 		runCode(os.Args[2:])
 	case "device":
 		runDevice(os.Args[2:])
+	case "provisions":
+		runProvisions(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hygur-console <serve|account|code|device> ...")
+	fmt.Fprintln(os.Stderr, "usage: hygur-console <serve|account|code|device|provisions> ...")
 	os.Exit(2)
 }
 
@@ -85,8 +86,8 @@ func runServe(args []string) {
 	root := chi.NewRouter()
 	svc.Register(root)
 	if wh := os.Getenv("HYGUR_STRIPE_WEBHOOK_SECRET"); wh != "" {
-		controlplane.NewBilling(store, wh, logProvisioner{}).Register(root)
-		fmt.Println("hygur-console: Stripe billing webhook enabled (POST /stripe/webhook)")
+		controlplane.NewBilling(store, wh).Register(root)
+		fmt.Println("hygur-console: Stripe billing webhook + success page enabled")
 	}
 
 	fmt.Printf("hygur-console serving on %s (domain %s)\n", *addr, *domain)
@@ -94,17 +95,40 @@ func runServe(args []string) {
 	die(srv.ListenAndServe())
 }
 
-// logProvisioner is the bridge provisioner: it records that a tenant pod must be
-// created. The internet-facing console holds NO cluster rights — the actual k8s
-// provisioning happens out-of-band (operator / on-box poller). The account is
-// already created + active in the admin DB by the billing webhook; only the pod
-// is pending.
-type logProvisioner struct{}
-
-func (logProvisioner) Provision(_ context.Context, acc controlplane.Account) error {
-	fmt.Printf("[billing] PROVISION NEEDED — account=%s tenant=%s (run: provision-tenant.sh %s <host>)\n",
-		acc.AccountNumber, acc.TenantID, acc.TenantID)
-	return nil
+// runProvisions is the poller's interface to the admin DB (runs on-box, with the
+// DB key). The internet-facing `serve` never provisions; the poller drives state.
+//
+//	hygur-console provisions pending       # \t-sep: <sub_id> <tenant_id> <account>
+//	hygur-console provisions deprovision   # tenants to reap (canceled)
+//	hygur-console provisions count         # live tenants (pending+ready) for the cap
+//	hygur-console provisions ready  <sub>  # pod created → mark ready
+//	hygur-console provisions failed <sub>  # provisioning failed (will retry next pass)
+//	hygur-console provisions gone   <sub>  # pod reaped → mark gone
+func runProvisions(args []string) {
+	if len(args) == 0 {
+		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|count|ready|failed|gone> [sub_id]"))
+	}
+	store := openStore()
+	defer store.Close()
+	switch args[0] {
+	case "pending", "deprovision":
+		rows, err := store.ListProvisions(args[0])
+		die(err)
+		for _, r := range rows {
+			fmt.Printf("%s\t%s\t%s\n", r.SubID, r.TenantID, r.Account)
+		}
+	case "count":
+		n, err := store.CountActiveTenants()
+		die(err)
+		fmt.Println(n)
+	case "ready", "failed", "gone":
+		if len(args) < 2 {
+			die(fmt.Errorf("usage: hygur-console provisions %s <sub_id>", args[0]))
+		}
+		die(store.SetProvisionState(args[1], args[0]))
+	default:
+		die(fmt.Errorf("unknown provisions subcommand %q", args[0]))
+	}
 }
 
 func runAccount(args []string) {
