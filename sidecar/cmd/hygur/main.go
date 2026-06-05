@@ -74,6 +74,9 @@ func main() {
 		case "dek":
 			runDEK(os.Args[2:])
 			return
+		case "edge":
+			runEdge(os.Args[2:])
+			return
 		}
 	}
 
