@@ -11,8 +11,8 @@
 docs
 *.md
 
-# macOS app — not part of the server image.
-macos-app
+# Desktop shell — not part of the server image.
+webui/src-tauri
 
 # Node deps / generated SPA bundle (the webui stage runs `npm ci` + `vite build`).
 webui/node_modules

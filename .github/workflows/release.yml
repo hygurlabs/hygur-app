@@ -7,6 +7,8 @@ on:
 
 jobs:
   build-and-release:
+    # Apple Silicon runner: the sidecar ships local LLM inference via MLX (and
+    # friends), which has no Intel path — so we build an arm64-only bundle.
     runs-on: macos-26
 
     permissions:
@@ -32,72 +34,60 @@ jobs:
           cache: npm
           cache-dependency-path: webui/package-lock.json
 
-      - name: Install tools
-        run: |
-          brew install create-dmg xcodegen
-          # xcpretty is optional — fall back gracefully in Makefile if absent
-          gem install xcpretty --no-document 2>/dev/null || true
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust (Tauri shell)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: webui/src-tauri -> target
 
       - name: Derive version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build web UI
-        # The api/webui package go:embed's dist/, which is generated (not
-        # committed), so this must run before any Go build of the sidecar.
-        run: make webui
-
-      - name: Build sidecar (universal binary)
-        run: make -C sidecar build-for-bundle VERSION=${{ steps.version.outputs.VERSION }}
-
-      - name: Build macOS app
+      - name: Sync bundle version to tag
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          cd macos-app && xcodegen generate --quiet
-          mkdir -p ../.build/Release
-          xcodebuild \
-            -scheme Hygur \
-            -project Hygur.xcodeproj \
-            -configuration Release \
-            -derivedDataPath ../.build/DerivedData \
-            CONFIGURATION_BUILD_DIR="${PWD}/../.build/Release" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
+          tmp=$(jq --arg v "$VERSION" '.version = $v' webui/src-tauri/tauri.conf.json)
+          printf '%s\n' "$tmp" > webui/src-tauri/tauri.conf.json
 
-      - name: Ad-hoc sign
-        run: codesign --deep --force --sign "-" .build/Release/Hygur.app
+      - name: Install web UI deps
+        run: cd webui && npm ci
 
-      - name: Package DMG
+      # Builds the WebUI (go:embed), stages the sidecar as the Tauri externalBin,
+      # then bundles the .app + DMG. Unsigned/ad-hoc by default — to sign +
+      # notarize, set APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD /
+      # APPLE_TEAM_ID (Tauri reads them from the environment).
+      - name: Build Tauri app + DMG
+        run: make tauri-build VERSION=${{ steps.version.outputs.VERSION }}
+
+      - name: Locate DMG
+        id: dmg
         run: |
-          create-dmg \
-            --volname "Hygur ${{ steps.version.outputs.VERSION }}" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 128 \
-            --icon "Hygur.app" 175 190 \
-            --hide-extension "Hygur.app" \
-            --app-drop-link 425 190 \
-            ".build/Hygur-${{ steps.version.outputs.VERSION }}.dmg" \
-            ".build/Release/Hygur.app"
+          DMG=$(ls -1 webui/src-tauri/target/release/bundle/dmg/*.dmg | head -n1)
+          test -n "$DMG" || { echo "❌ No DMG produced"; exit 1; }
+          OUT="Hygur-${{ steps.version.outputs.VERSION }}.dmg"
+          cp "$DMG" "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "→ $DMG → $OUT"
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.VERSION }}
+          DMG: ${{ steps.dmg.outputs.path }}
         # Idempotent: if the release was created manually before CI got here
         # (or if a previous run already published the asset), upload+clobber
-        # rather than failing the whole workflow. v0.2.0 hit this — the manual
-        # `gh release create` happened before CI uploaded the DMG.
+        # rather than failing the whole workflow.
         run: |
           if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "Release v${VERSION} exists — uploading DMG with --clobber"
-            gh release upload "v${VERSION}" \
-              ".build/Hygur-${VERSION}.dmg" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --clobber
+            gh release upload "v${VERSION}" "${DMG}" --repo "${GITHUB_REPOSITORY}" --clobber
           else
             echo "Release v${VERSION} does not exist — creating with DMG"
-            gh release create "v${VERSION}" \
-              ".build/Hygur-${VERSION}.dmg" \
+            gh release create "v${VERSION}" "${DMG}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "Hygur ${VERSION}" \
               --generate-notes

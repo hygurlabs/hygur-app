@@ -30,6 +30,9 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "category": "Productivity",
+    "shortDescription": "Your local digital twin",
+    "longDescription": "A private memory of your documents, mail and notes, powered by your own LLM. Runs entirely on your machine.",
     "externalBin": ["binaries/hygur-sidecar"],
     "icon": [
       "icons/32x32.png",

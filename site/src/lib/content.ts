@@ -1,0 +1,106 @@
+import {
+  ShieldCheck,
+  Cpu,
+  PlugZap,
+  MonitorSmartphone,
+  Server,
+  Cloud,
+  Blocks,
+  type LucideIcon,
+} from "lucide-react";
+
+/** Until the full deployment plan lands, every call-to-action points here. */
+export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
+
+/** Real example prompts from the app's "Ask Hygur" screen, replayed in the
+ *  hero so the conversational product speaks for itself. */
+export const ASK_PROMPTS = [
+  "What's my VAT due for Q1 2026?",
+  "Summarise my last invoices from EDF",
+  "What deadlines do I have this month?",
+] as const;
+
+/** Runtimes Hygur can point at — set in mono as small tokens. */
+export const RUNTIMES = ["LM Studio", "Ollama", "vLLM", "llama.cpp"] as const;
+
+export interface Principle {
+  icon: LucideIcon;
+  title: string;
+  body: string;
+}
+
+/** Lifted from the product's own welcome screen — same voice, no invention. */
+export const PRINCIPLES: Principle[] = [
+  {
+    icon: ShieldCheck,
+    title: "Private by design",
+    body: "Your data never leaves your machine. The app talks only to a local sidecar and the AI runtime you point it at.",
+  },
+  {
+    icon: Cpu,
+    title: "Your model, your rules",
+    body: "Bring any OpenAI-compatible runtime — LM Studio, Ollama, vLLM or llama.cpp. No vendor lock-in.",
+  },
+  {
+    icon: PlugZap,
+    title: "Connect what matters",
+    body: "Index mail, calendar and folders so Hygur can answer with your own context, not the public web.",
+  },
+];
+
+export interface Edition {
+  id: string;
+  name: string;
+  kicker: string;
+  tagline: string;
+  body: string;
+  badges: string[];
+  icon: LucideIcon;
+  cta: string;
+  /** Featured editions get the warm "core" treatment and span wider. */
+  featured?: boolean;
+}
+
+export const EDITIONS: Edition[] = [
+  {
+    id: "app",
+    name: "Hygur App",
+    kicker: "Clients",
+    tagline: "Desktop and mobile",
+    body: "The local twin in your pocket and on your desk. Ask, search and capture across Mac, Windows and your phone — everything stays on your machine.",
+    badges: ["Free"],
+    icon: MonitorSmartphone,
+    cta: "Get the app",
+  },
+  {
+    id: "server",
+    name: "Hygur Server",
+    kicker: "Self-host",
+    tagline: "Standalone & headless",
+    body: "The core that holds the data and the brain. Run the open-source binary on your own hardware — LAN, VPN or a box in the corner.",
+    badges: ["Free", "Open source · AGPL"],
+    icon: Server,
+    cta: "Read the source",
+  },
+  {
+    id: "cloud",
+    name: "Hygur Cloud",
+    kicker: "Managed",
+    tagline: "Hosted Hygur Server",
+    body: "A managed Hygur Server instance, one per account. We run and update it; you keep full control of your data and the model it talks to.",
+    badges: ["Hosted", "Pricing soon"],
+    icon: Cloud,
+    cta: "Join the waitlist",
+    featured: true,
+  },
+  {
+    id: "marketplace",
+    name: "Hygur Marketplace",
+    kicker: "Ecosystem",
+    tagline: "Connectors catalogue",
+    body: "A growing catalogue of connectors — free and paid — to pull more of your world into Hygur, from mailboxes to calendars to custom sources.",
+    badges: ["Free & paid"],
+    icon: Blocks,
+    cta: "Browse connectors",
+  },
+];

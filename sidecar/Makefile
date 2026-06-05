@@ -40,7 +40,7 @@ LDFLAGS := -ldflags "\
 # Stays in sync with `make run` so all binaries are built identically.
 GO_BUILD = CGO_ENABLED=$(CGO_ENABLED) go build -tags '$(GO_TAGS)' $(LDFLAGS)
 
-.PHONY: all build build-sidecar build-reindex build-probe build-backfill build-arm64 build-amd64 build-universal build-for-bundle run reindex probe backfill install uninstall test lint clean fmt vet check
+.PHONY: all build build-sidecar build-reindex build-probe build-backfill build-arm64 build-amd64 build-universal run reindex probe backfill install uninstall test lint clean fmt vet check
 
 all: build
 
@@ -70,19 +70,6 @@ build-universal: build-arm64 build-amd64
 	lipo -create -output $(BUILD_DIR)/$(BINARY_NAME)-universal \
 		$(BUILD_DIR)/$(BINARY_NAME)-arm64 \
 		$(BUILD_DIR)/$(BINARY_NAME)-amd64
-
-# Build the arm64 sidecar slice and copy it into the macOS app bundle.
-# Called by the Xcode pre-build script in macos-app/Project.yml and by the
-# release workflow.
-#
-# Apple Silicon only — Hygur ships local LLM inference via MLX (and friends),
-# which has no path on Intel Macs. Universal binaries doubled the bundle size
-# for an audience we can't actually serve.
-build-for-bundle: build-arm64
-	@DEST="$$(cd ..; pwd)/macos-app/Resources/hygur-sidecar"; \
-	mkdir -p "$$(dirname $$DEST)"; \
-	cp $(BUILD_DIR)/$(BINARY_NAME)-arm64 "$$DEST"; \
-	echo "✅ arm64 sidecar → $$DEST"
 
 # Build the reindex CLI (Tier 1 entity backfill).
 build-reindex:
