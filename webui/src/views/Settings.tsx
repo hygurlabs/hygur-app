@@ -153,9 +153,14 @@ export function Settings() {
   // The API key is never returned by GET (only api_key_set), so it has its own
   // write-only draft: empty = leave the stored key untouched.
   const [apiKey, setApiKey] = useState("");
-  useEffect(() => {
-    if (data) setDraft(data);
-  }, [data]);
+  // Keep the editable draft in sync with the latest server config (re-syncs on
+  // refetch, e.g. after a save). Done during render — React Query hands a fresh
+  // `data` object per fetch, so this converges and avoids setState-in-effect.
+  const [syncedFrom, setSyncedFrom] = useState<SidecarConfig | null>(null);
+  if (data && data !== syncedFrom) {
+    setSyncedFrom(data);
+    setDraft(data);
+  }
 
   const save = useMutation({
     mutationFn: (cfg: SidecarConfig) =>
@@ -601,10 +606,12 @@ function TokenUsageSection() {
     queryFn: api.getTokenUsage,
   });
   // Local draft of the price fields, seeded once from the server values.
+  // Seeding during render (not in an effect) is React's sanctioned pattern for
+  // deriving initial state from async data — it converges once price is set.
   const [price, setPrice] = useState<TokenPricing | null>(null);
-  useEffect(() => {
-    if (data?.pricing) setPrice((p) => p ?? data.pricing);
-  }, [data]);
+  if (price === null && data?.pricing) {
+    setPrice(data.pricing);
+  }
 
   const save = useMutation({
     mutationFn: (p: TokenPricing) => api.setTokenPricing(p),
