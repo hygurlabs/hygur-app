@@ -70,6 +70,9 @@ func main() {
 		case "issue-token":
 			runIssueToken(os.Args[2:])
 			return
+		case "dek":
+			runDEK(os.Args[2:])
+			return
 		}
 	}
 
@@ -275,9 +278,16 @@ func main() {
 		logger.Fatal().Err(err).Str("path", cfg.Store.Path).Msg("failed to initialize database")
 	}
 	defer storeManager.Close()
+	keySource := "none"
+	if dbKeyEnvManaged {
+		keySource = "env" // cloud / tenant DEK
+	} else if dbKey != "" {
+		keySource = "keychain" // local opt-in
+	}
 	logger.Info().
 		Str("path", cfg.Store.Path).
 		Bool("encrypted", dbKey != "").
+		Str("key_source", keySource).
 		Msg("database initialized")
 
 	// Token-usage accounting: every chat/embedding/indexing completion records
