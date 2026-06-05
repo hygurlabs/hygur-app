@@ -108,6 +108,7 @@ func (c *NotesConnector) Capabilities() plugin.Capabilities {
 		CanAttach:    false,
 		NeedsAuth:    false,
 		AuthType:     plugin.AuthNone,
+		Locality:     plugin.LocalityDevice, // Apple Notes is local → edge agent
 	}
 }
 
