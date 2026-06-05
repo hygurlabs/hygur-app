@@ -122,12 +122,9 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
-                    if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyH) {
-                        show_main(app);
-                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Space) {
+                    if event.state() == ShortcutState::Pressed
+                        && shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyH)
+                    {
                         toggle_quick(app);
                     }
                 })
@@ -147,15 +144,12 @@ pub fn run() {
                 )?;
             }
 
-            // Global summon shortcut ⌘⇧H (parity with the SwiftUI HotkeyManager).
+            // Global hotkey ⌘⇧H toggles the quick-capture palette (the combo the
+            // SwiftUI HotkeyManager used). The main window stays reachable via the
+            // tray "Show Hygur" + the dock.
             let summon = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyH);
             if let Err(e) = app.global_shortcut().register(summon) {
                 log::warn!("global shortcut registration failed: {e}");
-            }
-            // Quick-capture palette ⌘⇧Space (parity with the SwiftUI QuickAsk).
-            let quick_key = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
-            if let Err(e) = app.global_shortcut().register(quick_key) {
-                log::warn!("quick shortcut registration failed: {e}");
             }
 
             // Frameless, always-on-top quick-capture palette in its own window.
