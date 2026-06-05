@@ -243,6 +243,38 @@ export const api = {
   setTokenPricing: (p: TokenPricing) =>
     putJSON<{ status: string }>("/usage/pricing", p),
 
+  // DB backup / restore. Backup streams a consistent snapshot the browser saves
+  // wherever you choose; restore uploads a snapshot, staged and applied on the
+  // next app restart.
+  downloadBackup: async (): Promise<void> => {
+    const r = await fetch(u("/admin/db/backup"), { headers: authHeaders() });
+    if (!r.ok) throw httpError(r);
+    const blob = await r.blob();
+    const cd = r.headers.get("Content-Disposition") ?? "";
+    const name = /filename="?([^"]+)"?/.exec(cd)?.[1] ?? "hygur-backup.db";
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(href);
+  },
+  restoreBackup: async (
+    file: File,
+  ): Promise<{ status: string; restart_required: boolean }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch(u("/admin/db/restore"), {
+      method: "POST",
+      headers: authHeaders(), // no Content-Type — the browser sets the boundary
+      body: form,
+    });
+    if (!r.ok) throw httpError(r);
+    return r.json();
+  },
+
   /** Uploads + ingests a file (📎). Returns the new content_id to attach. */
   uploadFile: async (
     file: File,

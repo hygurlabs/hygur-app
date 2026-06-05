@@ -124,6 +124,60 @@ func NewDBWithKey(path, key string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
+// QuickCheck verifies the file at path is a usable database: it opens read-only
+// with no key (plaintext) or, failing that, with key (encrypted with the
+// current key). Used to validate an uploaded restore BEFORE staging it, so a
+// bad/foreign file can't brick the next boot. A plaintext file is accepted even
+// when a key is set — boot's Open auto-migrates it.
+func QuickCheck(ctx context.Context, path, key string) error {
+	if err := quickProbe(ctx, path, ""); err == nil {
+		return nil
+	} else if key == "" {
+		return err
+	}
+	return quickProbe(ctx, path, key)
+}
+
+func quickProbe(ctx context.Context, path, key string) error {
+	dsn := "file:" + path + "?_foreign_keys=off&mode=ro"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var n int
+	return db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master").Scan(&n)
+}
+
+// ApplyPendingRestore swaps a staged restore into place at boot, BEFORE the DB
+// is opened. If "<dbPath>.restore-pending" exists, the current DB is moved aside
+// to "<dbPath>.pre-restore.bak" and the staged file becomes the live DB (stale
+// -wal/-shm are dropped — the staged file is a clean snapshot). Returns whether
+// a restore was applied. Best-effort rollback if the swap fails midway.
+func ApplyPendingRestore(dbPath string) (bool, error) {
+	pending := dbPath + ".restore-pending"
+	if _, err := os.Stat(pending); err != nil {
+		return false, nil // nothing staged
+	}
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+	backup := dbPath + ".pre-restore.bak"
+	_ = os.Remove(backup)
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := os.Rename(dbPath, backup); err != nil {
+			return false, fmt.Errorf("restore: back up current DB: %w", err)
+		}
+	}
+	if err := os.Rename(pending, dbPath); err != nil {
+		_ = os.Rename(backup, dbPath) // roll back
+		return false, fmt.Errorf("restore: swap staged DB: %w", err)
+	}
+	return true, nil
+}
+
 // Open is the boot-time entry point: it opens the store at path, encrypting at
 // rest when key is non-empty. On the first run with a key against an existing
 // PLAINTEXT database, it transparently migrates it to encrypted (keeping a
@@ -147,6 +201,31 @@ func Open(path, key string) (*DB, error) {
 		}
 	}
 	return NewDBWithKey(path, key)
+}
+
+// BackupTo writes a consistent snapshot of the database to destPath. With an
+// empty key the snapshot is plaintext (VACUUM INTO — a transactional hot copy,
+// safe while the DB is in use); with a key it is SQLCipher-encrypted with that
+// same key (sqlcipher_export), so the backup preserves the source's at-rest
+// protection. destPath must not already exist.
+func (d *DB) BackupTo(ctx context.Context, destPath, key string) error {
+	if key == "" {
+		if _, err := d.db.ExecContext(ctx, "VACUUM INTO ?", destPath); err != nil {
+			return fmt.Errorf("backup (vacuum into): %w", err)
+		}
+		return nil
+	}
+	if _, err := d.db.ExecContext(ctx, `ATTACH DATABASE ? AS bak KEY ?`, destPath, key); err != nil {
+		return fmt.Errorf("backup attach: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, `SELECT sqlcipher_export('bak')`); err != nil {
+		_, _ = d.db.ExecContext(ctx, `DETACH DATABASE bak`)
+		return fmt.Errorf("backup export: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx, `DETACH DATABASE bak`); err != nil {
+		return fmt.Errorf("backup detach: %w", err)
+	}
+	return nil
 }
 
 // MigratePlaintextToEncrypted converts an existing plaintext database at path

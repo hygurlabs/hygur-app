@@ -36,6 +36,9 @@ func (s *Server) setupRoutes() {
 		r.Use(s.authMiddleware)
 		r.Post("/chat", s.handleChat)
 		r.Get("/events", s.handleEvents)
+		// DB backup/restore — no request timeout (large downloads/uploads).
+		r.Get("/admin/db/backup", s.handleBackupDownload)
+		r.Post("/admin/db/restore", s.handleBackupRestore)
 	})
 
 	// Protected routes (authentication required) with standard timeout

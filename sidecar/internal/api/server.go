@@ -47,6 +47,7 @@ type Server struct {
 	interactionsHandler *handlers.InteractionsHandler
 	insightsHandler  *handlers.InsightsHandler
 	usageHandler     *handlers.UsageHandler
+	backupHandler    *handlers.BackupHandler
 	token            string             // Static token (local mode) + WebUI bootstrap
 	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
 }
@@ -475,6 +476,27 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 // SetUsageHandler attaches the token-usage / cost handler.
 func (s *Server) SetUsageHandler(handler *handlers.UsageHandler) {
 	s.usageHandler = handler
+}
+
+// SetBackupHandler attaches the DB backup/restore handler.
+func (s *Server) SetBackupHandler(handler *handlers.BackupHandler) {
+	s.backupHandler = handler
+}
+
+func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.Download(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.Restore(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
 }
 
 func (s *Server) handleGetTokenUsage(w http.ResponseWriter, r *http.Request) {

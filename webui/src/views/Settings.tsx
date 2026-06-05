@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
@@ -401,9 +401,96 @@ export function Settings() {
       </Section>
 
       <TokenUsageSection />
+      <BackupSection />
       <NotificationsSection />
       <PermissionsSection />
     </Page>
+  );
+}
+
+// MARK: - Database backup / restore
+
+function BackupSection() {
+  const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [staged, setStaged] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function onBackup() {
+    setError(null);
+    setBusy("backup");
+    try {
+      await api.downloadBackup();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRestoreFile(f: File | undefined) {
+    if (!f) return;
+    const ok = window.confirm(
+      "Restaurer cette sauvegarde ? La base actuelle sera remplacée au prochain démarrage de Hygur (l'actuelle est conservée en .pre-restore.bak). Continuer ?",
+    );
+    if (!ok) {
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setError(null);
+    setStaged(false);
+    setBusy("restore");
+    try {
+      await api.restoreBackup(f);
+      setStaged(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <Section title="Database backup">
+      {error && (
+        <div className="px-4 pt-3">
+          <ErrorBanner message={error} />
+        </div>
+      )}
+      <Row
+        label="Download a backup"
+        hint="Saves a consistent snapshot of your database (encryption preserved) wherever you choose."
+      >
+        <Button onClick={() => void onBackup()} disabled={busy !== null}>
+          {busy === "backup" ? "Preparing…" : "Download"}
+        </Button>
+      </Row>
+      <Row
+        label="Restore from a backup"
+        hint="Replaces the database on the next restart; the current one is kept as a backup."
+      >
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".db"
+          className="hidden"
+          onChange={(e) => void onRestoreFile(e.target.files?.[0])}
+        />
+        <Button
+          variant="ghost"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy !== null}
+        >
+          {busy === "restore" ? "Uploading…" : "Restore…"}
+        </Button>
+      </Row>
+      {staged && (
+        <div className="px-4 py-3 text-[12.5px] text-accent">
+          Backup staged — restart Hygur to apply it.
+        </div>
+      )}
+    </Section>
   );
 }
 

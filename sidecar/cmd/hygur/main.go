@@ -248,9 +248,17 @@ func main() {
 	// primary hygur.db and every consumer is wired to it exactly as before;
 	// multi-user routing onto per-identity handles is P5.
 	//
+	// Apply a staged restore (uploaded via POST /admin/db/restore) before the
+	// store opens — swaps the snapshot in, keeping the current DB as a backup.
+	if applied, rErr := store.ApplyPendingRestore(cfg.Store.Path); rErr != nil {
+		logger.Error().Err(rErr).Str("path", cfg.Store.Path).Msg("failed to apply staged restore")
+	} else if applied {
+		logger.Info().Str("path", cfg.Store.Path).Msg("applied staged database restore")
+	}
+
 	// HYGUR_DB_KEY enables SQLCipher encryption at rest (key from the OS keychain
-	// locally — set by the desktop app on spawn — or the tenant DEK in cloud).
-	// Empty = plaintext; a first keyed run auto-migrates an existing plaintext DB.
+	// locally, or the tenant DEK in cloud). Empty = plaintext; a first keyed run
+	// auto-migrates an existing plaintext DB.
 	dbKey := os.Getenv("HYGUR_DB_KEY")
 	storeManager := store.NewManagerWithKey(cfg.Store.Path, dbKey)
 	db, err := storeManager.Default()
@@ -646,6 +654,7 @@ func main() {
 	server.SetMarketplaceHandler(marketplaceHandler)
 	server.SetConfigHandler(configHandler)
 	server.SetUsageHandler(handlers.NewUsageHandler(db, logger))
+	server.SetBackupHandler(handlers.NewBackupHandler(db, cfg.Store.Path, dbKey, logger))
 
 	// Phase 1 (pair mode) — interaction logging + learning gauge.
 	interactionLogger := interactions.NewLogger(db)
