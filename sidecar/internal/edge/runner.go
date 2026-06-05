@@ -57,6 +57,39 @@ func (r *Runner) RunOnce(ctx context.Context) Status {
 	return r.finish(files, mail, errs, lastErr)
 }
 
+// RunLoop runs the edge sync in a loop until ctx is cancelled, reloading the
+// config each cycle so UI edits take effect. A configured interval (>0) sets the
+// cadence; otherwise it idles (manual "Sync now" only) while still watching for
+// config changes. RunOnce runs first, before the first sleep, so a configured
+// loop pushes immediately. Shared by the config-UI background loop AND the
+// in-process server (cloud mode) — one binary pushes local sources without a
+// separate `hygur edge` process.
+func (r *Runner) RunLoop(ctx context.Context) {
+	for {
+		cfg, _ := LoadConfig(r.cfgPath)
+		if cfg.Server != "" && cfg.Token != "" && cfg.IntervalSecs > 0 {
+			r.RunOnce(ctx)
+			if !sleepCtx(ctx, time.Duration(cfg.IntervalSecs)*time.Second) {
+				return
+			}
+			continue
+		}
+		if !sleepCtx(ctx, 10*time.Second) {
+			return
+		}
+	}
+}
+
+// sleepCtx waits d, or returns false immediately when ctx is cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 // Sync pushes Files + Proton once per cfg, persisting per-source watermarks under
 // stateDir. Shared by the UI runner and the headless CLI. Never panics; the first
 // hard error is returned in lastErr. (The blocking part is the network push; the

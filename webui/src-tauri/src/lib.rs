@@ -18,28 +18,6 @@ struct Sidecar {
     shutting_down: AtomicBool,
     /// (consecutive fast restarts, last spawn time) — bounds a crash loop.
     restarts: Mutex<(u32, Instant)>,
-    /// Optional thin-client edge agent (C7-E4); killed on exit like the sidecar.
-    edge_child: Mutex<Option<CommandChild>>,
-}
-
-/// Edge-agent config read from ~/.hygur-edge/config.json (C7-E4). Absent → no edge.
-#[derive(serde::Deserialize)]
-struct EdgeConfig {
-    server: String,
-    #[serde(default)]
-    token: String,
-    #[serde(default)]
-    token_file: String,
-    #[serde(default)]
-    folder: String,
-    #[serde(default)]
-    proton_user: String,
-    #[serde(default)]
-    proton_password: String,
-    #[serde(default)]
-    proton_mailbox: String,
-    #[serde(default)]
-    interval_secs: u64,
 }
 
 const SIDECAR_URL: &str = "http://127.0.0.1:8420";
@@ -80,86 +58,6 @@ fn toggle_quick(app: &AppHandle) {
         } else {
             show_quick(app, "ask");
         }
-    }
-}
-
-/// Optional thin-client edge agent (C7-E4). If ~/.hygur-edge/config.json exists,
-/// spawn `hygur-sidecar edge …` to push local sources (Files / Proton Bridge) to
-/// the configured cloud server. No-op when the config is absent. NOTE: the edge
-/// behaviour itself is validated via the `hygur edge` CLI — this is a convenience
-/// auto-spawn (its runtime is not exercised by the desktop CI build).
-fn maybe_spawn_edge(app: &AppHandle) {
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let path = std::path::Path::new(&home).join(".hygur-edge/config.json");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(r) => r,
-        Err(_) => return, // no config → no edge agent
-    };
-    let cfg: EdgeConfig = match serde_json::from_str(&raw) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[edge] bad config {}: {e}", path.display());
-            return;
-        }
-    };
-    if cfg.server.is_empty() {
-        return;
-    }
-
-    let mut args: Vec<String> = vec!["edge".into(), "--server".into(), cfg.server.clone()];
-    if !cfg.token_file.is_empty() {
-        args.push("--token-file".into());
-        args.push(cfg.token_file.clone());
-    }
-    if !cfg.folder.is_empty() {
-        args.push("--folder".into());
-        args.push(cfg.folder.clone());
-    }
-    if !cfg.proton_user.is_empty() {
-        args.push("--proton".into());
-        args.push("--proton-user".into());
-        args.push(cfg.proton_user.clone());
-        if !cfg.proton_mailbox.is_empty() {
-            args.push("--proton-mailbox".into());
-            args.push(cfg.proton_mailbox.clone());
-        }
-    }
-    if cfg.interval_secs > 0 {
-        args.push("--interval".into());
-        args.push(format!("{}s", cfg.interval_secs));
-    }
-
-    let mut envs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    if !cfg.token.is_empty() {
-        envs.insert("HYGUR_EDGE_TOKEN".into(), cfg.token.clone());
-    }
-    if !cfg.proton_password.is_empty() {
-        envs.insert("HYGUR_PROTON_PASSWORD".into(), cfg.proton_password.clone());
-    }
-
-    let cmd = match app.shell().sidecar("hygur-sidecar") {
-        Ok(c) => c.args(args).envs(envs),
-        Err(e) => {
-            log::error!("[edge] sidecar command: {e}");
-            return;
-        }
-    };
-    match cmd.spawn() {
-        Ok((mut rx, child)) => {
-            *app.state::<Sidecar>().edge_child.lock().unwrap() = Some(child);
-            tauri::async_runtime::spawn(async move {
-                while let Some(ev) = rx.recv().await {
-                    if let CommandEvent::Stdout(l) | CommandEvent::Stderr(l) = ev {
-                        log::info!("[edge] {}", String::from_utf8_lossy(&l).trim_end());
-                    }
-                }
-            });
-            log::info!("[edge] agent spawned (server={})", cfg.server);
-        }
-        Err(e) => log::error!("[edge] spawn failed: {e}"),
     }
 }
 
@@ -216,6 +114,161 @@ fn spawn_sidecar(app: AppHandle) {
     });
 }
 
+// ── Desktop engine-mode config (~/.hygur-edge/config.json) ───────────────────
+// The local↔cloud switch is a desktop-only setting, so it goes through the Tauri
+// IPC bridge (no network-reachable endpoint, smaller attack surface) rather than
+// a sidecar HTTP route. set_desktop_config writes the file the sidecar reads at
+// boot, then restarts the sidecar so the new mode applies. Fields/JSON match the
+// Go edge.Config exactly.
+
+fn edge_config_path() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(|h| std::path::Path::new(&h).join(".hygur-edge/config.json"))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct EdgeFileConfig {
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    server: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    folder: String,
+    #[serde(default)]
+    proton_user: String,
+    #[serde(default)]
+    proton_password: String,
+    #[serde(default)]
+    proton_mailbox: String,
+    #[serde(default)]
+    interval_secs: u64,
+}
+
+fn load_edge_file() -> EdgeFileConfig {
+    edge_config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Redacted view of the desktop config: secrets are reported as `*_set` booleans,
+/// never echoed back to the frontend.
+#[derive(serde::Serialize)]
+struct DesktopConfigView {
+    mode: String,
+    server: String,
+    folder: String,
+    proton_user: String,
+    proton_mailbox: String,
+    interval_secs: u64,
+    token_set: bool,
+    proton_password_set: bool,
+}
+
+#[tauri::command]
+fn get_desktop_config() -> DesktopConfigView {
+    let c = load_edge_file();
+    DesktopConfigView {
+        mode: c.mode,
+        server: c.server,
+        folder: c.folder,
+        proton_user: c.proton_user,
+        proton_mailbox: if c.proton_mailbox.is_empty() {
+            "All Mail".into()
+        } else {
+            c.proton_mailbox
+        },
+        interval_secs: c.interval_secs,
+        token_set: !c.token.is_empty(),
+        proton_password_set: !c.proton_password.is_empty(),
+    }
+}
+
+/// Incoming desktop config from the picker / Settings toggle. Blank `token` /
+/// `proton_password` mean "keep the stored secret" (the frontend never receives
+/// them, so a round-trip must not wipe them).
+#[derive(serde::Deserialize)]
+struct DesktopConfigInput {
+    mode: String,
+    #[serde(default)]
+    server: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    folder: String,
+    #[serde(default)]
+    proton_user: String,
+    #[serde(default)]
+    proton_password: String,
+    #[serde(default)]
+    proton_mailbox: String,
+    #[serde(default)]
+    interval_secs: u64,
+}
+
+#[tauri::command]
+fn set_desktop_config(app: AppHandle, cfg: DesktopConfigInput) -> Result<bool, String> {
+    let path = edge_config_path().ok_or("no HOME directory")?;
+    let mut next = load_edge_file();
+    // Proxy-relevant fields are wired once at boot, so a change there requires a
+    // sidecar restart. Source fields (folder/proton/interval) are re-read by the
+    // running edge loop each cycle — no restart needed.
+    let (old_mode, old_server, old_token) =
+        (next.mode.clone(), next.server.clone(), next.token.clone());
+
+    next.mode = cfg.mode.trim().to_string();
+    next.server = cfg.server.trim().to_string();
+    if !cfg.token.trim().is_empty() {
+        next.token = cfg.token.trim().to_string(); // blank = keep stored
+    }
+    next.folder = cfg.folder.trim().to_string();
+    next.proton_user = cfg.proton_user.trim().to_string();
+    if !cfg.proton_password.is_empty() {
+        next.proton_password = cfg.proton_password; // blank = keep stored
+    }
+    next.proton_mailbox = if cfg.proton_mailbox.trim().is_empty() {
+        "All Mail".into()
+    } else {
+        cfg.proton_mailbox.trim().to_string()
+    };
+    next.interval_secs = cfg.interval_secs;
+
+    let restart =
+        next.mode != old_mode || next.server != old_server || next.token != old_token;
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
+    }
+    let data = serde_json::to_string_pretty(&next).map_err(|e| format!("encode: {e}"))?;
+    std::fs::write(&path, data).map_err(|e| format!("write: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    if restart {
+        restart_sidecar(&app);
+    }
+    Ok(restart)
+}
+
+/// Restart the supervised sidecar so it re-reads its mode from the config: reset
+/// the rapid-restart guard (a deliberate switch isn't a crash loop), then kill the
+/// child — the supervisor's Terminated handler respawns it, which re-reads the
+/// config and applies the new mode (proxy + in-process edge push).
+fn restart_sidecar(app: &AppHandle) {
+    let state = app.state::<Sidecar>();
+    state.restarts.lock().unwrap().0 = 0;
+    let child = state.child.lock().unwrap().take();
+    if let Some(child) = child {
+        let _ = child.kill();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -232,11 +285,11 @@ pub fn run() {
                 })
                 .build(),
         )
+        .invoke_handler(tauri::generate_handler![get_desktop_config, set_desktop_config])
         .manage(Sidecar {
             child: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             restarts: Mutex::new((0, Instant::now())),
-            edge_child: Mutex::new(None),
         })
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -320,12 +373,11 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Spawn + supervise the bundled Hygur sidecar (serves the WebUI on :8420).
+            // Spawn + supervise the bundled Hygur sidecar (serves the WebUI on
+            // :8420). In cloud mode the sidecar reads ~/.hygur-edge/config.json and
+            // both proxies data/AI routes to the tenant AND pushes local sources
+            // in-process — so there is no separate edge agent to spawn here.
             spawn_sidecar(app.handle().clone());
-
-            // Optional thin-client edge agent (C7-E4): pushes local sources to a
-            // cloud server when ~/.hygur-edge/config.json is present (else no-op).
-            maybe_spawn_edge(app.handle());
 
             // Wait for the sidecar to bind, then point the (hidden) main window at
             // the sidecar-served WebUI — same-origin, so the auth token is injected
@@ -369,10 +421,6 @@ pub fn run() {
                 let child = state.child.lock().unwrap().take();
                 if let Some(child) = child {
                     let _ = child.kill();
-                }
-                let edge = state.edge_child.lock().unwrap().take();
-                if let Some(edge) = edge {
-                    let _ = edge.kill();
                 }
             }
             _ => {}

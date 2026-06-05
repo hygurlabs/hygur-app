@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
 import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
+import { isDesktop, getDesktopConfig, type DesktopConfig } from "../lib/desktop";
+import { ModePicker } from "../onboarding/ModePicker";
 import type {
   SidecarConfig,
   SidecarConfigPatch,
@@ -143,6 +145,54 @@ function ConnectionSection() {
   );
 }
 
+// MARK: - Engine mode (desktop only: local full engine vs cloud thin client)
+
+function EngineModeSection() {
+  const [cfg, setCfg] = useState<DesktopConfig | null>(null);
+  const [picker, setPicker] = useState(false);
+
+  const reload = () => {
+    void getDesktopConfig()
+      .then(setCfg)
+      .catch(() => {});
+  };
+  useEffect(() => {
+    if (isDesktop()) reload();
+  }, []);
+
+  if (!isDesktop()) return null;
+  if (picker) {
+    // A proxy-mode change reloads the page; otherwise we just close + refresh.
+    return (
+      <ModePicker
+        onDone={() => {
+          setPicker(false);
+          reload();
+        }}
+        onCancel={() => setPicker(false)}
+      />
+    );
+  }
+
+  const cloud = cfg?.mode === "cloud";
+  return (
+    <Section title="Engine mode">
+      <Row
+        label="Mode"
+        hint={
+          cloud
+            ? `Hygur Cloud — ${cfg?.server || "not set"}`
+            : "Local — full engine on this Mac"
+        }
+      >
+        <Button variant="ghost" onClick={() => setPicker(true)}>
+          {cloud ? "Reconfigure" : "Switch…"}
+        </Button>
+      </Row>
+    </Section>
+  );
+}
+
 export function Settings() {
   const qc = useQueryClient();
   const { data, isLoading, error, refetch } = useQuery({
@@ -248,6 +298,7 @@ export function Settings() {
       )}
 
       <ConnectionSection />
+      <EngineModeSection />
 
       {/* In a managed cloud tenant the AI runtime is operator-controlled and
           redacted server-side — hide the editor entirely. */}

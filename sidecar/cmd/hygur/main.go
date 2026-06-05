@@ -29,6 +29,7 @@ import (
 	imapconnector "github.com/hygur/sidecar/internal/connectors/imap"
 	mailconnector "github.com/hygur/sidecar/internal/connectors/mail"
 	notesconnector "github.com/hygur/sidecar/internal/connectors/notes"
+	"github.com/hygur/sidecar/internal/edge"
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/health"
 	"github.com/hygur/sidecar/internal/ingest"
@@ -694,6 +695,35 @@ func main() {
 	}
 	server.SetHostGuard(cfg.Auth.Mode == "local" || len(allowedHosts) > 0, allowedHosts)
 	server.SetManaged(managedDeployment) // don't ship the loopback token into the cloud SPA
+	// Cloud-backed thin-client mode (desktop "cloud" mode): the local loopback
+	// sidecar proxies data/AI routes to the tenant with the device token injected,
+	// keeping the webview same-origin so the Tauri commands keep working. Two
+	// activation paths — env wins (for tests / headless): HYGUR_CLOUD_UPSTREAM
+	// (+ HYGUR_CLOUD_TOKEN), or the desktop single-config file
+	// ~/.hygur-edge/config.json with "mode":"cloud", whose Server/Token then back
+	// BOTH the proxy and the in-process edge push (one binary + one config does
+	// everything). Off on the tenant pod itself (no config file, no env).
+	cloudUpstream := strings.TrimSpace(os.Getenv("HYGUR_CLOUD_UPSTREAM"))
+	cloudToken := strings.TrimSpace(os.Getenv("HYGUR_CLOUD_TOKEN"))
+	edgeCfgPath := edge.DefaultConfigPath()
+	edgeCfg, _ := edge.LoadConfig(edgeCfgPath)
+	edgeCloud := edgeCfg != nil && edgeCfg.Mode == "cloud"
+	if cloudUpstream == "" && edgeCloud {
+		cloudUpstream = strings.TrimSpace(edgeCfg.Server)
+		cloudToken = strings.TrimSpace(edgeCfg.Token)
+	}
+	if cloudUpstream != "" {
+		if err := server.SetCloudProxy(cloudUpstream, cloudToken); err != nil {
+			logger.Fatal().Err(err).Msg("cloud mode requested but upstream invalid")
+		}
+		logger.Info().Str("upstream", cloudUpstream).Msg("cloud-backed mode: data/AI routes proxied to tenant")
+		// One process: push local sources (Files/Proton) to the tenant from the
+		// same config instead of a separate `hygur edge` process.
+		if edgeCloud && (edgeCfg.Folder != "" || edgeCfg.ProtonUser != "") {
+			go edge.NewRunner(edgeCfgPath).RunLoop(ctx)
+			logger.Info().Msg("edge push loop started in-process")
+		}
+	}
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)

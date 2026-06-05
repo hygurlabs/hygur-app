@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { markOnboardingComplete } from "../lib/onboarding";
 import { native } from "../lib/native";
 import { isRemote } from "../lib/connection";
+import { api } from "../lib/api";
 import {
   StepAccounts,
   StepModel,
@@ -35,10 +36,11 @@ const ALL_STEPS: StepDef[] = [
 //  - "permissions" (macOS perms) only makes sense in a native shell — skip in the
 //    browser / Tauri web client (no native bridge).
 //  - "model" (LLM endpoints) is for a LOCAL server you configure yourself; on a
-//    remote/managed cloud tenant the server owns its LLM (endpoints redacted), so
-//    skip it.
-function visibleSteps(): StepDef[] {
-  const remote = isRemote();
+//    remote OR managed cloud tenant the server owns its LLM (endpoints redacted),
+//    so skip it. `managed` covers the proxy thin client, where isRemote() is false
+//    (same-origin) but /config reports managed.
+function visibleSteps(managed: boolean): StepDef[] {
+  const remote = isRemote() || managed;
   return ALL_STEPS.filter((s) => {
     if (s.id === "permissions") return native.available;
     if (s.id === "model") return !remote;
@@ -49,8 +51,32 @@ function visibleSteps(): StepDef[] {
 /** Full-screen first-run wizard. Replaces the app shell until the user finishes
  *  or skips through it; `onComplete` swaps the real app in. */
 export function Onboarding({ onComplete }: { onComplete: () => void }) {
-  const [STEPS] = useState(visibleSteps); // context-filtered, fixed for the run
+  // Resolve managed (server owns its LLM) before fixing the step list, so the
+  // "model" step is correctly skipped on a cloud tenant — including the proxy
+  // thin client where isRemote() is false. Hold the first paint until known
+  // (the shell shows its own "Starting Hygur…" cover meanwhile).
+  const [managed, setManaged] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .config()
+      .then((c) => {
+        if (!cancelled) setManaged(!!c.managed);
+      })
+      .catch(() => {
+        if (!cancelled) setManaged(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const STEPS = useMemo(
+    () => (managed === null ? null : visibleSteps(managed)),
+    [managed],
+  );
   const [index, setIndex] = useState(0);
+
+  if (!STEPS) return null; // brief async check; nothing painted yet
   const step = STEPS[index];
   const isLast = index === STEPS.length - 1;
 

@@ -1,0 +1,266 @@
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { Button, TextInput } from "../components/ui";
+import {
+  getDesktopConfig,
+  setDesktopConfig,
+  waitForSidecarThenReload,
+  type DesktopConfigInput,
+} from "../lib/desktop";
+import logo from "../assets/logo.png";
+
+/** Desktop engine-mode chooser. Shown full-screen at first run (no onCancel), or
+ *  as a modal from Settings to switch/edit later (onCancel closes it). Writes the
+ *  choice to ~/.hygur-edge/config.json via the Tauri core; a proxy-mode change
+ *  restarts the sidecar and reloads, otherwise it just proceeds. */
+export function ModePicker({
+  onDone,
+  onCancel,
+}: {
+  onDone: () => void;
+  onCancel?: () => void;
+}) {
+  const [view, setView] = useState<"cards" | "cloud">("cards");
+  const [server, setServer] = useState("");
+  const [token, setToken] = useState("");
+  const [tokenSet, setTokenSet] = useState(false);
+  const [folder, setFolder] = useState("");
+  const [protonUser, setProtonUser] = useState("");
+  const [protonPassword, setProtonPassword] = useState("");
+  const [protonPwSet, setProtonPwSet] = useState(false);
+  const [protonMailbox, setProtonMailbox] = useState("All Mail");
+  const [intervalMin, setIntervalMin] = useState(15);
+  const [busy, setBusy] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Prefill from the stored config so the Settings re-config path can edit values
+  // (secrets come back only as *_set flags — blank fields keep them).
+  useEffect(() => {
+    let cancelled = false;
+    void getDesktopConfig()
+      .then((c) => {
+        if (cancelled) return;
+        setServer(c.server);
+        setTokenSet(c.token_set);
+        setFolder(c.folder);
+        setProtonUser(c.proton_user);
+        setProtonPwSet(c.proton_password_set);
+        setProtonMailbox(c.proton_mailbox || "All Mail");
+        setIntervalMin(c.interval_secs > 0 ? Math.round(c.interval_secs / 60) : 15);
+        if (c.mode === "cloud") setView("cloud");
+      })
+      .catch((e) => {
+        // Surface it rather than render an empty form silently — if the Tauri
+        // IPC is unreachable, the user (and we) need to see why.
+        if (!cancelled) setError(`Couldn't read desktop config — ${(e as Error).message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const apply = async (input: DesktopConfigInput) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const restarted = await setDesktopConfig(input);
+      if (restarted) {
+        setRestarting(true);
+        await waitForSidecarThenReload();
+      } else {
+        onDone();
+      }
+    } catch (e) {
+      setError((e as Error).message ?? String(e));
+      setBusy(false);
+    }
+  };
+
+  const chooseLocal = () => void apply({ mode: "local" });
+
+  const chooseCloud = async () => {
+    const ep = server.trim().replace(/\/+$/, "");
+    if (!ep) return setError("Enter your Hygur Cloud server URL.");
+    if (!tokenSet && !token.trim()) return setError("A device token is required.");
+    setBusy(true);
+    setError(null);
+    try {
+      // Reachability sanity check (public /version; the cloud allows the loopback origin).
+      const r = await fetch(ep + "/version");
+      if (!r.ok) throw new Error(`server responded ${r.status}`);
+    } catch (e) {
+      setError(`Couldn't reach ${ep} — ${(e as Error).message}`);
+      setBusy(false);
+      return;
+    }
+    await apply({
+      mode: "cloud",
+      server: ep,
+      token: token.trim(),
+      folder: folder.trim(),
+      proton_user: protonUser.trim(),
+      proton_password: protonPassword,
+      proton_mailbox: protonMailbox.trim() || "All Mail",
+      interval_secs: Math.max(0, Math.round(intervalMin)) * 60,
+    });
+  };
+
+  if (restarting) {
+    return createPortal(
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8 text-center">
+        <img src={logo} alt="" className="mb-5 size-16 rounded-[22%] shadow-sm" />
+        <p className="text-[14px] font-medium">Applying your choice…</p>
+        <p className="mt-1 text-[13px] text-muted">Restarting Hygur — one moment.</p>
+      </div>,
+      document.body,
+    );
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8">
+      <div className="w-full max-w-[460px]">
+        <div className="mb-7 flex flex-col items-center text-center">
+          <img src={logo} alt="" className="mb-4 size-20 rounded-[22%] shadow-sm" />
+          <h1 className="font-display text-[26px] font-semibold leading-tight tracking-tight">
+            {view === "cards" ? "How do you want to run Hygur?" : "Connect to Hygur Cloud"}
+          </h1>
+          <p className="mt-2 max-w-[44ch] text-[13.5px] leading-relaxed text-muted">
+            {view === "cards"
+              ? "Run everything locally on this Mac, or use Hygur Cloud and let this app push your local files & mail to it."
+              : "Your local files & mail stay on this device; only extracted text is pushed. The token is stored locally, never in the browser."}
+          </p>
+        </div>
+
+        {error && (
+          <div className="mb-4 rounded-lg border border-danger/40 bg-danger/5 px-3.5 py-2.5 text-[12.5px] text-danger">
+            {error}
+          </div>
+        )}
+
+        {view === "cards" ? (
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={() => setView("cloud")}
+              disabled={busy}
+              className="rounded-xl border border-border px-4 py-3.5 text-left transition-colors hover:border-accent hover:bg-accent/5 disabled:opacity-50"
+            >
+              <div className="text-[14px] font-semibold">Hygur Cloud</div>
+              <div className="mt-0.5 text-[12.5px] text-muted">
+                Thin client — your knowledge base, AI and search run in the cloud; this app pushes local sources.
+              </div>
+            </button>
+            <button
+              onClick={chooseLocal}
+              disabled={busy}
+              className="rounded-xl border border-border px-4 py-3.5 text-left transition-colors hover:border-accent hover:bg-accent/5 disabled:opacity-50"
+            >
+              <div className="text-[14px] font-semibold">Run locally</div>
+              <div className="mt-0.5 text-[12.5px] text-muted">
+                Full local engine — everything stays on this Mac (you configure the LLM endpoints).
+              </div>
+            </button>
+            {onCancel && (
+              <button
+                onClick={onCancel}
+                className="mt-1 self-center rounded-lg px-2 py-1.5 text-[13px] text-muted transition-colors hover:text-text"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-medium">Server URL</span>
+              <TextInput
+                value={server}
+                spellCheck={false}
+                autoCapitalize="off"
+                placeholder="https://cloud.hygur.ai"
+                onChange={(e) => setServer(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-medium">
+                Device token{tokenSet && " (leave blank to keep current)"}
+              </span>
+              <TextInput
+                type="password"
+                value={token}
+                spellCheck={false}
+                autoCapitalize="off"
+                placeholder={tokenSet ? "••••••••" : "device JWT"}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </label>
+
+            <div className="mt-1 text-[12px] font-medium uppercase tracking-wide text-muted">
+              Local sources (optional)
+            </div>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-medium">Files folder</span>
+              <TextInput
+                value={folder}
+                spellCheck={false}
+                autoCapitalize="off"
+                placeholder="/Users/you/Documents/work"
+                onChange={(e) => setFolder(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-medium">Proton Bridge email</span>
+              <TextInput
+                value={protonUser}
+                spellCheck={false}
+                autoCapitalize="off"
+                placeholder="you@proton.me (Proton Bridge running)"
+                onChange={(e) => setProtonUser(e.target.value)}
+              />
+            </label>
+            {protonUser.trim() && (
+              <label className="block">
+                <span className="mb-1.5 block text-[13px] font-medium">
+                  Proton Bridge password{protonPwSet && " (leave blank to keep current)"}
+                </span>
+                <TextInput
+                  type="password"
+                  value={protonPassword}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  placeholder={protonPwSet ? "••••••••" : "Bridge app password"}
+                  onChange={(e) => setProtonPassword(e.target.value)}
+                />
+              </label>
+            )}
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-medium">Sync every (minutes, 0 = manual)</span>
+              <TextInput
+                type="number"
+                value={String(intervalMin)}
+                onChange={(e) => setIntervalMin(Number(e.target.value) || 0)}
+              />
+            </label>
+
+            <div className="mt-2 flex items-center gap-3">
+              <Button onClick={chooseCloud} disabled={busy}>
+                {busy ? "Connecting…" : "Connect"}
+              </Button>
+              <button
+                onClick={() => {
+                  setError(null);
+                  setView("cards");
+                }}
+                disabled={busy}
+                className="rounded-lg px-2 py-1.5 text-[13px] text-muted transition-colors hover:text-text disabled:opacity-50"
+              >
+                Back
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}

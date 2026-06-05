@@ -12,6 +12,7 @@ import (
 // edited via the local config UI. Holds the cloud connection + which local
 // sources to push. The Proton password is stored here (file mode 0600).
 type Config struct {
+	Mode           string `json:"mode"`            // "cloud" = thin client (proxy + push); "" / "local" = full local engine
 	Server         string `json:"server"`          // https://<tenant>.hygur.ai
 	Token          string `json:"token"`           // device JWT
 	Folder         string `json:"folder"`          // Files source (empty = off)

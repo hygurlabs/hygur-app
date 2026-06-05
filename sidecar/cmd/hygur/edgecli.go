@@ -50,21 +50,10 @@ func runEdgeUI(addr, cfgPath string) {
 	defer stop()
 	runner := edge.NewRunner(cfgPath)
 
-	// Background loop: honor the config's interval; re-read it each cycle so UI
-	// edits take effect. Interval 0 → idle (manual "Sync now" only).
-	go func() {
-		for {
-			cfg, _ := edge.LoadConfig(cfgPath)
-			if cfg.Server != "" && cfg.Token != "" && cfg.IntervalSecs > 0 {
-				runner.RunOnce(ctx)
-				if !sleepCtx(ctx, time.Duration(cfg.IntervalSecs)*time.Second) {
-					return
-				}
-			} else if !sleepCtx(ctx, 10*time.Second) {
-				return
-			}
-		}
-	}()
+	// Background sync loop: honors the config's interval, re-reading it each cycle
+	// so UI edits take effect. Interval 0 → idle (manual "Sync now" only). Same
+	// loop the in-process server uses in cloud mode.
+	go runner.RunLoop(ctx)
 
 	url := "http://" + addr
 	fmt.Printf("Hygur edge — open the config UI: %s\n", url)
@@ -121,16 +110,6 @@ func runEdgeHeadless(server, tokenFile, folder string, useProton bool, protonUse
 		case <-ticker.C:
 			runOnce()
 		}
-	}
-}
-
-// sleepCtx waits d or returns false if the context is cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(d):
-		return true
 	}
 }
 

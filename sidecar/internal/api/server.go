@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 	"time"
 
@@ -55,6 +56,7 @@ type Server struct {
 	hostGuardEnabled bool               // DNS-rebinding Host allow-list (SetHostGuard)
 	allowedHosts     map[string]bool
 	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
+	cloudProxy       *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
 }
 
 // SetManaged marks this as a Hygur-operated cloud tenant. The served SPA then
@@ -205,6 +207,12 @@ func (s *Server) setupMiddleware() {
 
 	// Panic recovery with logging
 	s.router.Use(s.recovererWithLogger)
+
+	// Cloud-backed thin-client proxy. No-op in local mode; when SetCloudProxy is
+	// active it forwards data/AI routes to the tenant (runs after logger+recoverer
+	// so proxied requests are still logged + panic-protected, and before the
+	// per-route auth so the device token — not the local token — authenticates).
+	s.router.Use(s.cloudProxyMiddleware)
 }
 
 // LongOperationTimeout is the timeout for long-running operations like folder ingestion.
