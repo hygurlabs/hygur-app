@@ -14,6 +14,12 @@ rust-version = "1.77.2"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Name the binary "Hygur" so it matches productName — otherwise macOS shows the
+# Cargo package name ("app") in Cmd+Tab / the menu bar.
+[[bin]]
+name = "Hygur"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
 
