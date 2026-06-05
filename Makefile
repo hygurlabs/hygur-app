@@ -21,7 +21,7 @@ TOKEN_FILE := $(HOME)/Library/Application Support/Hygur/token
 SIDECAR_URL := http://localhost:8420
 
 .PHONY: all test test-go check-api dev reset-db \
-        webui build-server docker-image \
+        webui build-server build-console docker-image \
         tauri-sidecar tauri-dev tauri-build clean
 
 all: test
@@ -121,6 +121,15 @@ build-server: webui
 		-ldflags "-X github.com/hygur/sidecar/internal/version.Version=$(VERSION)" \
 		-o bin/hygur-server ./cmd/hygur
 	@echo "✅ $(SIDECAR)/bin/hygur-server"
+
+## Build the control-plane binary (C8): enroll/refresh API + account/code admin.
+## No WebUI dependency (it serves no SPA).
+build-console:
+	@echo "→ Build hygur-console (control plane)..."
+	cd $(SIDECAR) && CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
+		-ldflags "-X github.com/hygur/sidecar/internal/version.Version=$(VERSION)" \
+		-o bin/hygur-console ./cmd/hygur-console
+	@echo "✅ $(SIDECAR)/bin/hygur-console"
 
 # ── Tauri 2 (cross-platform shell ; remplace l'ancien macos-app SwiftUI) ──────
 # The Tauri app embeds + supervises the sidecar and points its window at the
