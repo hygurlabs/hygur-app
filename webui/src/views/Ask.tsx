@@ -21,6 +21,8 @@ import {
   FileDown,
   Printer,
   ChevronRight,
+  FileAudio,
+  Upload,
 } from "lucide-react";
 import { streamChat, api } from "../lib/api";
 import { native } from "../lib/native";
@@ -29,6 +31,7 @@ import type {
   ChatMessage,
   Mention,
   RagSource,
+  SessionAttachment,
   SessionSummary,
 } from "../lib/types";
 import { fmtDate, srcLabel } from "../lib/format";
@@ -103,6 +106,77 @@ function CopyButton({ text, title = "Copy" }: { text: string; title?: string }) 
   );
 }
 
+// Audio format → MIME type for the inline <audio> data URI.
+const AUDIO_MIME: Record<string, string> = {
+  wav: "audio/wav",
+  mp3: "audio/mpeg",
+  mpeg: "audio/mpeg",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+  flac: "audio/flac",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+};
+const audioMime = (format: string): string =>
+  AUDIO_MIME[format.toLowerCase()] || `audio/${format || "wav"}`;
+
+/** Maps a persisted session attachment to the in-memory AttachmentRef the turn
+ *  renderer uses. Purged audio arrives with available=false and no data. */
+function sessionAttachmentToRef(a: SessionAttachment): AttachmentRef {
+  if (a.type === "image") {
+    return {
+      type: "image",
+      data: a.data ?? "",
+      mime_type: a.mime_type ?? "image/png",
+      title: a.title,
+    };
+  }
+  return {
+    type: "audio",
+    data: a.data ?? "",
+    format: a.format ?? "wav",
+    title: a.title,
+    available: a.available,
+  };
+}
+
+/** An audio attachment in a turn: an inline player when the bytes are present,
+ *  or a clean (non-alarming) placeholder when the recording was purged by the
+ *  retention cap. */
+function AudioAttachment({
+  att,
+}: {
+  att: Extract<AttachmentRef, { type: "audio" }>;
+}) {
+  const playable = att.available !== false && Boolean(att.data);
+  if (!playable) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface2/50 px-3 py-2 text-[12.5px] text-muted">
+        <FileAudio size={14} strokeWidth={1.75} className="shrink-0 text-faint" />
+        <span className="truncate">
+          {att.title ? `${att.title} — ` : ""}enregistrement non conservé
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-border bg-surface2 p-2.5">
+      {att.title && (
+        <div className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[12px] text-muted">
+          <FileAudio size={13} strokeWidth={1.9} className="shrink-0 text-faint" />
+          <span className="truncate">{att.title}</span>
+        </div>
+      )}
+      <audio
+        controls
+        preload="metadata"
+        src={`data:${audioMime(att.format)};base64,${att.data}`}
+        className="h-9 w-full"
+      />
+    </div>
+  );
+}
+
 /** Renders the conversation as Markdown for export. */
 function buildChatMarkdown(turns: Turn[]): string {
   const out: string[] = ["# Conversation Hygur", ""];
@@ -110,10 +184,16 @@ function buildChatMarkdown(turns: Turn[]): string {
     const images = (t.attachments ?? []).filter(
       (a): a is Extract<AttachmentRef, { type: "image" }> => a.type === "image",
     );
-    if (!t.content && images.length === 0) continue;
+    const audios = (t.attachments ?? []).filter(
+      (a): a is Extract<AttachmentRef, { type: "audio" }> => a.type === "audio",
+    );
+    if (!t.content && images.length === 0 && audios.length === 0) continue;
     out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "");
     for (const a of images) {
       out.push(`_[Image jointe : ${a.title || "image"}]_`, "");
+    }
+    for (const a of audios) {
+      out.push(`_[Audio joint : ${a.title || "audio"}]_`, "");
     }
     if (t.content) out.push(t.content, "");
     if (t.role === "assistant" && t.sources?.length) {
@@ -125,6 +205,120 @@ function buildChatMarkdown(turns: Turn[]): string {
     }
   }
   return out.join("\n");
+}
+
+// MARK: - File → attachment (shared by 📎 and drag-and-drop)
+
+// Reads a file as raw (un-prefixed) base64 for inline image/audio attachments.
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = reader.result as string;
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Encodes a mono AudioBuffer as a 16-bit PCM WAV file, returning un-prefixed base64.
+function wavBase64FromBuffer(buf: AudioBuffer): string {
+  const ch = buf.getChannelData(0);
+  const n = ch.length;
+  const view = new DataView(new ArrayBuffer(44 + n * 2));
+  const str = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  };
+  str(0, "RIFF");
+  view.setUint32(4, 36 + n * 2, true);
+  str(8, "WAVE");
+  str(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, buf.sampleRate, true);
+  view.setUint32(28, buf.sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits/sample
+  str(36, "data");
+  view.setUint32(40, n * 2, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, ch[i]));
+    view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    o += 2;
+  }
+  const u8 = new Uint8Array(view.buffer);
+  let bin = "";
+  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+  return btoa(bin);
+}
+
+// Decodes any browser-playable audio file and re-encodes it as 16 kHz mono
+// 16-bit PCM WAV (un-prefixed base64). Used for m4a/AAC, which Gemma's vLLM
+// can't decode but WebKit can. Throws a clear error if decoding fails.
+async function transcodeToWav16kMono(file: File): Promise<string> {
+  const Ctx: typeof AudioContext =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext })
+      .webkitAudioContext;
+  const Offline: typeof OfflineAudioContext =
+    window.OfflineAudioContext ||
+    (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
+      .webkitOfflineAudioContext;
+  if (!Ctx || !Offline) {
+    throw new Error(`Audio "${file.name}" : transcodage non supporté par ce navigateur`);
+  }
+  const buf = await file.arrayBuffer();
+  const decodeCtx = new Ctx();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await decodeCtx.decodeAudioData(buf.slice(0));
+  } catch {
+    throw new Error(`Audio "${file.name}" : format non décodable`);
+  } finally {
+    void decodeCtx.close();
+  }
+  const rate = 16000;
+  const off = new Offline(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  return wavBase64FromBuffer(await off.startRendering());
+}
+
+// Turns a dropped/picked file into an AttachmentRef: images & audio go inline to
+// the multimodal model (F3); everything else is uploaded + indexed as a doc.
+async function buildAttachment(file: File): Promise<AttachmentRef> {
+  const mime = file.type || "";
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (mime.startsWith("image/")) {
+    const data = await fileToBase64(file);
+    return { type: "image", data, mime_type: mime, title: file.name };
+  }
+  if (
+    mime.startsWith("audio/") ||
+    ["m4a", "mp3", "wav", "ogg", "mp4", "aac", "m4b", "flac", "opus"].includes(ext)
+  ) {
+    // Gemma's vLLM audio loader can't decode the m4a/AAC container — it silently
+    // drops the audio. WebKit *can*, so we transcode AAC (and any unknown
+    // container) to 16 kHz mono WAV. ogg/mp3/wav/flac pass through untouched.
+    const knownGood = ["ogg", "mp3", "mpeg", "wav", "flac", "opus"];
+    const isAac =
+      ["m4a", "mp4", "m4b", "aac"].includes(ext) || /mp4|aac|x-m4a/.test(mime);
+    if (!isAac && knownGood.includes(ext)) {
+      const data = await fileToBase64(file);
+      return { type: "audio", data, format: ext === "mpeg" ? "mp3" : ext, title: file.name };
+    }
+    const data = await transcodeToWav16kMono(file);
+    return { type: "audio", data, format: "wav", title: file.name };
+  }
+  // Documents (PDF/DOCX/text) → index in the KB, attach by reference.
+  const res = await api.uploadFile(file);
+  return { type: "document", content_id: res.content_id, title: res.title || file.name };
 }
 
 const EXAMPLES = [
@@ -166,6 +360,12 @@ export function Ask() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const hidOnStreamRef = useRef(false);
+
+  // Drag-and-drop attach: a depth counter rides the dragenter/leave bubbling so
+  // the overlay doesn't flicker as the pointer crosses child elements.
+  const [dragging, setDragging] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
+  const dragDepth = useRef(0);
 
   const [params, setParams] = useSearchParams();
   const lastQ = useRef<string | null>(null);
@@ -245,6 +445,9 @@ export function Ask() {
           role: m.role,
           content: m.content,
           sources: m.sources,
+          ...(m.attachments?.length
+            ? { attachments: m.attachments.map(sessionAttachmentToRef) }
+            : {}),
         })),
       );
       setAttachments([]);
@@ -382,9 +585,59 @@ export function Ask() {
     }
   }
 
+  const isFileDrag = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types).includes("Files");
+
+  function onDragEnter(e: React.DragEvent) {
+    if (!isFileDrag(e)) return;
+    dragDepth.current += 1;
+    setDragging(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (isFileDrag(e)) e.preventDefault(); // required to allow the drop
+  }
+  function onDragLeave() {
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  }
+  async function onDropFiles(e: React.DragEvent) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    setDropError(null);
+    try {
+      for (const file of Array.from(files)) {
+        const att = await buildAttachment(file);
+        setAttachments((prev) => [...prev, att]);
+      }
+    } catch (err) {
+      setDropError((err as Error).message);
+    }
+  }
+
   return (
     <div className="flex h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className="relative flex min-w-0 flex-1 flex-col"
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDropFiles}
+      >
+        {dragging && (
+          <div className="pointer-events-none absolute inset-0 z-40 m-3 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-accent bg-accent-weak/70 backdrop-blur-sm print:hidden">
+            <Upload size={28} strokeWidth={1.75} className="text-accent" />
+            <span className="text-[14px] font-medium text-accent">
+              Déposez vos fichiers pour les joindre
+            </span>
+          </div>
+        )}
         <header className="flex items-center justify-between border-b border-border px-7 py-3 print:hidden">
           <span className="font-display text-[15px] font-semibold tracking-tight">
             Ask Hygur
@@ -486,6 +739,20 @@ export function Ask() {
                             ))}
                         </div>
                       )}
+                      {/* Sent audio: an inline player on replay, or a clean
+                          placeholder when the recording was purged by the cap. */}
+                      {t.attachments?.some((a) => a.type === "audio") && (
+                        <div className="flex w-full max-w-[420px] flex-col gap-2 print:hidden">
+                          {t.attachments
+                            .filter(
+                              (a): a is Extract<AttachmentRef, { type: "audio" }> =>
+                                a.type === "audio",
+                            )
+                            .map((a, i) => (
+                              <AudioAttachment key={i} att={a} />
+                            ))}
+                        </div>
+                      )}
                       {t.content && (
                         <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
                           {t.content}
@@ -505,6 +772,14 @@ export function Ask() {
             )}
           </div>
         </div>
+
+        {dropError && (
+          <div className="px-7 print:hidden">
+            <div className="mx-auto max-w-[760px] pb-1">
+              <ErrorBanner message={`Pièce jointe : ${dropError}`} />
+            </div>
+          </div>
+        )}
 
         <div className="print:hidden">
           <Composer
@@ -658,49 +933,8 @@ function Composer({
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
-        const mime = file.type || "";
-        const ext = (file.name.split(".").pop() || "").toLowerCase();
-        if (mime.startsWith("image/")) {
-          // Live image → multimodal model sees it directly (F3).
-          const data = await fileToBase64(file);
-          setAttachments((prev) => [
-            ...prev,
-            { type: "image", data, mime_type: mime, title: file.name },
-          ]);
-        } else if (
-          mime.startsWith("audio/") ||
-          ["m4a", "mp3", "wav", "ogg", "mp4", "aac", "m4b", "flac", "opus"].includes(ext)
-        ) {
-          // Live audio → model transcribes it directly (F3); no ingest round-trip.
-          // Gemma's vLLM audio loader can't decode the m4a/AAC container — it
-          // silently drops the audio so the model answers "no audio attached".
-          // WebKit *can* decode it, so we transcode AAC (and any unknown
-          // container) to 16 kHz mono WAV here. ogg/mp3/wav/flac decode
-          // server-side fine and pass through untouched.
-          const knownGood = ["ogg", "mp3", "mpeg", "wav", "flac", "opus"];
-          const isAac =
-            ["m4a", "mp4", "m4b", "aac"].includes(ext) || /mp4|aac|x-m4a/.test(mime);
-          let data: string;
-          let format: string;
-          if (!isAac && knownGood.includes(ext)) {
-            data = await fileToBase64(file);
-            format = ext === "mpeg" ? "mp3" : ext;
-          } else {
-            data = await transcodeToWav16kMono(file);
-            format = "wav";
-          }
-          setAttachments((prev) => [
-            ...prev,
-            { type: "audio", data, format, title: file.name },
-          ]);
-        } else {
-          // Documents (PDF/DOCX/text) → index in the KB, attach by reference.
-          const res = await api.uploadFile(file);
-          setAttachments((prev) => [
-            ...prev,
-            { type: "document", content_id: res.content_id, title: res.title || file.name },
-          ]);
-        }
+        const att = await buildAttachment(file);
+        setAttachments((prev) => [...prev, att]);
       }
     } catch (e) {
       setUploadError((e as Error).message);
@@ -708,87 +942,6 @@ function Composer({
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
-  }
-
-  // Reads a file as raw (un-prefixed) base64 for inline image/audio attachments.
-  function fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const res = reader.result as string;
-        const comma = res.indexOf(",");
-        resolve(comma >= 0 ? res.slice(comma + 1) : res);
-      };
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // Decodes any browser-playable audio file and re-encodes it as 16 kHz mono
-  // 16-bit PCM WAV (un-prefixed base64). Used for m4a/AAC, which Gemma's vLLM
-  // can't decode but WebKit can. Throws a clear error if decoding fails.
-  async function transcodeToWav16kMono(file: File): Promise<string> {
-    const Ctx: typeof AudioContext =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext;
-    const Offline: typeof OfflineAudioContext =
-      window.OfflineAudioContext ||
-      (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
-        .webkitOfflineAudioContext;
-    if (!Ctx || !Offline) {
-      throw new Error(`Audio "${file.name}" : transcodage non supporté par ce navigateur`);
-    }
-    const buf = await file.arrayBuffer();
-    const decodeCtx = new Ctx();
-    let decoded: AudioBuffer;
-    try {
-      decoded = await decodeCtx.decodeAudioData(buf.slice(0));
-    } catch {
-      throw new Error(`Audio "${file.name}" : format non décodable`);
-    } finally {
-      void decodeCtx.close();
-    }
-    const rate = 16000;
-    const off = new Offline(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
-    const src = off.createBufferSource();
-    src.buffer = decoded;
-    src.connect(off.destination);
-    src.start();
-    return wavBase64FromBuffer(await off.startRendering());
-  }
-
-  // Encodes a mono AudioBuffer as a 16-bit PCM WAV file, returning un-prefixed base64.
-  function wavBase64FromBuffer(buf: AudioBuffer): string {
-    const ch = buf.getChannelData(0);
-    const n = ch.length;
-    const view = new DataView(new ArrayBuffer(44 + n * 2));
-    const str = (o: number, s: string) => {
-      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
-    };
-    str(0, "RIFF");
-    view.setUint32(4, 36 + n * 2, true);
-    str(8, "WAVE");
-    str(12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // mono
-    view.setUint32(24, buf.sampleRate, true);
-    view.setUint32(28, buf.sampleRate * 2, true); // byte rate
-    view.setUint16(32, 2, true); // block align
-    view.setUint16(34, 16, true); // bits/sample
-    str(36, "data");
-    view.setUint32(40, n * 2, true);
-    let o = 44;
-    for (let i = 0; i < n; i++) {
-      const s = Math.max(-1, Math.min(1, ch[i]));
-      view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      o += 2;
-    }
-    const u8 = new Uint8Array(view.buffer);
-    let bin = "";
-    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-    return btoa(bin);
   }
 
   async function toggleMic() {

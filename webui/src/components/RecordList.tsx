@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { FolderKanban } from "lucide-react";
 import { Badge } from "./ui";
 
 export interface RecordRow {
@@ -9,6 +10,10 @@ export interface RecordRow {
   excerpt?: string;
   accent?: string; // optional left color dot (tags, calendars)
   icon?: ReactNode; // optional leading source glyph
+  /** Optional attached project — rendered as a pill with the project glyph. */
+  projectName?: string;
+  /** Optional tags — rendered as colored pills (first 3, then a "+N" count). */
+  tags?: { name: string; color?: string }[];
   onClick?: () => void;
 }
 
@@ -61,6 +66,38 @@ export function RecordList({ rows }: { rows: RecordRow[] }) {
                 <p className="col-span-2 line-clamp-2 text-[13.5px] text-muted">
                   {r.excerpt}
                 </p>
+              )}
+              {(r.projectName || (r.tags && r.tags.length > 0)) && (
+                <div className="col-span-2 flex flex-wrap items-center gap-1.5">
+                  {r.projectName && (
+                    <span className="inline-flex max-w-[200px] items-center gap-1 rounded-full bg-surface2 px-2 py-0.5 text-[11.5px] text-muted">
+                      <FolderKanban
+                        size={11}
+                        strokeWidth={2}
+                        className="shrink-0 text-accent"
+                      />
+                      <span className="truncate">{r.projectName}</span>
+                    </span>
+                  )}
+                  {r.tags?.slice(0, 3).map((t) => (
+                    <span
+                      key={t.name}
+                      className="inline-flex max-w-[160px] items-center gap-1.5 rounded-full bg-surface2 px-2 py-0.5 text-[11.5px] text-muted"
+                    >
+                      <span
+                        aria-hidden
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ background: t.color || "#3B82F6" }}
+                      />
+                      <span className="truncate">{t.name}</span>
+                    </span>
+                  ))}
+                  {r.tags && r.tags.length > 3 && (
+                    <span className="text-[11px] text-faint">
+                      +{r.tags.length - 3}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           </li>

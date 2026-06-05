@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -855,14 +856,59 @@ func (h *RAGChatHandler) persistUserTurn(ctx context.Context, req RAGChatRequest
 			return
 		}
 	}
+	userMsgID := uuid.NewString()
 	if err := h.chatStore.AppendChatMessage(ctx, &store.ChatMessage{
-		MessageID: uuid.NewString(),
+		MessageID: userMsgID,
 		SessionID: req.SessionID,
 		Role:      "user",
 		Content:   userMsg,
 	}); err != nil {
 		h.logger.Debug().Err(err).Msg("chat persist: append user message failed")
+		return
 	}
+	// Persist the image/audio media of this turn so reopening the conversation
+	// re-displays the image and replays the audio. Documents are KB references
+	// (re-attachable by id), so they're not stored here.
+	if atts := latestUserMediaAttachments(req.Messages); len(atts) > 0 {
+		if err := h.chatStore.AppendChatMessageAttachments(ctx, userMsgID, atts); err != nil {
+			h.logger.Debug().Err(err).Msg("chat persist: append attachments failed")
+		}
+	}
+}
+
+// latestUserMediaAttachments extracts the image/audio attachments of the most
+// recent user message, decoding the wire base64 to raw bytes for storage.
+func latestUserMediaAttachments(messages []llm.Message) []store.ChatAttachment {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		var out []store.ChatAttachment
+		for _, att := range messages[i].Attachments {
+			switch att.Type {
+			case llm.AttachmentTypeImage:
+				data, err := base64.StdEncoding.DecodeString(att.Data)
+				if err != nil || len(data) == 0 {
+					continue
+				}
+				out = append(out, store.ChatAttachment{
+					Type: "image", Title: att.Title, MimeType: att.MimeType,
+					Data: data, ByteSize: len(data),
+				})
+			case llm.AttachmentTypeAudio:
+				data, err := base64.StdEncoding.DecodeString(att.Data)
+				if err != nil || len(data) == 0 {
+					continue
+				}
+				out = append(out, store.ChatAttachment{
+					Type: "audio", Title: att.Title, Format: att.Format,
+					Data: data, ByteSize: len(data),
+				})
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // persistAssistantTurn appends the assistant answer and its (deduplicated)

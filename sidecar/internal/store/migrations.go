@@ -199,6 +199,30 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 `,
 	},
+	// Migration 12 adds chat_message_attachments: the image/audio media of a
+	// user turn, so a reopened conversation re-displays the image and replays
+	// the audio. data is NULL once an audio recording is purged by the size cap
+	// (the row stays so the UI shows a clean "no longer available" placeholder).
+	// Idempotent on fresh installs (schemaSQL v1 declares the table too).
+	{
+		Version: 12,
+		Name:    "chat_message_attachments",
+		SQL: `
+CREATE TABLE IF NOT EXISTS chat_message_attachments (
+    message_id TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    format TEXT NOT NULL DEFAULT '',
+    data BLOB,
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_type ON chat_message_attachments(type, created_at);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

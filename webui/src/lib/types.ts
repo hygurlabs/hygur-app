@@ -12,7 +12,16 @@ export type Role = "user" | "assistant" | "system";
 export type AttachmentRef =
   | { type: "document"; content_id: string; title?: string }
   | { type: "image"; data: string; mime_type: string; title?: string }
-  | { type: "audio"; data: string; format: string; title?: string };
+  | {
+      type: "audio";
+      data: string;
+      format: string;
+      title?: string;
+      /** History-loaded audio whose bytes were purged by the retention cap:
+       *  false ⇒ show a "recording no longer available" placeholder. Undefined
+       *  for freshly-sent audio (data is present). */
+      available?: boolean;
+    };
 
 export interface ChatMessage {
   role: Role;
@@ -123,11 +132,24 @@ export interface SessionSummary {
   updated_at: string;
 }
 
+/** A media attachment returned with a persisted user turn (GET /sessions/{id}).
+ *  `data` is base64; absent when `available` is false (audio purged by the cap). */
+export interface SessionAttachment {
+  type: "image" | "audio";
+  title?: string;
+  mime_type?: string;
+  format?: string;
+  data?: string;
+  available: boolean;
+  byte_size?: number;
+}
+
 export interface SessionMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: RagSource[];
+  attachments?: SessionAttachment[];
   created_at: string;
 }
 

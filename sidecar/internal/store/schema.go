@@ -204,7 +204,27 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, ordinal);
+
+-- chat_message_attachments stores the media (image / audio) sent with a user
+-- turn so a reopened conversation can re-display the image and replay the
+-- audio. Bytes are stored raw (BLOB); data is NULL when an audio recording has
+-- been purged by the retention cap, in which case the row is kept so the UI can
+-- show a "recording no longer available" placeholder instead of a broken player.
+CREATE TABLE IF NOT EXISTS chat_message_attachments (
+    message_id TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL DEFAULT 0, -- order within the message
+    type TEXT NOT NULL,                 -- image | audio
+    title TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '', -- image MIME (e.g. image/png)
+    format TEXT NOT NULL DEFAULT '',    -- audio format (e.g. wav, mp3)
+    data BLOB,                          -- raw bytes; NULL once purged by the cap
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_type ON chat_message_attachments(type, created_at);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 11
+const CurrentSchemaVersion = 12

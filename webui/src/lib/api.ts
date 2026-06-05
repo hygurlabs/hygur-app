@@ -128,6 +128,7 @@ export const api = {
 
   tags: () => getJSON<{ tags: Tag[] }>("/tags"),
   createTag: (name: string) => postJSON<Tag>("/tags", { name }),
+  deleteTag: (id: string) => del(`/tags/${id}`),
   /** Maps tag NAMES to ids, creating any that don't exist yet. */
   resolveTagIds: async (names: string[], existing: Tag[]): Promise<string[]> => {
     const byName = new Map(existing.map((t) => [t.name.toLowerCase(), t.id]));

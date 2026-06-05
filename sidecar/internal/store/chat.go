@@ -32,6 +32,27 @@ type ChatMessage struct {
 	CreatedAt time.Time
 }
 
+// ChatAttachment is one media item (image / audio) carried by a user turn,
+// persisted so a reopened conversation can re-display / replay it. Data holds
+// the raw bytes (decoded from the wire base64); it is nil when the audio has
+// been purged by the retention cap, in which case the row is still returned so
+// the UI can show a "recording no longer available" placeholder.
+type ChatAttachment struct {
+	Type     string // "image" | "audio"
+	Title    string
+	MimeType string // image MIME
+	Format   string // audio format
+	Data     []byte // nil when purged
+	ByteSize int
+}
+
+// maxAudioAttachmentBytes caps the total retained audio across all
+// conversations. Once exceeded, the oldest audio recordings have their bytes
+// purged (data set to NULL) until back under the cap — the metadata row stays
+// so the history shows a clean placeholder. Images are never purged (small).
+// A var (not const) so tests can lower it without allocating the real cap.
+var maxAudioAttachmentBytes int64 = 200 << 20 // 200 MiB
+
 // CreateChatSession inserts a new conversation row. project_id may be nil.
 func (d *DB) CreateChatSession(ctx context.Context, s *ChatSession) error {
 	_, err := d.db.ExecContext(ctx, `
@@ -229,6 +250,132 @@ func (d *DB) ListChatMessages(ctx context.Context, sessionID string) ([]*ChatMes
 			m.Sources = sources.String
 		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// AppendChatMessageAttachments persists the media attached to a message (in
+// order) and then enforces the audio retention cap. Best-effort cap: a failure
+// to purge is non-fatal (the attachments are already stored).
+func (d *DB) AppendChatMessageAttachments(ctx context.Context, messageID string, atts []ChatAttachment) error {
+	if len(atts) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin attachments tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now()
+	for i, a := range atts {
+		var data any // keep SQL NULL for empty data rather than a 0-byte blob
+		if len(a.Data) > 0 {
+			data = a.Data
+		}
+		byteSize := a.ByteSize
+		if byteSize == 0 {
+			byteSize = len(a.Data)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO chat_message_attachments
+				(message_id, ordinal, type, title, mime_type, format, data, byte_size, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, messageID, i, a.Type, a.Title, a.MimeType, a.Format, data, byteSize, now); err != nil {
+			return fmt.Errorf("failed to insert chat attachment: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit attachments: %w", err)
+	}
+	if err := d.enforceAudioAttachmentCap(ctx); err != nil {
+		return fmt.Errorf("failed to enforce audio cap: %w", err)
+	}
+	return nil
+}
+
+// enforceAudioAttachmentCap purges (NULLs) the bytes of the oldest retained
+// audio attachments until total retained audio is back under the cap. Rows are
+// kept (only data is cleared) so the UI shows a placeholder.
+func (d *DB) enforceAudioAttachmentCap(ctx context.Context) error {
+	var total int64
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(byte_size), 0) FROM chat_message_attachments WHERE type = 'audio' AND data IS NOT NULL`,
+	).Scan(&total); err != nil {
+		return fmt.Errorf("failed to sum audio bytes: %w", err)
+	}
+	if total <= maxAudioAttachmentBytes {
+		return nil
+	}
+	// Collect oldest-first candidates, then purge (can't UPDATE while iterating
+	// the same SQLite connection's open rows).
+	type ref struct {
+		messageID string
+		ordinal   int
+		size      int64
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT message_id, ordinal, byte_size
+		FROM chat_message_attachments
+		WHERE type = 'audio' AND data IS NOT NULL
+		ORDER BY created_at ASC, message_id ASC, ordinal ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to list audio attachments: %w", err)
+	}
+	var refs []ref
+	for rows.Next() {
+		var r ref
+		if err := rows.Scan(&r.messageID, &r.ordinal, &r.size); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan audio attachment: %w", err)
+		}
+		refs = append(refs, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range refs {
+		if total <= maxAudioAttachmentBytes {
+			break
+		}
+		if _, err := d.db.ExecContext(ctx,
+			`UPDATE chat_message_attachments SET data = NULL WHERE message_id = ? AND ordinal = ?`,
+			r.messageID, r.ordinal,
+		); err != nil {
+			return fmt.Errorf("failed to purge audio attachment: %w", err)
+		}
+		total -= r.size
+	}
+	return nil
+}
+
+// ListChatMessageAttachments returns the attachments of every message in a
+// session, keyed by message_id and ordered within each message. A nil Data
+// means the bytes were purged (audio cap) — the caller renders a placeholder.
+func (d *DB) ListChatMessageAttachments(ctx context.Context, sessionID string) (map[string][]ChatAttachment, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT a.message_id, a.type, a.title, a.mime_type, a.format, a.data, a.byte_size
+		FROM chat_message_attachments a
+		JOIN chat_messages m ON m.message_id = a.message_id
+		WHERE m.session_id = ?
+		ORDER BY a.message_id ASC, a.ordinal ASC
+	`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list chat attachments: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]ChatAttachment)
+	for rows.Next() {
+		var mid string
+		var a ChatAttachment
+		var data []byte // scans NULL as nil
+		if err := rows.Scan(&mid, &a.Type, &a.Title, &a.MimeType, &a.Format, &data, &a.ByteSize); err != nil {
+			return nil, fmt.Errorf("failed to scan chat attachment: %w", err)
+		}
+		a.Data = data
+		out[mid] = append(out[mid], a)
 	}
 	return out, rows.Err()
 }

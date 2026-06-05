@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -33,13 +34,27 @@ type SessionSummaryDTO struct {
 	UpdatedAt    string  `json:"updated_at"`
 }
 
+// ChatAttachmentDTO is one media attachment (image / audio) of a user turn.
+// Available is false when an audio recording's bytes were purged by the
+// retention cap — the client then shows a placeholder instead of a player.
+type ChatAttachmentDTO struct {
+	Type      string `json:"type"` // image | audio
+	Title     string `json:"title,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`
+	Format    string `json:"format,omitempty"`
+	Data      string `json:"data,omitempty"` // base64; empty when purged
+	Available bool   `json:"available"`
+	ByteSize  int    `json:"byte_size,omitempty"`
+}
+
 // ChatMessageDTO is one turn in a session detail.
 type ChatMessageDTO struct {
-	ID        string      `json:"id"`
-	Role      string      `json:"role"`
-	Content   string      `json:"content"`
-	Sources   []RAGSource `json:"sources,omitempty"`
-	CreatedAt string      `json:"created_at"`
+	ID          string              `json:"id"`
+	Role        string              `json:"role"`
+	Content     string              `json:"content"`
+	Sources     []RAGSource         `json:"sources,omitempty"`
+	Attachments []ChatAttachmentDTO `json:"attachments,omitempty"`
+	CreatedAt   string              `json:"created_at"`
 }
 
 // SessionDetailDTO is a full conversation with its turns.
@@ -102,6 +117,12 @@ func (h *SessionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeSessionsError(w, http.StatusInternalServerError, "failed to load session")
 		return
 	}
+	// Attachments are best-effort: a failure shouldn't hide the transcript.
+	attMap, err := h.store.ListChatMessageAttachments(r.Context(), id)
+	if err != nil {
+		h.logger.Warn().Err(err).Str("id", id).Msg("failed to load session attachments")
+		attMap = nil
+	}
 	out := SessionDetailDTO{
 		ID:        session.SessionID,
 		Title:     session.Title,
@@ -122,6 +143,20 @@ func (h *SessionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal([]byte(m.Sources), &srcs); err == nil {
 				dto.Sources = srcs
 			}
+		}
+		for _, a := range attMap[m.MessageID] {
+			ad := ChatAttachmentDTO{
+				Type:      a.Type,
+				Title:     a.Title,
+				MimeType:  a.MimeType,
+				Format:    a.Format,
+				ByteSize:  a.ByteSize,
+				Available: a.Data != nil,
+			}
+			if a.Data != nil {
+				ad.Data = base64.StdEncoding.EncodeToString(a.Data)
+			}
+			dto.Attachments = append(dto.Attachments, ad)
 		}
 		out.Messages = append(out.Messages, dto)
 	}
