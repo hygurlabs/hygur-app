@@ -58,6 +58,7 @@ function readProgress(e: HygurEvent): SyncProgress | undefined {
 
 /** Reports whether a background sync/indexation is currently running, so the UI
  *  can surface a live indicator. Fed by the sidecar `/events` SSE stream. */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with its provider (HMR-only rule; splitting it is needless churn)
 export function useActivity(): Activity {
   return useContext(ActivityContext);
 }

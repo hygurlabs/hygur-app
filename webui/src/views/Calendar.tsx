@@ -86,6 +86,8 @@ export function Calendar() {
     queryFn: () => api.knowledgeItems(200, "event"),
   });
 
+  // Capture "now" once per render — keeps the derivation below free of impure calls.
+  const [now] = useState(() => Date.now());
   const upcomingSynced = (syncedEvents.data?.items ?? [])
     .map((it) => {
       const md = (it.metadata ?? {}) as Record<string, unknown>;
@@ -99,7 +101,7 @@ export function Calendar() {
         ts: start ? Date.parse(start) : NaN,
       };
     })
-    .filter((e) => !Number.isNaN(e.ts) && e.ts >= Date.now() - 12 * 3600_000)
+    .filter((e) => !Number.isNaN(e.ts) && e.ts >= now - 12 * 3600_000)
     .sort((a, b) => a.ts - b.ts)
     .slice(0, 30);
 

@@ -543,13 +543,12 @@ function Toggle({
 
 export function StepNotifications() {
   const [state, setState] = useState<Record<string, boolean>>({});
-  const [loaded, setLoaded] = useState(false);
+  // No native bridge → nothing to load; start "loaded" so the effect never has to
+  // setState synchronously.
+  const [loaded, setLoaded] = useState(() => !native.available);
 
   useEffect(() => {
-    if (!native.available) {
-      setLoaded(true);
-      return;
-    }
+    if (!native.available) return;
     let cancelled = false;
     void Promise.all(
       NOTIF_TOGGLES.map((t) => native.prefs.getBool(t.key).then((v) => [t.key, v] as const)),

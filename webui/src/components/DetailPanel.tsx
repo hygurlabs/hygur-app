@@ -27,6 +27,7 @@ const OpenContext = createContext<(d: DetailData) => void>(() => {});
 
 /** Any view can call `useDetail()(…)` to slide the reader panel in. Centralising
  *  it here keeps a single panel instance + one scrim, avoiding z-index sprawl. */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with its provider (HMR-only rule; splitting it is needless churn)
 export function useDetail() {
   return useContext(OpenContext);
 }
