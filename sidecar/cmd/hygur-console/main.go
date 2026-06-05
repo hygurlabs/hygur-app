@@ -14,12 +14,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/hygur/sidecar/internal/controlplane"
 )
 
@@ -80,9 +82,29 @@ func runServe(args []string) {
 	svc, err := controlplane.NewService(store, priv, *domain, *ttl)
 	die(err)
 
-	fmt.Printf("hygur-console serving enroll/refresh on %s (domain %s)\n", *addr, *domain)
-	srv := &http.Server{Addr: *addr, Handler: svc.Routes(), ReadHeaderTimeout: 10 * time.Second}
+	root := chi.NewRouter()
+	svc.Register(root)
+	if wh := os.Getenv("HYGUR_STRIPE_WEBHOOK_SECRET"); wh != "" {
+		controlplane.NewBilling(store, wh, logProvisioner{}).Register(root)
+		fmt.Println("hygur-console: Stripe billing webhook enabled (POST /stripe/webhook)")
+	}
+
+	fmt.Printf("hygur-console serving on %s (domain %s)\n", *addr, *domain)
+	srv := &http.Server{Addr: *addr, Handler: root, ReadHeaderTimeout: 10 * time.Second}
 	die(srv.ListenAndServe())
+}
+
+// logProvisioner is the bridge provisioner: it records that a tenant pod must be
+// created. The internet-facing console holds NO cluster rights — the actual k8s
+// provisioning happens out-of-band (operator / on-box poller). The account is
+// already created + active in the admin DB by the billing webhook; only the pod
+// is pending.
+type logProvisioner struct{}
+
+func (logProvisioner) Provision(_ context.Context, acc controlplane.Account) error {
+	fmt.Printf("[billing] PROVISION NEEDED — account=%s tenant=%s (run: provision-tenant.sh %s <host>)\n",
+		acc.AccountNumber, acc.TenantID, acc.TenantID)
+	return nil
 }
 
 func runAccount(args []string) {

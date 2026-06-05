@@ -57,8 +57,13 @@ func (b *Billing) clock() time.Time {
 // the enrollment code is wired separately, once the tenant host topology lands.)
 func (b *Billing) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Post("/stripe/webhook", b.handleWebhook)
+	b.Register(r)
 	return r
+}
+
+// Register mounts the Stripe webhook on r (compose alongside Service.Register).
+func (b *Billing) Register(r chi.Router) {
+	r.Post("/stripe/webhook", b.handleWebhook)
 }
 
 // --- Stripe event shapes (only the fields we use) ---------------------------

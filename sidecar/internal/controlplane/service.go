@@ -52,9 +52,15 @@ func (s *Service) clock() time.Time {
 // account/enroll-code creation — are added separately, operator-authenticated.)
 func (s *Service) Routes() http.Handler {
 	r := chi.NewRouter()
+	s.Register(r)
+	return r
+}
+
+// Register adds the device-facing routes to r, so the console can compose the
+// Service and the Billing webhook on one router.
+func (s *Service) Register(r chi.Router) {
 	r.Post("/enroll", s.handleEnroll)
 	r.Post("/token/refresh", s.handleRefresh)
-	return r
 }
 
 type enrollReq struct {
