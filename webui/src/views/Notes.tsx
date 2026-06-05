@@ -12,6 +12,7 @@ import {
   Quote,
   Code,
   Link as LinkIcon,
+  Rows3,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -47,6 +48,22 @@ export function Notes() {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [editing, setEditing] = useState<Note | null>(null);
+  // Compact list mode (one line per note), remembered across sessions.
+  const [compact, setCompact] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("hygur.notes.compact") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setCompactPersisted = (next: boolean) => {
+    setCompact(next);
+    try {
+      localStorage.setItem("hygur.notes.compact", next ? "1" : "0");
+    } catch {
+      /* private mode / disabled storage — keep the in-memory value */
+    }
+  };
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["notes"],
@@ -127,10 +144,37 @@ export function Notes() {
         />
       )}
 
+      {!isLoading && rows.length > 0 && (
+        <div className="mb-2 flex justify-end">
+          <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
+            {(
+              [
+                [false, "Détaillé", List],
+                [true, "Compact", Rows3],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <button
+                key={label}
+                onClick={() => setCompactPersisted(value)}
+                title={label}
+                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors ${
+                  compact === value
+                    ? "bg-accent-weak font-medium text-accent"
+                    : "text-muted hover:text-text"
+                }`}
+              >
+                <Icon size={14} strokeWidth={1.9} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <Skeleton rows={4} />
       ) : rows.length > 0 ? (
-        <RecordList rows={rows} />
+        <RecordList rows={rows} compact={compact} />
       ) : (
         <EmptyState
           title="No notes yet"

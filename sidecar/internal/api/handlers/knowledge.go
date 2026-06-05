@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,19 @@ import (
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
+
+// contentIDParam returns the {content_id} route param, percent-decoded. chi
+// returns the raw (still-escaped) path segment, so a content_id containing '@'
+// (e.g. a mail "imap:<msgid>@host") arrives as "...%40..." and would never
+// match the stored id — the item read 404s and its tags/project panel stays
+// blank. PathUnescape is a no-op for already-clean ids (notes, UUIDs).
+func contentIDParam(r *http.Request) string {
+	raw := chi.URLParam(r, "content_id")
+	if dec, err := url.PathUnescape(raw); err == nil {
+		return dec
+	}
+	return raw
+}
 
 // KnowledgeHandler handles knowledge-related API endpoints.
 type KnowledgeHandler struct {
@@ -618,7 +632,7 @@ func (h *KnowledgeHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /knowledge/{content_id}.
 func (h *KnowledgeHandler) Get(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	if contentID == "" {
 		writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content_id is required")
 		return
@@ -871,7 +885,7 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /knowledge/{content_id}.
 func (h *KnowledgeHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	if contentID == "" {
 		writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content_id is required")
 		return
@@ -1167,7 +1181,7 @@ type LinkProjectResponse struct {
 // LinkProject handles POST /knowledge/{content_id}/project.
 // It links a knowledge item to a project.
 func (h *KnowledgeHandler) LinkProject(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	if contentID == "" {
 		writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content_id is required")
 		return
@@ -1237,7 +1251,7 @@ func (h *KnowledgeHandler) LinkProject(w http.ResponseWriter, r *http.Request) {
 // UnlinkProject handles DELETE /knowledge/{content_id}/project.
 // It removes the link between a knowledge item and its project.
 func (h *KnowledgeHandler) UnlinkProject(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	if contentID == "" {
 		writeKnowledgeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content_id is required")
 		return

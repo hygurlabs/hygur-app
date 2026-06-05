@@ -117,12 +117,10 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="overflow-auto px-5 py-5">
               {/* Project + tags sit above the body so they're visible at a
-                  glance — even when the document/mail body is long. */}
-              {data.contentId && (
-                <div className="mb-5 border-b border-border pb-5">
-                  <ItemMeta contentId={data.contentId} />
-                </div>
-              )}
+                  glance — even when the document/mail body is long. ItemMeta
+                  owns its own separator and renders nothing until the item
+                  loads, so there's no empty band. */}
+              {data.contentId && <ItemMeta contentId={data.contentId} />}
               <div className="prose-answer text-[14px] leading-relaxed text-text">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {data.body || "_(empty)_"}

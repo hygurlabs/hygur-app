@@ -55,7 +55,7 @@ export function ItemMeta({ contentId }: { contentId: string }) {
   if (itemQ.isLoading || !item) return null;
 
   return (
-    <div>
+    <div className="mb-5 border-b border-border pb-5">
       <div className="mb-3 flex items-center gap-2.5">
         <span className="w-14 shrink-0 text-[12px] text-muted">Project</span>
         <select

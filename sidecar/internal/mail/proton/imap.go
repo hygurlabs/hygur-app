@@ -1228,9 +1228,9 @@ func extractMIMEParts(mediaType string, params map[string]string, cte string, bo
 
 	switch {
 	case mediaType == "text/plain":
-		return string(decoded), ""
+		return mail.DecodeCharset(decoded, params["charset"]), ""
 	case mediaType == "text/html":
-		return "", string(decoded)
+		return "", mail.DecodeCharset(decoded, params["charset"])
 	case strings.HasPrefix(mediaType, "multipart/"):
 		boundary := params["boundary"]
 		if boundary == "" {

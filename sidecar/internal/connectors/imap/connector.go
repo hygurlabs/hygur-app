@@ -27,6 +27,7 @@ import (
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/llm"
+	mailpkg "github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -842,19 +843,19 @@ func extractPlainText(raw []byte) string {
 	ct := msg.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(ct)
 	if err != nil {
-		// No content-type — read body as plain text.
+		// No content-type — read body as plain text (charset unknown).
 		b, _ := io.ReadAll(msg.Body)
-		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b)
+		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b, "")
 	}
 
 	switch {
 	case strings.EqualFold(mediaType, "text/plain"):
 		b, _ := io.ReadAll(msg.Body)
-		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b)
+		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b, params["charset"])
 
 	case strings.EqualFold(mediaType, "text/html"):
 		b, _ := io.ReadAll(msg.Body)
-		decoded := decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b)
+		decoded := decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b, params["charset"])
 		return stripHTMLTags(decoded)
 
 	case strings.HasPrefix(strings.ToLower(mediaType), "multipart/"):
@@ -896,14 +897,14 @@ func extractFromMultipart(body io.Reader, boundary, parentMediaType string) stri
 		switch {
 		case strings.EqualFold(mt, "text/plain"):
 			b, _ := io.ReadAll(part)
-			decoded := decodeTransferEncoding(cte, b)
+			decoded := decodeTransferEncoding(cte, b, subParams["charset"])
 			if strings.TrimSpace(decoded) != "" {
 				return decoded
 			}
 
 		case strings.EqualFold(mt, "text/html"):
 			b, _ := io.ReadAll(part)
-			decoded := decodeTransferEncoding(cte, b)
+			decoded := decodeTransferEncoding(cte, b, subParams["charset"])
 			if htmlFallback == "" {
 				htmlFallback = stripHTMLTags(decoded)
 			}
@@ -924,17 +925,19 @@ func extractFromMultipart(body io.Reader, boundary, parentMediaType string) stri
 	return htmlFallback
 }
 
-// decodeTransferEncoding decodes the part body per its Content-Transfer-Encoding.
-// This is only ever called on text/plain and text/html parts, so decoding
-// base64 yields readable text — NOT decoding it (the previous behaviour) leaked
-// raw base64 blobs into the index, polluting search and bloating the LLM
-// context. quoted-printable and base64 are both handled; anything else is
-// already text and returned as-is.
-func decodeTransferEncoding(cte string, raw []byte) string {
+// decodeTransferEncoding decodes the part body per its Content-Transfer-Encoding
+// and then re-encodes the resulting bytes from the part's declared charset to
+// UTF-8 (see decodeCharset). This is only ever called on text/plain and
+// text/html parts, so decoding base64 yields readable text — NOT decoding it
+// (the previous behaviour) leaked raw base64 blobs into the index, polluting
+// search and bloating the LLM context. quoted-printable and base64 are both
+// handled; anything else is already text.
+func decodeTransferEncoding(cte string, raw []byte, charset string) string {
+	decoded := raw
 	switch strings.ToLower(strings.TrimSpace(cte)) {
 	case "quoted-printable":
-		if decoded, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(raw))); err == nil {
-			return strings.TrimSpace(string(decoded))
+		if b, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(raw))); err == nil {
+			decoded = b
 		}
 	case "base64":
 		// MIME base64 wraps lines at ~76 cols; strip all whitespace first since
@@ -945,11 +948,11 @@ func decodeTransferEncoding(cte string, raw []byte) string {
 			}
 			return r
 		}, string(raw))
-		if decoded, err := base64.StdEncoding.DecodeString(clean); err == nil {
-			return strings.TrimSpace(string(decoded))
+		if b, err := base64.StdEncoding.DecodeString(clean); err == nil {
+			decoded = b
 		}
 	}
-	return strings.TrimSpace(string(raw))
+	return strings.TrimSpace(mailpkg.DecodeCharset(decoded, charset))
 }
 
 // stripHTMLTags removes HTML tags from s using a simple state machine that
