@@ -145,6 +145,16 @@ final class SidecarSupervisor {
         let proc = Process()
         proc.executableURL = path
 
+        // Pass the local DB encryption key (from the Keychain) so the sidecar
+        // opens its store encrypted. Inherit the parent environment and add the
+        // key only when local encryption is enabled; otherwise the sidecar runs
+        // plaintext, exactly as before.
+        var env = ProcessInfo.processInfo.environment
+        if let dbKey = LocalEncryption.keyIfEnabled() {
+            env["HYGUR_DB_KEY"] = dbKey
+        }
+        proc.environment = env
+
         // Pipe stdout/stderr to the rotating log file. We open in append mode
         // so multiple respawns share one log; truncation is left to log rotation.
         if !FileManager.default.fileExists(atPath: logPath.path) {
