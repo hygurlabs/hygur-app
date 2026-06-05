@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -19,6 +22,15 @@ struct Sidecar {
 const SIDECAR_URL: &str = "http://127.0.0.1:8420";
 const SIDECAR_ADDR: &str = "127.0.0.1:8420";
 const MAX_FAST_RESTARTS: u32 = 6;
+
+/// Bring the main window to the foreground (global shortcut / tray "Show").
+fn show_main(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
 
 /// Spawns the sidecar and watches it. On an UNEXPECTED exit — notably the
 /// sidecar SIGTERM-ing itself to apply a config change (see config.go), which
@@ -77,6 +89,17 @@ fn spawn_sidecar(app: AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed
+                        && shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyH)
+                    {
+                        show_main(app);
+                    }
+                })
+                .build(),
+        )
         .manage(Sidecar {
             child: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
@@ -90,6 +113,28 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Global summon shortcut ⌘⇧H (parity with the SwiftUI HotkeyManager).
+            let summon = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyH);
+            if let Err(e) = app.global_shortcut().register(summon) {
+                log::warn!("global shortcut registration failed: {e}");
+            }
+
+            // Menu bar tray (parity with the SwiftUI menubar): Show / Quit.
+            let show_i = MenuItemBuilder::with_id("show", "Show Hygur").build(app)?;
+            let quit_i = MenuItemBuilder::with_id("quit", "Quit Hygur").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&show_i, &quit_i]).build()?;
+            let mut tray = TrayIconBuilder::new().menu(&menu).on_menu_event(
+                |app, event| match event.id().as_ref() {
+                    "show" => show_main(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                },
+            );
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon);
+            }
+            tray.build(app)?;
 
             // Spawn + supervise the bundled Hygur sidecar (serves the WebUI on :8420).
             spawn_sidecar(app.handle().clone());
