@@ -247,13 +247,21 @@ func main() {
 	// see store.Manager). Today there is one identity, so Default() returns the
 	// primary hygur.db and every consumer is wired to it exactly as before;
 	// multi-user routing onto per-identity handles is P5.
-	storeManager := store.NewManager(cfg.Store.Path)
+	//
+	// HYGUR_DB_KEY enables SQLCipher encryption at rest (key from the OS keychain
+	// locally — set by the desktop app on spawn — or the tenant DEK in cloud).
+	// Empty = plaintext; a first keyed run auto-migrates an existing plaintext DB.
+	dbKey := os.Getenv("HYGUR_DB_KEY")
+	storeManager := store.NewManagerWithKey(cfg.Store.Path, dbKey)
 	db, err := storeManager.Default()
 	if err != nil {
 		logger.Fatal().Err(err).Str("path", cfg.Store.Path).Msg("failed to initialize database")
 	}
 	defer storeManager.Close()
-	logger.Info().Str("path", cfg.Store.Path).Msg("database initialized")
+	logger.Info().
+		Str("path", cfg.Store.Path).
+		Bool("encrypted", dbKey != "").
+		Msg("database initialized")
 
 	// Token-usage accounting: every chat/embedding/indexing completion records
 	// its token counts into SQLite so the Settings cost view persists across

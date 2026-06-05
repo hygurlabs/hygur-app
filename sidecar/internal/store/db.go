@@ -15,8 +15,9 @@ import (
 	"github.com/google/uuid"
 	// SQLCipher-enabled SQLite (drop-in for mattn/go-sqlite3; registers driver
 	// "sqlite3"). A plaintext DB opens unchanged when no key is supplied — see
-	// NewDBWithKey — so existing unencrypted databases keep working.
-	_ "github.com/mutecomm/go-sqlcipher/v4"
+	// NewDBWithKey — so existing unencrypted databases keep working. Named (not
+	// blank) so Open can call IsEncrypted to decide whether to migrate.
+	sqlcipher "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // DB wraps the SQLite database connection and provides CRUD operations.
@@ -121,6 +122,31 @@ func NewDBWithKey(path, key string) (*DB, error) {
 	}
 
 	return &DB{db: db}, nil
+}
+
+// Open is the boot-time entry point: it opens the store at path, encrypting at
+// rest when key is non-empty. On the first run with a key against an existing
+// PLAINTEXT database, it transparently migrates it to encrypted (keeping a
+// .plaintext.bak) before opening — so enabling local encryption is just a
+// restart with HYGUR_DB_KEY set, not a manual step. An empty key opens plaintext
+// (the default — existing installs are unaffected).
+func Open(path, key string) (*DB, error) {
+	if key == "" {
+		return NewDB(path)
+	}
+	// Auto-migrate an existing, non-empty plaintext DB on first keyed run.
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+		enc, encErr := sqlcipher.IsEncrypted(path)
+		if encErr != nil {
+			return nil, fmt.Errorf("store: probe encryption of %q: %w", path, encErr)
+		}
+		if !enc {
+			if err := MigratePlaintextToEncrypted(path, key); err != nil {
+				return nil, fmt.Errorf("store: migrate %q to encrypted: %w", path, err)
+			}
+		}
+	}
+	return NewDBWithKey(path, key)
 }
 
 // MigratePlaintextToEncrypted converts an existing plaintext database at path

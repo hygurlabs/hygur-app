@@ -28,14 +28,23 @@ const DefaultIdentityKey = "local"
 // will plug into.
 type Manager struct {
 	basePath string
+	key      string // SQLCipher key for every identity DB; "" = plaintext
 	mu       sync.Mutex
 	dbs      map[string]*DB // keyed by resolved file path
 }
 
 // NewManager creates a Manager whose default database lives at basePath
-// (e.g. <dataDir>/hygur.db).
+// (e.g. <dataDir>/hygur.db), opened plaintext.
 func NewManager(basePath string) *Manager {
-	return &Manager{basePath: basePath, dbs: make(map[string]*DB)}
+	return NewManagerWithKey(basePath, "")
+}
+
+// NewManagerWithKey is NewManager with SQLCipher encryption at rest when key is
+// non-empty (every identity DB is opened/auto-migrated via store.Open). Locally
+// the key comes from the OS keychain (passed as HYGUR_DB_KEY); in the cloud it
+// is the per-tenant DEK.
+func NewManagerWithKey(basePath, key string) *Manager {
+	return &Manager{basePath: basePath, key: key, dbs: make(map[string]*DB)}
 }
 
 // pathFor maps an identity key to its database file. The default/empty/"local"
@@ -58,7 +67,7 @@ func (m *Manager) For(key string) (*DB, error) {
 	if db, ok := m.dbs[path]; ok {
 		return db, nil
 	}
-	db, err := NewDB(path)
+	db, err := Open(path, m.key)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %q: %w", path, err)
 	}
