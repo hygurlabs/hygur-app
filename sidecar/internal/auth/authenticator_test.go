@@ -90,3 +90,45 @@ func TestJWTAuth(t *testing.T) {
 		t.Fatalf("revoked: expected ErrInvalidToken, got %v", err)
 	}
 }
+
+// TestJWTAuth_TenantPin: a pod pinned to a tenant rejects validly-signed tokens
+// minted for another tenant (pod-per-tenant defence in depth); an unpinned pod
+// accepts any tenant.
+func TestJWTAuth_TenantPin(t *testing.T) {
+	pubPEM, privPEM := mustKeypair(t)
+	priv, _ := ParseEd25519PrivateKeyPEM(privPEM)
+	pub, _ := ParseEd25519PublicKeyPEM(pubPEM)
+	now := time.Unix(1_700_000_000, 0)
+	mint := func(acc string) string {
+		tok, err := SignDeviceToken(priv, DeviceClaims{
+			Sub: "u1", Acc: acc, Dev: "d1", Jti: "j-" + acc, Exp: now.Add(time.Hour).Unix(),
+		})
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		return tok
+	}
+	pinned := JWTAuth{PublicKey: pub, Tenant: "acme", Now: func() time.Time { return now }}
+
+	// Matching tenant → accepted.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer "+mint("acme"))
+	if id, err := pinned.Authenticate(r); err != nil || id.AccountID != "acme" {
+		t.Fatalf("matching tenant: id=%+v err=%v", id, err)
+	}
+
+	// Foreign tenant → rejected despite a valid signature.
+	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r2.Header.Set("Authorization", "Bearer "+mint("evil"))
+	if _, err := pinned.Authenticate(r2); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("foreign tenant: expected ErrInvalidToken, got %v", err)
+	}
+
+	// Unpinned (Tenant="") accepts any tenant.
+	open := JWTAuth{PublicKey: pub, Now: func() time.Time { return now }}
+	r3 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r3.Header.Set("Authorization", "Bearer "+mint("whoever"))
+	if _, err := open.Authenticate(r3); err != nil {
+		t.Fatalf("unpinned: unexpected error %v", err)
+	}
+}

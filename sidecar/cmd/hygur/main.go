@@ -660,8 +660,14 @@ func main() {
 		for _, jti := range cfg.Auth.RevokedJTIs {
 			revoked[jti] = true
 		}
-		server.SetAuthenticator(auth.JWTAuth{PublicKey: pub, Revoked: revoked})
-		logger.Info().Int("revoked", len(revoked)).Msg("remote auth enabled (per-device JWT)")
+		// Pod-per-tenant: pin to HYGUR_TENANT_ID so a token from another tenant is
+		// rejected even with a valid signature (defence in depth vs subdomain routing).
+		tenant := strings.TrimSpace(os.Getenv("HYGUR_TENANT_ID"))
+		server.SetAuthenticator(auth.JWTAuth{PublicKey: pub, Revoked: revoked, Tenant: tenant})
+		logger.Info().
+			Int("revoked", len(revoked)).
+			Str("tenant", tenant).
+			Msg("remote auth enabled (per-device JWT)")
 	}
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)

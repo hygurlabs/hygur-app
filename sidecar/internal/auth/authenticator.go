@@ -47,6 +47,10 @@ type JWTAuth struct {
 	PublicKey ed25519.PublicKey
 	// Revoked holds jti values to reject even if otherwise valid. May be nil.
 	Revoked map[string]bool
+	// Tenant, when non-empty, pins this server to a single tenant (pod-per-tenant
+	// cloud): a token whose Acc claim differs is rejected. Defence in depth on top
+	// of the subdomain→namespace routing.
+	Tenant string
 	// Now is injectable for tests; defaults to time.Now.
 	Now func() time.Time
 }
@@ -66,6 +70,11 @@ func (a JWTAuth) Authenticate(r *http.Request) (Identity, error) {
 		return Identity{}, ErrInvalidToken
 	}
 	if a.Revoked[claims.Jti] {
+		return Identity{}, ErrInvalidToken
+	}
+	// Tenant pinning: a token minted for another tenant must never be accepted by
+	// this pod, even with a valid signature. Opaque error — don't reveal the reason.
+	if a.Tenant != "" && claims.Acc != a.Tenant {
 		return Identity{}, ErrInvalidToken
 	}
 	return Identity{UserID: claims.Sub, AccountID: claims.Acc, DeviceID: claims.Dev}, nil
