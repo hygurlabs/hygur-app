@@ -120,21 +120,22 @@ pub fn run() {
                 log::warn!("global shortcut registration failed: {e}");
             }
 
-            // Menu bar tray (parity with the SwiftUI menubar): Show / Quit.
+            // Menu bar tray (parity with the SwiftUI "sparkles" menubar icon).
+            // A monochrome template image so macOS tints it for light/dark menus.
             let show_i = MenuItemBuilder::with_id("show", "Show Hygur").build(app)?;
             let quit_i = MenuItemBuilder::with_id("quit", "Quit Hygur").build(app)?;
             let menu = MenuBuilder::new(app).items(&[&show_i, &quit_i]).build()?;
-            let mut tray = TrayIconBuilder::new().menu(&menu).on_menu_event(
-                |app, event| match event.id().as_ref() {
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+            TrayIconBuilder::new()
+                .icon(tray_icon)
+                .icon_as_template(true)
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main(app),
                     "quit" => app.exit(0),
                     _ => {}
-                },
-            );
-            if let Some(icon) = app.default_window_icon().cloned() {
-                tray = tray.icon(icon);
-            }
-            tray.build(app)?;
+                })
+                .build(app)?;
 
             // Spawn + supervise the bundled Hygur sidecar (serves the WebUI on :8420).
             spawn_sidecar(app.handle().clone());
