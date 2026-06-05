@@ -21,7 +21,15 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "web UI not built — run `make webui`", http.StatusInternalServerError)
 		return
 	}
-	page := strings.ReplaceAll(string(raw), "__HYGUR_TOKEN__", s.token)
+	// In a managed cloud tenant the loopback token is meaningless (auth is per-
+	// device JWT) and must NOT be shipped to the browser — inject empty so the
+	// SPA shows its Connect screen (the user pastes their device token) instead
+	// of silently failing with a dead token.
+	tok := s.token
+	if s.managed {
+		tok = ""
+	}
+	page := strings.ReplaceAll(string(raw), "__HYGUR_TOKEN__", tok)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")

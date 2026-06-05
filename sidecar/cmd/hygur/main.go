@@ -690,6 +690,7 @@ func main() {
 		}
 	}
 	server.SetHostGuard(cfg.Auth.Mode == "local" || len(allowedHosts) > 0, allowedHosts)
+	server.SetManaged(managedDeployment) // don't ship the loopback token into the cloud SPA
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)

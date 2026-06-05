@@ -54,7 +54,12 @@ type Server struct {
 	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
 	hostGuardEnabled bool               // DNS-rebinding Host allow-list (SetHostGuard)
 	allowedHosts     map[string]bool
+	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
 }
+
+// SetManaged marks this as a Hygur-operated cloud tenant. The served SPA then
+// ships no bootstrap token (auth is per-device JWT; the user connects explicitly).
+func (s *Server) SetManaged(v bool) { s.managed = v }
 
 // SetHostGuard enables DNS-rebinding protection: requests whose Host isn't loopback
 // or in `hosts` are rejected (except /health, /version). Loopback is always allowed
