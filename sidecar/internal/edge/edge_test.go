@@ -42,6 +42,15 @@ func captureServer(t *testing.T) (*httptest.Server, *[]IngestText, *int) {
 	return srv, &got, &noToken
 }
 
+func TestTextParsers_Extensions(t *testing.T) {
+	p := TextParsers()
+	for _, ext := range []string{".txt", ".text", ".md", ".markdown", ".docx", ".pdf"} {
+		if p[ext] == nil {
+			t.Errorf("TextParsers missing parser for %s", ext)
+		}
+	}
+}
+
 func TestClient_PushText(t *testing.T) {
 	srv, got, _ := captureServer(t)
 	c := NewClient(srv.URL, "dev-token")

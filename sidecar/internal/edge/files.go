@@ -11,10 +11,12 @@ import (
 	"github.com/hygur/sidecar/internal/ingest/parsers"
 )
 
-// TextParsers returns the device-extractable text parsers (txt, markdown, docx).
-// These run locally so only text leaves the device. Scans/images/audio are NOT
-// here — they go to the central multimodal pipeline (per EDGE_AGENT_DESIGN §2).
-// PDF is deferred (it needs the isolated extractor subprocess).
+// TextParsers returns the device-extractable text parsers (txt, markdown, docx,
+// pdf). These run locally so only text leaves the device. PDF is TEXT-LAYER ONLY
+// (NewPDFParserTextOnly: in-process, panic-recovered, no poppler/vision) — a
+// SCANNED/image-only PDF yields no text and is skipped here; it would go to the
+// central multimodal pipeline (per EDGE_AGENT_DESIGN §2, the dual path for
+// scans/images/audio — not yet routed from the edge).
 func TextParsers() map[string]ingest.Parser {
 	out := map[string]ingest.Parser{}
 	register := func(p ingest.Parser) {
@@ -25,6 +27,7 @@ func TextParsers() map[string]ingest.Parser {
 	register(parsers.NewTXTParser())
 	register(parsers.NewMarkdownParser())
 	register(parsers.NewDOCXParser())
+	register(parsers.NewPDFParserTextOnly())
 	return out
 }
 
