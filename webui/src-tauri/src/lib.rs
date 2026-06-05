@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent};
+use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -89,6 +90,7 @@ fn spawn_sidecar(app: AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -122,15 +124,28 @@ pub fn run() {
 
             // Menu bar tray (parity with the SwiftUI "sparkles" menubar icon).
             // A monochrome template image so macOS tints it for light/dark menus.
+            let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
+            let autostart_i = CheckMenuItemBuilder::with_id("autostart", "Launch at login")
+                .checked(autostart_enabled)
+                .build(app)?;
             let show_i = MenuItemBuilder::with_id("show", "Show Hygur").build(app)?;
             let quit_i = MenuItemBuilder::with_id("quit", "Quit Hygur").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&show_i, &quit_i]).build()?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&autostart_i, &show_i, &quit_i])
+                .build()?;
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+            let autostart_check = autostart_i.clone();
             TrayIconBuilder::new()
                 .icon(tray_icon)
                 .icon_as_template(true)
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
+                .on_menu_event(move |app, event| match event.id().as_ref() {
+                    "autostart" => {
+                        let mgr = app.autolaunch();
+                        let on = mgr.is_enabled().unwrap_or(false);
+                        let _ = if on { mgr.disable() } else { mgr.enable() };
+                        let _ = autostart_check.set_checked(!on);
+                    }
                     "show" => show_main(app),
                     "quit" => app.exit(0),
                     _ => {}
