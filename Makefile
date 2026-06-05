@@ -35,7 +35,7 @@ LOGIN_KEYCHAIN := $(HOME)/Library/Keychains/login.keychain-db
 
 .PHONY: all test test-go test-binary check-api dev open reset-db dev-cert \
         webui build-sidecar build-app sign-app package-dmg verify-dmg release clean \
-        build-server docker-image
+        build-server docker-image tauri-sidecar tauri-dev tauri-build
 
 all: test
 
@@ -155,6 +155,33 @@ build-server: webui
 		-ldflags "-X github.com/hygur/sidecar/internal/version.Version=$(VERSION)" \
 		-o bin/hygur-server ./cmd/hygur
 	@echo "✅ $(SIDECAR)/bin/hygur-server"
+
+# ── Tauri 2 (cross-platform shell; supersedes the SwiftUI macos-app, T1) ──────
+# The Tauri app embeds + supervises the sidecar and points its window at the
+# sidecar-served WebUI (:8420). The sidecar is bundled as a Tauri externalBin
+# named hygur-sidecar-<target-triple>.
+TAURI_DIR     := webui
+TARGET_TRIPLE := $(shell rustc -Vv 2>/dev/null | sed -n 's/host: //p')
+SIDECAR_STAGE := $(TAURI_DIR)/src-tauri/binaries/hygur-sidecar-$(TARGET_TRIPLE)
+
+## Build the Go sidecar for the host (embedding the fresh WebUI via `webui`)
+## and stage it as the Tauri external binary.
+tauri-sidecar: webui
+	@echo "→ Build + stage sidecar for $(TARGET_TRIPLE)..."
+	@mkdir -p $(TAURI_DIR)/src-tauri/binaries
+	cd $(SIDECAR) && CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
+		-ldflags "-X github.com/hygur/sidecar/internal/version.Version=$(VERSION)" \
+		-o $(CURDIR)/$(SIDECAR_STAGE) ./cmd/hygur
+	@chmod +x $(SIDECAR_STAGE)
+	@echo "✅ $(SIDECAR_STAGE)"
+
+## Run the Tauri app in dev (stages the sidecar first).
+tauri-dev: tauri-sidecar
+	cd $(TAURI_DIR) && npm run tauri dev
+
+## Build the Tauri app bundle + DMG (stages the sidecar first).
+tauri-build: tauri-sidecar
+	cd $(TAURI_DIR) && npm run tauri build
 
 ## Build the headless Linux server image (multi-stage: WebUI + CGO Go build).
 DOCKER_IMAGE ?= hygur-server:$(VERSION)
