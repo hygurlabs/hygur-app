@@ -110,36 +110,64 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Gate hard: only a finalized, PAID subscription checkout provisions anything.
-	// Everything else is acknowledged (200) but does nothing — so a declined
-	// payment, a retry, a reload or any other event type never loops provisioning.
 	obj := ev.Data.Object
-	if ev.Type != "checkout.session.completed" || obj.Mode != "subscription" ||
-		obj.PaymentStatus != "paid" || obj.Subscription == "" || obj.email() == "" {
-		writeJSON(w, http.StatusOK, map[string]bool{"ignored": true})
-		return
-	}
-
 	now := b.clock()
-	acc, _, err := b.store.UpsertSubscriptionAccount(now, obj.Subscription, obj.Customer, obj.ID, obj.email(), nil)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "account")
+
+	switch ev.Type {
+	case "checkout.session.completed":
+		// Provision ONLY on a finalized, PAID subscription checkout. A declined /
+		// unpaid / retried / reloaded event is acknowledged but provisions nothing,
+		// and the claim makes the pod creation happen at most once.
+		if obj.Mode != "subscription" || obj.PaymentStatus != "paid" ||
+			obj.Subscription == "" || obj.email() == "" {
+			break
+		}
+		acc, _, err := b.store.UpsertSubscriptionAccount(now, obj.Subscription, obj.Customer, obj.ID, obj.email(), nil)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "account")
+			return
+		}
+		claimed, err := b.store.ClaimProvisioning(now, obj.Subscription)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "claim")
+			return
+		}
+		if claimed && b.provisioner != nil {
+			if perr := b.provisioner.Provision(r.Context(), acc); perr != nil {
+				_ = b.store.ReleaseProvisioning(obj.Subscription) // let a later event retry
+				writeErr(w, http.StatusInternalServerError, "provision")
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "account": acc.AccountNumber})
 		return
-	}
-	claimed, err := b.store.ClaimProvisioning(now, obj.Subscription)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "claim")
-		return
-	}
-	if claimed && b.provisioner != nil {
-		if perr := b.provisioner.Provision(r.Context(), acc); perr != nil {
-			// Release so a later (retried) event can try again — no silent loss.
-			_ = b.store.ReleaseProvisioning(obj.Subscription)
-			writeErr(w, http.StatusInternalServerError, "provision")
+
+	case "customer.subscription.deleted":
+		// Subscription ended → suspend (IsActive=false ⇒ tokens refused). data.object
+		// is the Subscription, so its id IS the subscription id. Pod reaping is the
+		// poller's job; this stops auth immediately.
+		if err := b.store.SetSubscriptionBySub(obj.ID, "canceled", &now); err != nil {
+			writeErr(w, http.StatusInternalServerError, "suspend")
+			return
+		}
+
+	case "invoice.payment_failed":
+		// Renewal payment failed → suspend until it recovers. data.object is the
+		// Invoice, whose `subscription` is the sub id.
+		if err := b.store.SetSubscriptionBySub(obj.Subscription, "past_due", &now); err != nil {
+			writeErr(w, http.StatusInternalServerError, "suspend")
+			return
+		}
+
+	case "invoice.paid":
+		// Renewal succeeded → re-activate (clears a prior past_due).
+		if err := b.store.SetSubscriptionBySub(obj.Subscription, "active", nil); err != nil {
+			writeErr(w, http.StatusInternalServerError, "reactivate")
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "account": acc.AccountNumber})
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // verifyStripeSig validates a `Stripe-Signature: t=…,v1=…` header: HMAC-SHA256 of
@@ -254,6 +282,26 @@ func (s *Store) ClaimProvisioning(now time.Time, subID string) (bool, error) {
 func (s *Store) ReleaseProvisioning(subID string) error {
 	_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provisioned_at=NULL WHERE stripe_sub_id=?`, subID)
 	return err
+}
+
+// SetSubscriptionBySub updates the account's billing status from a Stripe
+// lifecycle event (canceled / past_due / active). An unknown subscription is a
+// no-op (the event may predate our records). Suspension is immediate: a non
+// active/trialing status makes Account.IsActive false, so the control plane stops
+// issuing/refreshing tokens for that tenant.
+func (s *Store) SetSubscriptionBySub(subID, status string, validUntil *time.Time) error {
+	if subID == "" {
+		return nil
+	}
+	var accNum string
+	err := s.db.QueryRow(`SELECT account_number FROM stripe_subscriptions WHERE stripe_sub_id=?`, subID).Scan(&accNum)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // unknown subscription → ignore
+	}
+	if err != nil {
+		return fmt.Errorf("controlplane: lookup subscription: %w", err)
+	}
+	return s.SetSubscription(accNum, status, validUntil)
 }
 
 func (s *Store) getAccountByEmail(email string) (Account, error) {

@@ -99,6 +99,39 @@ func TestBilling_IgnoresUnpaid(t *testing.T) {
 	}
 }
 
+// Lifecycle events suspend and re-activate the account: a past_due / canceled
+// account fails IsActive so the control plane refuses tokens.
+func TestBilling_LifecycleSuspends(t *testing.T) {
+	store := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	b := NewBilling(store, whSecret, &fakeProvisioner{})
+	b.now = func() time.Time { return now }
+
+	if rec := postWebhook(t, b, paidEvent("sub_1", "a@b.com"), now); rec.Code != http.StatusOK {
+		t.Fatalf("paid: %d", rec.Code)
+	}
+	acc, err := store.getAccountByEmail("a@b.com")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if !acc.IsActive(now) {
+		t.Fatal("active after payment")
+	}
+
+	check := func(payload, label string, wantActive bool) {
+		if rec := postWebhook(t, b, payload, now); rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d (%s)", label, rec.Code, rec.Body.String())
+		}
+		a, _ := store.GetAccount(acc.AccountNumber)
+		if a.IsActive(now) != wantActive {
+			t.Errorf("%s: IsActive=%v, want %v", label, a.IsActive(now), wantActive)
+		}
+	}
+	check(`{"type":"invoice.payment_failed","data":{"object":{"subscription":"sub_1"}}}`, "payment_failed", false)
+	check(`{"type":"invoice.paid","data":{"object":{"subscription":"sub_1"}}}`, "invoice.paid", true)
+	check(`{"type":"customer.subscription.deleted","data":{"object":{"id":"sub_1"}}}`, "subscription.deleted", false)
+}
+
 // A bad signature is rejected before any side effect.
 func TestBilling_RejectsBadSignature(t *testing.T) {
 	store := testStore(t)
