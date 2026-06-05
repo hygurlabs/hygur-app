@@ -48,6 +48,7 @@ type Server struct {
 	insightsHandler  *handlers.InsightsHandler
 	usageHandler     *handlers.UsageHandler
 	backupHandler    *handlers.BackupHandler
+	encryptionHandler *handlers.EncryptionHandler
 	token            string             // Static token (local mode) + WebUI bootstrap
 	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
 }
@@ -497,6 +498,27 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+// SetEncryptionHandler attaches the local at-rest encryption handler.
+func (s *Server) SetEncryptionHandler(handler *handlers.EncryptionHandler) {
+	s.encryptionHandler = handler
+}
+
+func (s *Server) handleEncryptionStatus(w http.ResponseWriter, r *http.Request) {
+	if s.encryptionHandler != nil {
+		s.encryptionHandler.Status(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "encryption handler not configured")
+}
+
+func (s *Server) handleEncryptionEnable(w http.ResponseWriter, r *http.Request) {
+	if s.encryptionHandler != nil {
+		s.encryptionHandler.Enable(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "encryption handler not configured")
 }
 
 func (s *Server) handleGetTokenUsage(w http.ResponseWriter, r *http.Request) {

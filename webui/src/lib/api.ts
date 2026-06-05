@@ -8,6 +8,7 @@ import type {
   ConnectorConfigValue,
   ConnectorDetail,
   ConnectorInstance,
+  EncryptionStatus,
   FocusScope,
   KnowledgeItem,
   MarketplaceItem,
@@ -274,6 +275,11 @@ export const api = {
     if (!r.ok) throw httpError(r);
     return r.json();
   },
+
+  // Local at-rest encryption (opt-in; key stored in the OS keychain).
+  getEncryptionStatus: () => getJSON<EncryptionStatus>("/admin/db/encryption"),
+  enableEncryption: () =>
+    postJSON<{ status: string; restart_required: boolean }>("/admin/db/encrypt", {}),
 
   /** Uploads + ingests a file (📎). Returns the new content_id to attach. */
   uploadFile: async (

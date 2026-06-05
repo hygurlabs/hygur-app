@@ -39,6 +39,9 @@ func (s *Server) setupRoutes() {
 		// DB backup/restore — no request timeout (large downloads/uploads).
 		r.Get("/admin/db/backup", s.handleBackupDownload)
 		r.Post("/admin/db/restore", s.handleBackupRestore)
+		// Local at-rest encryption (opt-in; key in the OS keychain).
+		r.Get("/admin/db/encryption", s.handleEncryptionStatus)
+		r.Post("/admin/db/encrypt", s.handleEncryptionEnable)
 	})
 
 	// Protected routes (authentication required) with standard timeout

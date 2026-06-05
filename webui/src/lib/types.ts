@@ -291,6 +291,13 @@ export interface TokenUsageResponse {
   };
 }
 
+/** Local at-rest encryption status (GET /admin/db/encryption). env_managed =
+ *  the key comes from the server env (cloud); not user-toggleable locally. */
+export interface EncryptionStatus {
+  enabled: boolean;
+  env_managed: boolean;
+}
+
 export interface SidecarConfigPatch {
   lm_studio?: Partial<SidecarConfig["lm_studio"]>;
   logging?: Partial<SidecarConfig["logging"]>;

@@ -15,6 +15,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	github.com/yuin/goldmark v1.8.2
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/net v0.53.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.20.0
@@ -29,6 +30,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emersion/go-message v0.18.2 // indirect
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
@@ -37,6 +39,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
 	github.com/googleapis/gax-go/v2 v2.21.0 // indirect

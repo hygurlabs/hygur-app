@@ -40,6 +40,7 @@ import (
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/scheduler"
+	"github.com/hygur/sidecar/internal/secret"
 	"github.com/hygur/sidecar/internal/session"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/hygur/sidecar/internal/tools"
@@ -256,10 +257,18 @@ func main() {
 		logger.Info().Str("path", cfg.Store.Path).Msg("applied staged database restore")
 	}
 
-	// HYGUR_DB_KEY enables SQLCipher encryption at rest (key from the OS keychain
-	// locally, or the tenant DEK in cloud). Empty = plaintext; a first keyed run
-	// auto-migrates an existing plaintext DB.
+	// At-rest encryption key resolution: HYGUR_DB_KEY (cloud / tenant DEK) takes
+	// precedence; otherwise the local desktop key from the OS keychain (set via
+	// the WebUI "Encrypt local database" action). Empty = plaintext; a first keyed
+	// run auto-migrates an existing plaintext DB (store.Open).
+	keyStore := secret.Keychain{}
 	dbKey := os.Getenv("HYGUR_DB_KEY")
+	dbKeyEnvManaged := dbKey != ""
+	if dbKey == "" {
+		if k, ok := keyStore.DBKey(); ok {
+			dbKey = k
+		}
+	}
 	storeManager := store.NewManagerWithKey(cfg.Store.Path, dbKey)
 	db, err := storeManager.Default()
 	if err != nil {
@@ -655,6 +664,7 @@ func main() {
 	server.SetConfigHandler(configHandler)
 	server.SetUsageHandler(handlers.NewUsageHandler(db, logger))
 	server.SetBackupHandler(handlers.NewBackupHandler(db, cfg.Store.Path, dbKey, logger))
+	server.SetEncryptionHandler(handlers.NewEncryptionHandler(keyStore, dbKeyEnvManaged, logger))
 
 	// Phase 1 (pair mode) — interaction logging + learning gauge.
 	interactionLogger := interactions.NewLogger(db)
