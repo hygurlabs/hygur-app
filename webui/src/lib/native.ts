@@ -60,13 +60,91 @@ declare global {
   }
 }
 
+// ── Web Speech dictation fallback (Tauri WebKit / Chrome / Safari) ───────────
+// Used when there's no native bridge so the mic works in Tauri and the browser.
+interface SpeechAlt {
+  transcript: string;
+}
+interface SpeechResult {
+  isFinal: boolean;
+  0: SpeechAlt;
+}
+interface SpeechResultList {
+  length: number;
+  [i: number]: SpeechResult;
+}
+interface SpeechEvent {
+  resultIndex: number;
+  results: SpeechResultList;
+}
+interface WebSpeechRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+type SpeechRecognitionCtor = new () => WebSpeechRecognition;
+
+const webDictation = (() => {
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  if (!Ctor) return null;
+  let rec: WebSpeechRecognition | null = null;
+  let listener: DictationListener | null = null;
+  let finalText = "";
+  return {
+    start(): Promise<boolean> {
+      try {
+        finalText = "";
+        rec = new Ctor();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = navigator.language || "en-US";
+        rec.onresult = (e: SpeechEvent) => {
+          let interim = "";
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const r = e.results[i];
+            if (r.isFinal) finalText += r[0].transcript;
+            else interim += r[0].transcript;
+          }
+          listener?.(`${finalText}${interim}`.trim(), false);
+        };
+        rec.onend = () => listener?.(finalText.trim(), true);
+        rec.onerror = () => listener?.(finalText.trim(), true);
+        rec.start();
+        return Promise.resolve(true);
+      } catch {
+        return Promise.resolve(false);
+      }
+    },
+    stop(): Promise<string> {
+      try {
+        rec?.stop();
+      } catch {
+        /* ignore */
+      }
+      return Promise.resolve(finalText.trim());
+    },
+    setListener(fn: DictationListener | null) {
+      listener = fn;
+    },
+  };
+})();
+
 export const native = {
   get available(): boolean {
     return Boolean(window.HygurNative?.available);
   },
-  /** On-device STT availability (the bridge exposes the engine). */
+  /** STT availability: the native bridge, or the Web Speech API in Tauri/browser. */
   get dictationAvailable(): boolean {
-    return Boolean(window.HygurNative?.dictation);
+    return Boolean(window.HygurNative?.dictation) || webDictation !== null;
   },
   calendar: {
     authorize: (): Promise<boolean> =>
@@ -82,16 +160,26 @@ export const native = {
   },
   dictation: {
     start: (): Promise<boolean> =>
-      window.HygurNative?.dictation.start() ?? Promise.resolve(false),
+      window.HygurNative?.dictation.start() ??
+      webDictation?.start() ??
+      Promise.resolve(false),
     stop: (): Promise<string> =>
-      window.HygurNative?.dictation.stop() ?? Promise.resolve(""),
+      window.HygurNative?.dictation.stop() ??
+      webDictation?.stop() ??
+      Promise.resolve(""),
     /** Subscribe to live partials. Returns an unsubscribe function. */
     listen: (fn: DictationListener): (() => void) => {
-      if (!window.HygurNative) return () => {};
-      window.HygurNative.onDictation = fn;
-      return () => {
-        if (window.HygurNative) window.HygurNative.onDictation = null;
-      };
+      if (window.HygurNative) {
+        window.HygurNative.onDictation = fn;
+        return () => {
+          if (window.HygurNative) window.HygurNative.onDictation = null;
+        };
+      }
+      if (webDictation) {
+        webDictation.setListener(fn);
+        return () => webDictation.setListener(null);
+      }
+      return () => {};
     },
   },
   prefs: {
