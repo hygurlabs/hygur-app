@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,13 +75,19 @@ func TestVerifyTampered(t *testing.T) {
 
 	now := time.Unix(1_700_000_000, 0)
 	tok, _ := SignDeviceToken(priv, DeviceClaims{Sub: "u1", Exp: now.Add(time.Hour).Unix()})
-	// Flip the last char of the signature segment.
-	tampered := tok[:len(tok)-1]
-	if tok[len(tok)-1] == 'A' {
-		tampered += "B"
+	// Flip the FIRST char of the signature segment. (The last char was flaky: its
+	// trailing base64 bits are redundant, so a flip there can decode to the same
+	// signature bytes. The first char maps to the high bits of byte 0 — always a
+	// real change.)
+	parts := strings.Split(tok, ".")
+	sig := []byte(parts[2])
+	if sig[0] == 'A' {
+		sig[0] = 'B'
 	} else {
-		tampered += "A"
+		sig[0] = 'A'
 	}
+	parts[2] = string(sig)
+	tampered := strings.Join(parts, ".")
 	if _, err := VerifyDeviceToken(pub, tampered, now); err == nil {
 		t.Fatal("expected verification to fail on a tampered token")
 	}
