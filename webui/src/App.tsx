@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
+import { QuickCapture } from "./views/QuickCapture";
 import { DetailPanelProvider } from "./components/DetailPanel";
 import { ActivityProvider } from "./lib/activity";
 import { Ask } from "./views/Ask";
@@ -17,6 +18,11 @@ import { Calendar } from "./views/Calendar";
 export default function App() {
   // Left nav is a static column on desktop and an off-canvas drawer on mobile.
   const [navOpen, setNavOpen] = useState(false);
+  const { pathname } = useLocation();
+
+  // The quick-capture palette runs in its own frameless Tauri window — render
+  // it bare, without the app shell (sidebar / top bar).
+  if (pathname === "/quick") return <QuickCapture />;
 
   return (
     <ActivityProvider>
