@@ -107,6 +107,27 @@ func TestFileSync_WalkExtractPush(t *testing.T) {
 	}
 }
 
+func TestFileSync_PrunesNoise(t *testing.T) {
+	srv, got, _ := captureServer(t)
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "doc.md"), "real document")                   // kept
+	mustWrite(t, filepath.Join(dir, "node_modules", "dep", "README.md"), "noise") // pruned (dep)
+	mustWrite(t, filepath.Join(dir, "vendor", "LICENSE.md"), "license")           // pruned (dep)
+	mustWrite(t, filepath.Join(dir, ".git", "notes.md"), "vcs")                   // pruned (dot-dir)
+	mustWrite(t, filepath.Join(dir, ".secret.md"), "hidden")                      // pruned (hidden file)
+
+	st, err := NewFileSync(NewClient(srv.URL, "tok"), TextParsers()).Run(context.Background(), dir, time.Time{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if st.Pushed != 1 {
+		t.Fatalf("pushed = %d, want 1 (only doc.md; deps/VCS/hidden pruned)", st.Pushed)
+	}
+	if len(*got) != 1 || (*got)[0].Title != "doc.md" {
+		t.Fatalf("expected only doc.md, got %+v", *got)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

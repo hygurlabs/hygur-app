@@ -31,9 +31,26 @@ func TextParsers() map[string]ingest.Parser {
 	return out
 }
 
+// noiseDirs are dependency/build/VCS directories never worth indexing — they
+// hold thousands of boilerplate README/LICENSE/CHANGELOG files that would drown
+// the KB in noise. Skipped wholesale (plus any dot-directory).
+var noiseDirs = map[string]bool{
+	"node_modules": true, "bower_components": true, "vendor": true,
+	"dist": true, "build": true, "out": true, "target": true,
+	"__pycache__": true, "venv": true, "Pods": true, "DerivedData": true,
+	".git": true, ".svn": true, ".hg": true, // (also covered by the dot-dir rule)
+}
+
+// skipDir reports whether a directory should be pruned from the walk. The scan
+// root is never pruned (the caller passes path != root).
+func skipDir(name string) bool {
+	return strings.HasPrefix(name, ".") || noiseDirs[name]
+}
+
 // FileSync walks a folder, extracts text locally from supported files, and pushes
 // each (idempotent source_ref) to the central server. Files unchanged since the
-// watermark are skipped.
+// watermark are skipped. Dependency/build/VCS + hidden directories are pruned so
+// the KB isn't flooded with boilerplate README/LICENSE files.
 type FileSync struct {
 	parsers map[string]ingest.Parser
 	client  *Client
@@ -63,7 +80,13 @@ func (fs *FileSync) Run(ctx context.Context, folder string, since time.Time) (Sy
 			return nil // skip unreadable entries
 		}
 		if d.IsDir() {
+			if path != folder && skipDir(d.Name()) {
+				return filepath.SkipDir // prune deps/build/VCS/hidden trees
+			}
 			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".") {
+			return nil // hidden file
 		}
 		p := fs.parsers[strings.ToLower(filepath.Ext(path))]
 		if p == nil {
