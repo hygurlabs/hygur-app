@@ -1395,28 +1395,12 @@ private struct SystemTab: View {
     @State private var showingResetAllConfirm: Bool = false
     @State private var resetAlsoCredentials: Bool = false
     @State private var resetAllMessage: String = ""
-    @State private var encEnabled = LocalEncryption.isEnabled
-    @State private var showingEncryptConfirm = false
-    @State private var encMessage: String = ""
 
     private var quickLookShortcutBinding: Binding<QuickLookShortcut> {
         Binding(
             get: { QuickLookShortcut(rawValue: quickLookShortcutRaw) ?? .space },
             set: { quickLookShortcutRaw = $0.rawValue }
         )
-    }
-
-    /// Generate + store the local DB key in the Keychain, then restart the
-    /// sidecar so it migrates the plaintext database to encrypted (store.Open).
-    private func enableLocalEncryption() {
-        do {
-            try LocalEncryption.enable()
-            encEnabled = true
-            encMessage = "Encryption enabled — restarting the sidecar to migrate your database…"
-            Task { await supervisor.restart() }
-        } catch {
-            encMessage = "Couldn't enable encryption: \(error.localizedDescription)"
-        }
     }
 
     var body: some View {
@@ -1511,40 +1495,6 @@ private struct SystemTab: View {
                             .padding(.vertical, HygurSpacing.md)
                     }
                 }
-            }
-
-            VStack(alignment: .leading, spacing: HygurSpacing.sm) {
-                SettingsSectionHeader(title: "Local encryption")
-                SettingsCard {
-                    CardRow(icon: encEnabled ? "lock.fill" : "lock.open",
-                            iconColor: encEnabled ? HygurColors.success : HygurColors.accent,
-                            title: encEnabled ? "Local database encrypted" : "Encrypt local database",
-                            subtitle: encEnabled
-                                ? "Your knowledge base is encrypted at rest (SQLCipher); the key lives in your macOS Keychain."
-                                : "Encrypt the knowledge base at rest with a key kept in your macOS Keychain. A one-time migration runs on restart; the plaintext copy is kept as a backup.") {
-                        if encEnabled {
-                            Image(systemName: "checkmark.seal.fill")
-                                .foregroundStyle(HygurColors.success)
-                        } else {
-                            Button { showingEncryptConfirm = true } label: { Text("Encrypt…") }
-                                .buttonStyle(.bordered).controlSize(.small)
-                        }
-                    }
-                    if !encMessage.isEmpty {
-                        CardDivider()
-                        Text(encMessage)
-                            .font(HygurTypography.caption)
-                            .foregroundStyle(HygurColors.textSecondary)
-                            .padding(.horizontal, HygurSpacing.lg)
-                            .padding(.vertical, HygurSpacing.md)
-                    }
-                }
-            }
-            .alert("Encrypt local database?", isPresented: $showingEncryptConfirm) {
-                Button("Encrypt", role: .destructive) { enableLocalEncryption() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Hygur will restart the sidecar and migrate your knowledge base to an encrypted database. The original is kept as a backup. The key is stored in your macOS Keychain — if you lose it, the data can't be recovered.")
             }
 
             VStack(alignment: .leading, spacing: HygurSpacing.sm) {

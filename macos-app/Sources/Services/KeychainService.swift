@@ -76,18 +76,4 @@ enum KeychainService {
         }
         return secrets
     }
-
-    // MARK: - System secrets (not tied to a connector) — e.g. the local DB key.
-
-    static func saveSystemSecret(_ account: String, value: String) throws {
-        try save(connectorId: "_system", key: account, value: value)
-    }
-
-    static func loadSystemSecret(_ account: String) -> String? {
-        load(connectorId: "_system", key: account)
-    }
-
-    static func deleteSystemSecret(_ account: String) {
-        delete(connectorId: "_system", key: account)
-    }
 }
