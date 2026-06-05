@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { markOnboardingComplete } from "../lib/onboarding";
+import { native } from "../lib/native";
+import { isRemote } from "../lib/connection";
 import {
   StepAccounts,
   StepModel,
@@ -20,7 +22,7 @@ interface StepDef {
   primaryLabel?: string;
 }
 
-const STEPS: StepDef[] = [
+const ALL_STEPS: StepDef[] = [
   { id: "welcome", skippable: false, ownsPrimary: false, primaryLabel: "Get started" },
   { id: "permissions", skippable: false, ownsPrimary: false, primaryLabel: "Continue" },
   { id: "model", skippable: true, ownsPrimary: true },
@@ -29,9 +31,25 @@ const STEPS: StepDef[] = [
   { id: "ready", skippable: false, ownsPrimary: false, primaryLabel: "Start using Hygur" },
 ];
 
+// Steps depend on context:
+//  - "permissions" (macOS perms) only makes sense in a native shell — skip in the
+//    browser / Tauri web client (no native bridge).
+//  - "model" (LLM endpoints) is for a LOCAL server you configure yourself; on a
+//    remote/managed cloud tenant the server owns its LLM (endpoints redacted), so
+//    skip it.
+function visibleSteps(): StepDef[] {
+  const remote = isRemote();
+  return ALL_STEPS.filter((s) => {
+    if (s.id === "permissions") return native.available;
+    if (s.id === "model") return !remote;
+    return true;
+  });
+}
+
 /** Full-screen first-run wizard. Replaces the app shell until the user finishes
  *  or skips through it; `onComplete` swaps the real app in. */
 export function Onboarding({ onComplete }: { onComplete: () => void }) {
+  const [STEPS] = useState(visibleSteps); // context-filtered, fixed for the run
   const [index, setIndex] = useState(0);
   const step = STEPS[index];
   const isLast = index === STEPS.length - 1;
