@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -83,6 +84,36 @@ func writeAuthError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message})
+}
+
+// hostGuardMiddleware rejects requests whose Host header isn't allow-listed — the
+// textbook DNS-rebinding defence. A rebound malicious page reaches us as
+// *same-origin* (so CORS won't stop it), but the Host header still carries the
+// attacker's domain. Loopback is always allowed (local desktop); extra hosts come
+// from HYGUR_ALLOWED_HOSTS (the tenant FQDN in cloud). /health and /version are
+// exempt so k8s probes (which use the pod IP as Host) keep working. No-op unless
+// enabled via SetHostGuard.
+func (s *Server) hostGuardMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.hostGuardEnabled || r.URL.Path == "/health" || r.URL.Path == "/version" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.allowedHosts[hostOnly(r.Host)] {
+			writeAuthError(w, http.StatusForbidden, "FORBIDDEN", "Host not allowed")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostOnly lowercases the Host and strips the port (+ IPv6 brackets).
+func hostOnly(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.Trim(host, "[]")
 }
 
 // corsMiddleware adds CORS headers for local development.

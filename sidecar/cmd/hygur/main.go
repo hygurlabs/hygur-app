@@ -669,6 +669,16 @@ func main() {
 			Str("tenant", tenant).
 			Msg("remote auth enabled (per-device JWT)")
 	}
+	// DNS-rebinding guard: enabled in local mode (loopback-only) or whenever
+	// HYGUR_ALLOWED_HOSTS is set (the tenant FQDN in cloud). Off for an
+	// unconfigured remote server so existing self-hosted deployments don't break.
+	var allowedHosts []string
+	for _, h := range strings.Split(os.Getenv("HYGUR_ALLOWED_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			allowedHosts = append(allowedHosts, h)
+		}
+	}
+	server.SetHostGuard(cfg.Auth.Mode == "local" || len(allowedHosts) > 0, allowedHosts)
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)

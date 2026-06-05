@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -51,6 +52,21 @@ type Server struct {
 	encryptionHandler *handlers.EncryptionHandler
 	token            string             // Static token (local mode) + WebUI bootstrap
 	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
+	hostGuardEnabled bool               // DNS-rebinding Host allow-list (SetHostGuard)
+	allowedHosts     map[string]bool
+}
+
+// SetHostGuard enables DNS-rebinding protection: requests whose Host isn't loopback
+// or in `hosts` are rejected (except /health, /version). Loopback is always allowed
+// so the local desktop works without configuration. No-op when enabled=false.
+func (s *Server) SetHostGuard(enabled bool, hosts []string) {
+	s.hostGuardEnabled = enabled
+	s.allowedHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range hosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			s.allowedHosts[h] = true
+		}
+	}
 }
 
 // NewServer creates a new API server instance.
@@ -169,6 +185,9 @@ func (s *Server) setupMiddleware() {
 
 	// Real IP extraction (for proxied requests)
 	s.router.Use(middleware.RealIP)
+
+	// DNS-rebinding guard (Host allow-list). Runs early; no-op unless enabled.
+	s.router.Use(s.hostGuardMiddleware)
 
 	// CORS — required for cross-origin clients (the Tauri desktop shell serves
 	// its UI from tauri://localhost; vite dev from http://localhost:5173). Runs
