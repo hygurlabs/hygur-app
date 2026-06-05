@@ -44,6 +44,7 @@ type IngestText struct {
 	URL        string         `json:"url,omitempty"`
 	Author     string         `json:"author,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+	CreatedAt  string         `json:"created_at,omitempty"` // RFC3339; source date (e.g. mail date)
 }
 
 // PushText POSTs one document. Returns the server's status ("indexed"|"updated"|

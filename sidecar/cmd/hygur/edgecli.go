@@ -12,25 +12,34 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/edge"
+	"github.com/hygur/sidecar/internal/mail/proton"
 )
 
-// runEdge is the edge run-mode (C7-E3): runs device-local connectors (Files for
-// now), extracts text locally, and pushes it to a central server with a device
-// token. No KB/LLM/embeddings here. CLI-launched; Tauri spawns it later (E4).
+// runEdge is the edge run-mode (C7 E3+E5): runs DEVICE-local sources (Files +
+// Proton Bridge), extracts text locally, and pushes it to a central server with a
+// device token. No KB/LLM/embeddings here. CLI-launched; Tauri spawns it (E4).
 //
 //	hygur edge --server https://<tenant>.hygur.ai --token-file ~/.hygur-edge/token \
-//	           --folder ~/Documents [--interval 15m]
+//	           --folder ~/Documents \
+//	           --proton --proton-user me@proton.me   (Bridge password in HYGUR_PROTON_PASSWORD)
+//	           [--interval 15m]
 func runEdge(args []string) {
 	fs := flag.NewFlagSet("edge", flag.ExitOnError)
 	server := fs.String("server", os.Getenv("HYGUR_EDGE_SERVER"), "central server URL (required)")
 	tokenFile := fs.String("token-file", "", "device token file (or env HYGUR_EDGE_TOKEN)")
-	folder := fs.String("folder", os.Getenv("HYGUR_EDGE_FOLDER"), "folder to sync (required)")
-	state := fs.String("state", defaultEdgeState(), "watermark state file")
+	stateDir := fs.String("state", defaultEdgeStateDir(), "watermark state directory")
 	interval := fs.Duration("interval", 0, "sync loop interval; 0 = run once and exit")
+	folder := fs.String("folder", os.Getenv("HYGUR_EDGE_FOLDER"), "folder to sync (Files source)")
+	useProton := fs.Bool("proton", false, "sync Proton Bridge mail (device)")
+	protonUser := fs.String("proton-user", os.Getenv("HYGUR_PROTON_USER"), "Proton Bridge username/email")
+	protonMbox := fs.String("proton-mailbox", "All Mail", "Proton mailbox(es), comma-separated")
 	_ = fs.Parse(args)
 
-	if *server == "" || *folder == "" {
-		edgeFatal("edge: --server and --folder are required")
+	if *server == "" {
+		edgeFatal("edge: --server is required")
+	}
+	if *folder == "" && !*useProton {
+		edgeFatal("edge: enable at least one source (--folder and/or --proton)")
 	}
 	token := strings.TrimSpace(os.Getenv("HYGUR_EDGE_TOKEN"))
 	if *tokenFile != "" {
@@ -46,26 +55,19 @@ func runEdge(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
 	client := edge.NewClient(*server, token)
-	syncer := edge.NewFileSync(client, edge.TextParsers())
 
 	runOnce := func() {
-		// Offline → skip this cycle (a spool/retry queue is E6); don't advance the
-		// watermark so the next online cycle re-scans.
 		if err := client.Health(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "edge: server unreachable, skipping cycle: %v\n", err)
 			return
 		}
-		since := readWatermark(*state)
-		st, err := syncer.Run(ctx, *folder, since)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "edge: sync error: %v\n", err)
+		if *folder != "" {
+			syncFiles(ctx, client, *folder, filepath.Join(*stateDir, "files.watermark"))
 		}
-		if st.Newest.After(since) {
-			writeWatermark(*state, st.Newest)
+		if *useProton {
+			syncProton(ctx, client, *protonUser, splitCSV(*protonMbox), filepath.Join(*stateDir, "proton.watermark"))
 		}
-		fmt.Printf("edge sync: pushed=%d skipped=%d errors=%d\n", st.Pushed, st.Skipped, st.Errors)
 	}
 
 	runOnce()
@@ -84,17 +86,64 @@ func runEdge(args []string) {
 	}
 }
 
+func syncFiles(ctx context.Context, client *edge.Client, folder, wmPath string) {
+	since := readWatermark(wmPath)
+	st, err := edge.NewFileSync(client, edge.TextParsers()).Run(ctx, folder, since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "edge files: %v\n", err)
+	}
+	if st.Newest.After(since) {
+		writeWatermark(wmPath, st.Newest)
+	}
+	fmt.Printf("edge files: pushed=%d skipped=%d errors=%d\n", st.Pushed, st.Skipped, st.Errors)
+}
+
+func syncProton(ctx context.Context, client *edge.Client, user string, mailboxes []string, wmPath string) {
+	pass := os.Getenv("HYGUR_PROTON_PASSWORD")
+	if user == "" || pass == "" {
+		fmt.Fprintln(os.Stderr, "edge proton: --proton-user + HYGUR_PROTON_PASSWORD required, skipping")
+		return
+	}
+	conn := proton.NewDefaultIMAPConnector() // honors PROTON_BRIDGE_HOST/PORT
+	conn.SetCredentials(user, pass)
+	if err := conn.Connect(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "edge proton: connect (is Proton Bridge running?): %v\n", err)
+		return
+	}
+	defer conn.Disconnect()
+
+	since := readWatermark(wmPath)
+	st, err := edge.NewMailSync(client, "proton").Run(ctx, conn, mailboxes, since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "edge proton: %v\n", err)
+	}
+	if st.Newest.After(since) {
+		writeWatermark(wmPath, st.Newest)
+	}
+	fmt.Printf("edge proton: pushed=%d threads=%d errors=%d\n", st.Pushed, st.Threads, st.Errors)
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func edgeFatal(msg string) {
 	fmt.Fprintln(os.Stderr, msg)
 	os.Exit(1)
 }
 
-func defaultEdgeState() string {
+func defaultEdgeStateDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".hygur-edge-watermark"
+		return ".hygur-edge"
 	}
-	return filepath.Join(home, ".hygur-edge", "files.watermark")
+	return filepath.Join(home, ".hygur-edge")
 }
 
 // readWatermark returns the persisted last-sync time, or zero if absent/invalid.
