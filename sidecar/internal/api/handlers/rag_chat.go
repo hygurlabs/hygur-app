@@ -550,14 +550,14 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//
 	// When ragEnabled=false (per-request override), drop search_knowledge_base
 	// so the LLM can't trigger retrieval the user explicitly disabled.
+	// Base tool set, computed once; the per-round set is derived from it inside
+	// the loop (tainted-context guard). When ragEnabled=false, drop
+	// search_knowledge_base so the LLM can't trigger retrieval the user disabled.
+	var baseDefs []map[string]any
 	if h.toolRegistry != nil {
-		defs := h.toolRegistry.OpenAIDefinitions()
+		baseDefs = h.toolRegistry.OpenAIDefinitions()
 		if !ragEnabled {
-			defs = filterToolDef(defs, "search_knowledge_base")
-		}
-		if len(defs) > 0 {
-			llmReq.Tools = defs
-			llmReq.ToolChoice = "auto"
+			baseDefs = filterToolDef(baseDefs, "search_knowledge_base")
 		}
 	}
 
@@ -619,8 +619,27 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var streamErr error
 	var lastUsage *llm.Usage
 	finalRound := false
+	tainted := false // set once untrusted web content enters (tainted-context guard)
 
 	for round := 0; round < maxToolRounds && !finalRound; round++ {
+		// Tainted-context injection defence: once a web tool has pulled untrusted
+		// external content into the conversation, drop the side-effecting tools so
+		// an injected page can't trick the model into creating notes/events. The
+		// read-only tools (search_knowledge_base, web_search, fetch_url) stay.
+		roundDefs := baseDefs
+		if tainted {
+			for _, name := range untrustedDisabledTools {
+				roundDefs = filterToolDef(roundDefs, name)
+			}
+		}
+		if len(roundDefs) > 0 {
+			llmReq.Tools = roundDefs
+			llmReq.ToolChoice = "auto"
+		} else {
+			llmReq.Tools = nil
+			llmReq.ToolChoice = ""
+		}
+
 		var roundContent strings.Builder
 		var roundFinishReason string
 		assembler := llm.NewToolCallAssembler()
@@ -691,6 +710,9 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			argsRaw := json.RawMessage(tc.Function.Arguments)
 			h.logger.Info().Str("tool", tc.Function.Name).Str("call_id", tc.ID).RawJSON("args", argsRaw).Msg("executing tool")
 			result, execErr := h.toolRegistry.Execute(r.Context(), tc.Function.Name, argsRaw)
+			if isUntrustedSourceTool(tc.Function.Name) {
+				tainted = true // subsequent rounds lose the side-effecting tools
+			}
 
 			evt := map[string]any{
 				"type":      "tool_call",
@@ -1265,6 +1287,17 @@ func (h *RAGChatHandler) buildNoResultsMessage(messages []llm.Message, ragContex
 // filterToolDef removes the entry whose function.name matches `name` from the
 // list of OpenAI tool definitions. Used to drop the search_knowledge_base tool
 // when RAG is disabled per-request.
+// untrustedDisabledTools are the side-effecting tools removed from the model's
+// toolset once untrusted web content has entered the conversation (tainted
+// context). Add any future write/action tool here.
+var untrustedDisabledTools = []string{"create_note", "create_calendar_event"}
+
+// isUntrustedSourceTool reports whether a tool pulls UNTRUSTED external content
+// into the conversation — which taints the context for the rest of the turn.
+func isUntrustedSourceTool(name string) bool {
+	return name == "web_search" || name == "fetch_url"
+}
+
 func filterToolDef(defs []map[string]any, name string) []map[string]any {
 	out := make([]map[string]any, 0, len(defs))
 	for _, d := range defs {

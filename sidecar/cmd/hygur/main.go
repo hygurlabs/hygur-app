@@ -639,6 +639,17 @@ func main() {
 	)
 	toolRegistry.MustRegister(searchKBTool)
 	toolRegistry.MustRegister(createCalendarEventTool)
+
+	// Web access (opt-in): register web_search + fetch_url only when a search
+	// endpoint is configured. Web access means data leaves the machine, so it is
+	// off by default. Injection defences: fetch_url is SSRF-guarded; once either
+	// tool runs, the chat loop drops side-effecting tools (tainted context).
+	if webSearchURL := strings.TrimSpace(os.Getenv("HYGUR_WEB_SEARCH_URL")); webSearchURL != "" {
+		toolRegistry.MustRegister(tools.NewWebSearchTool(webSearchURL, os.Getenv("HYGUR_WEB_SEARCH_KEY"), 5))
+		toolRegistry.MustRegister(tools.NewFetchURLTool(6000))
+		logger.Info().Str("endpoint", webSearchURL).Msg("web tools enabled (web_search + fetch_url)")
+	}
+
 	ragChatHandler.SetToolRegistry(toolRegistry)
 
 	// Persistent chat transcripts — the handler saves each turn (user +
