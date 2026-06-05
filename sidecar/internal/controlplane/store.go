@@ -124,10 +124,19 @@ CREATE TABLE IF NOT EXISTS stripe_subscriptions (
   provisioned_at      TEXT,
   created_at          TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_sub_state ON stripe_subscriptions(provision_state);`
+CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("controlplane: migrate: %w", err)
+	}
+	// Idempotent column add: DBs created before provision_state existed (CREATE
+	// TABLE IF NOT EXISTS won't alter an existing table). Ignore "duplicate column"
+	// on fresh DBs that already have it. Then index it.
+	if _, err := s.db.Exec(`ALTER TABLE stripe_subscriptions ADD COLUMN provision_state TEXT NOT NULL DEFAULT 'pending'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("controlplane: migrate provision_state: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_stripe_sub_state ON stripe_subscriptions(provision_state)`); err != nil {
+		return fmt.Errorf("controlplane: migrate index: %w", err)
 	}
 	return nil
 }
