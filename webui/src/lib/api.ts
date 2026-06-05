@@ -244,9 +244,14 @@ export const api = {
   setTokenPricing: (p: TokenPricing) =>
     putJSON<{ status: string }>("/usage/pricing", p),
 
-  // DB backup / restore. Backup streams a consistent snapshot the browser saves
-  // wherever you choose; restore uploads a snapshot, staged and applied on the
-  // next app restart.
+  // DB backup / restore. Locally the sidecar writes the snapshot to ~/Downloads
+  // (the webview can't trigger a browser download); remotely the browser
+  // streams + saves it. Restore uploads a snapshot, applied on the next restart.
+  saveBackupLocal: () =>
+    postJSON<{ status: string; path: string; encrypted: boolean }>(
+      "/admin/db/backup/save",
+      {},
+    ),
   downloadBackup: async (): Promise<void> => {
     const r = await fetch(u("/admin/db/backup"), { headers: authHeaders() });
     if (!r.ok) throw httpError(r);

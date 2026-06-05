@@ -73,6 +73,53 @@ func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SaveLocal (POST /admin/db/backup/save) writes a snapshot to a discoverable
+// local folder (~/Downloads, falling back to <dataDir>/backups) and returns its
+// path. The desktop app's webview can't trigger a browser download, but the
+// sidecar runs on the same machine — so it just writes the file. Remote clients
+// use Download (streamed over HTTP) instead.
+func (h *BackupHandler) SaveLocal(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	dir := backupDir(h.dbPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		h.logger.Error().Err(err).Str("dir", dir).Msg("cannot create backup folder")
+		http.Error(w, "cannot create backup folder", http.StatusInternalServerError)
+		return
+	}
+	name := fmt.Sprintf("hygur-backup-%s.db", time.Now().Format("20060102-150405"))
+	dest := filepath.Join(dir, name)
+	_ = os.Remove(dest) // VACUUM INTO requires the target not to exist
+	if err := h.db.BackupTo(r.Context(), dest, h.dbKey); err != nil {
+		h.logger.Error().Err(err).Msg("backup save failed")
+		http.Error(w, "backup failed", http.StatusInternalServerError)
+		return
+	}
+	h.logger.Info().Str("path", dest).Msg("backup saved locally")
+	writeBackupJSON(w, http.StatusOK, map[string]any{
+		"status":    "saved",
+		"path":      dest,
+		"encrypted": h.dbKey != "",
+	})
+}
+
+// backupDir prefers ~/Downloads (where a user expects a saved file), falling
+// back to a "backups" folder beside the live DB.
+func backupDir(dbPath string) string {
+	if home, err := os.UserHomeDir(); err == nil {
+		dl := filepath.Join(home, "Downloads")
+		if fi, err := os.Stat(dl); err == nil && fi.IsDir() {
+			return dl
+		}
+	}
+	if dbPath != "" {
+		return filepath.Join(filepath.Dir(dbPath), "backups")
+	}
+	return os.TempDir()
+}
+
 // Restore (POST /admin/db/restore, multipart field "file") validates the
 // uploaded database and stages it for the next boot (store.ApplyPendingRestore
 // swaps it in). The app must be restarted to apply.

@@ -491,13 +491,23 @@ function BackupSection() {
   const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [staged, setStaged] = useState(false);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function onBackup() {
     setError(null);
+    setSavedPath(null);
     setBusy("backup");
     try {
-      await api.downloadBackup();
+      // The desktop webview can't trigger a browser download, so locally the
+      // sidecar (same machine) writes the file and reports where. A remote
+      // server has no access to your disk → stream + save in the browser.
+      if (isRemote()) {
+        await api.downloadBackup();
+      } else {
+        const { path } = await api.saveBackupLocal();
+        setSavedPath(path);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -536,11 +546,15 @@ function BackupSection() {
         </div>
       )}
       <Row
-        label="Download a backup"
-        hint="Saves a consistent snapshot of your database (encryption preserved) wherever you choose."
+        label="Save a backup"
+        hint={
+          isRemote()
+            ? "Downloads a consistent snapshot of your database (encryption preserved)."
+            : "Writes a consistent snapshot (encryption preserved) to your Downloads folder."
+        }
       >
         <Button onClick={() => void onBackup()} disabled={busy !== null}>
-          {busy === "backup" ? "Preparing…" : "Download"}
+          {busy === "backup" ? "Preparing…" : isRemote() ? "Download" : "Save backup"}
         </Button>
       </Row>
       <Row
@@ -562,6 +576,11 @@ function BackupSection() {
           {busy === "restore" ? "Uploading…" : "Restore…"}
         </Button>
       </Row>
+      {savedPath && (
+        <div className="px-4 py-3 text-[12.5px] text-accent">
+          Backup saved to <span className="font-mono">{savedPath}</span>
+        </div>
+      )}
       {staged && (
         <div className="px-4 py-3 text-[12.5px] text-accent">
           Backup staged — restart Hygur to apply it.

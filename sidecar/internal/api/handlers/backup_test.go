@@ -17,6 +17,47 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// TestBackupHandler_SaveLocal verifies the local-save path writes a real SQLite
+// snapshot to disk and returns its path. HOME is redirected to a temp dir so the
+// ~/Downloads probe falls back to <dataDir>/backups instead of the real home.
+func TestBackupHandler_SaveLocal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hygur.db")
+	db, err := store.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	h := NewBackupHandler(db, dbPath, "", zerolog.Nop())
+	router := chi.NewRouter()
+	router.Post("/admin/db/backup/save", h.SaveLocal)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/db/backup/save", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Path   string `json:"path"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status != "saved" || resp.Path == "" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	b, err := os.ReadFile(resp.Path)
+	if err != nil {
+		t.Fatalf("read saved backup: %v", err)
+	}
+	if len(b) < 100 || string(b[:16]) != "SQLite format 3\x00" {
+		t.Fatalf("saved file is not a plaintext SQLite DB (%d bytes)", len(b))
+	}
+}
+
 // TestBackupHandler_DownloadThenRestore exercises the wiring end-to-end through
 // a real chi router: GET streams a valid snapshot, POST re-uploads it and stages
 // a restore, and a garbage upload is rejected before staging.

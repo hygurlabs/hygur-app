@@ -492,6 +492,14 @@ func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
 }
 
+func (s *Server) handleBackupSave(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.SaveLocal(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	if s.backupHandler != nil {
 		s.backupHandler.Restore(w, r)
