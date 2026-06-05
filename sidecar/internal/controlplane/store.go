@@ -110,7 +110,20 @@ CREATE TABLE IF NOT EXISTS enroll_codes (
   label          TEXT NOT NULL DEFAULT '',
   expires_at     TEXT NOT NULL,
   used_at        TEXT
-);`
+);
+-- Stripe subscription → account mapping. The primary key on stripe_sub_id and
+-- the provisioned_at claim make billing webhooks idempotent: a retried / replayed
+-- / reloaded paid event maps to the SAME account and provisions the tenant pod at
+-- most once (no provisioning loop).
+CREATE TABLE IF NOT EXISTS stripe_subscriptions (
+  stripe_sub_id       TEXT PRIMARY KEY,
+  account_number      TEXT NOT NULL REFERENCES accounts(account_number),
+  customer_id         TEXT NOT NULL DEFAULT '',
+  checkout_session_id TEXT NOT NULL DEFAULT '',
+  provisioned_at      TEXT,
+  created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("controlplane: migrate: %w", err)
 	}
