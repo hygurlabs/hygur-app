@@ -95,10 +95,24 @@ export const native = {
     },
   },
   prefs: {
-    getBool: (key: string): Promise<boolean> =>
-      window.HygurNative?.prefs.getBool(key) ?? Promise.resolve(false),
-    setBool: (key: string, value: boolean): Promise<unknown> =>
-      window.HygurNative?.prefs.setBool(key, value) ?? Promise.resolve(),
+    getBool: (key: string): Promise<boolean> => {
+      if (window.HygurNative) return window.HygurNative.prefs.getBool(key);
+      // Web/Tauri fallback: persist in localStorage so toggles survive reloads.
+      try {
+        return Promise.resolve(localStorage.getItem(`pref.${key}`) === "1");
+      } catch {
+        return Promise.resolve(false);
+      }
+    },
+    setBool: (key: string, value: boolean): Promise<unknown> => {
+      if (window.HygurNative) return window.HygurNative.prefs.setBool(key, value);
+      try {
+        localStorage.setItem(`pref.${key}`, value ? "1" : "0");
+      } catch {
+        /* storage unavailable — pref won't persist, but the UI still toggles */
+      }
+      return Promise.resolve();
+    },
   },
   perms: {
     status: (): Promise<Record<string, string>> =>
@@ -110,8 +124,30 @@ export const native = {
     window.open(url, "_blank", "noopener");
     return Promise.resolve();
   },
-  notify: (title: string, body: string): Promise<unknown> =>
-    window.HygurNative?.notify(title, body) ?? Promise.resolve(),
+  /** Native shells post a system banner; web/Tauri fall back to the Web
+   *  Notifications API (requesting permission on first use). */
+  notify: (title: string, body: string): Promise<unknown> => {
+    if (window.HygurNative) return window.HygurNative.notify(title, body);
+    try {
+      if (typeof Notification === "undefined") return Promise.resolve();
+      const show = () => {
+        try {
+          new Notification(title, { body });
+        } catch {
+          /* construction can throw on some platforms — ignore */
+        }
+      };
+      if (Notification.permission === "granted") show();
+      else if (Notification.permission !== "denied") {
+        void Notification.requestPermission().then((p) => {
+          if (p === "granted") show();
+        });
+      }
+    } catch {
+      /* Notifications unavailable — silent */
+    }
+    return Promise.resolve();
+  },
   /** Saves a text file. Native shells show a save panel; a plain browser
    *  triggers a blob download. */
   download: (filename: string, mime: string, content: string): Promise<boolean> => {
