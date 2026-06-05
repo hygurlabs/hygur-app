@@ -54,7 +54,13 @@ function fmtETA(s: number): string {
   return m < 60 ? `${m} min` : `${Math.round(m / 60)} h`;
 }
 
-export function Sidebar() {
+export function Sidebar({
+  open = false,
+  onClose,
+}: {
+  open?: boolean;
+  onClose?: () => void;
+}) {
   const { busy, label, progress } = useActivity();
   const { data: healthy } = useQuery({
     queryKey: ["health"],
@@ -67,13 +73,17 @@ export function Sidebar() {
   });
 
   return (
-    <nav className="flex flex-col gap-0.5 border-r border-border bg-surface2 px-2.5 py-4 print:hidden">
+    <nav
+      className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface2 px-2.5 py-4 transition-transform duration-200 ease-out md:static md:z-auto md:w-[212px] md:translate-x-0 print:hidden ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       <div className="px-2.5 pb-4 pt-1 font-display text-[21px] font-semibold tracking-tight">
         Hygur
       </div>
 
       {NAV.map(({ to, label, icon: Icon, end }) => (
-        <NavLink key={to} to={to} end={end} className={linkClass}>
+        <NavLink key={to} to={to} end={end} className={linkClass} onClick={onClose}>
           <Icon size={17} strokeWidth={1.75} />
           {label}
         </NavLink>
@@ -81,7 +91,7 @@ export function Sidebar() {
 
       <div className="mt-auto flex flex-col gap-0.5 pt-3">
         {BOTTOM_NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={linkClass}>
+          <NavLink key={to} to={to} end={end} className={linkClass} onClick={onClose}>
             <Icon size={17} strokeWidth={1.75} />
             {label}
           </NavLink>
