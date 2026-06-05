@@ -585,6 +585,27 @@ export function Ask() {
     }
   }
 
+  // Open an attached document in the right-side preview panel: fetch its
+  // extracted/normalised text and render it (Markdown for .md, text for PDF/DOCX).
+  async function openDocument(att: Extract<AttachmentRef, { type: "document" }>) {
+    try {
+      const item = await api.knowledgeItem(att.content_id);
+      openDetail({
+        title: item.title || att.title || "Document",
+        contentId: att.content_id,
+        meta: [srcLabel(item.source_type), fmtDate(item.date)].filter(Boolean),
+        body: item.normalized_text || "_(empty)_",
+      });
+    } catch {
+      openDetail({
+        title: att.title || "Document",
+        contentId: att.content_id,
+        meta: [],
+        body: "_(couldn't load this document)_",
+      });
+    }
+  }
+
   const isFileDrag = (e: React.DragEvent) =>
     Array.from(e.dataTransfer.types).includes("Files");
 
@@ -750,6 +771,38 @@ export function Ask() {
                             )
                             .map((a, i) => (
                               <AudioAttachment key={i} att={a} />
+                            ))}
+                        </div>
+                      )}
+                      {/* Attached documents (PDF/DOCX/MD/…) — click to preview in
+                          the right panel (rendered MD / extracted text). */}
+                      {t.attachments?.some((a) => a.type === "document") && (
+                        <div className="flex w-full max-w-[420px] flex-col gap-2">
+                          {t.attachments
+                            .filter(
+                              (a): a is Extract<AttachmentRef, { type: "document" }> =>
+                                a.type === "document",
+                            )
+                            .map((a, i) => (
+                              <button
+                                key={i}
+                                onClick={() => void openDocument(a)}
+                                className="flex w-full items-center gap-2.5 rounded-xl border border-border bg-surface2 px-3 py-2.5 text-left transition-colors hover:border-accent/50"
+                              >
+                                <FileText
+                                  size={16}
+                                  strokeWidth={1.9}
+                                  className="shrink-0 text-accent"
+                                />
+                                <span className="truncate text-[13px] font-medium">
+                                  {a.title || a.content_id}
+                                </span>
+                                <ChevronRight
+                                  size={14}
+                                  strokeWidth={2}
+                                  className="ml-auto shrink-0 text-faint"
+                                />
+                              </button>
                             ))}
                         </div>
                       )}
