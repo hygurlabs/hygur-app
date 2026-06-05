@@ -16,11 +16,15 @@ INSTALL_DIR=$(HOME)/.hygur/bin
 # CGO is required for the sqlite3 driver.
 CGO_ENABLED=1
 
-# Build tags. sqlite_fts5 enables SQLite's FTS5 extension in mattn/go-sqlite3,
-# which powers the lexical/BM25 half of the hybrid retriever. Without it,
-# `CREATE VIRTUAL TABLE ... USING fts5` fails at RUNTIME with "no such module:
-# fts5" — the build stays green, so this tag must be on every build path.
-GO_TAGS := sqlite_fts5
+# Build tags for the SQLCipher-enabled sqlite3 driver (mutecomm/go-sqlcipher):
+#   sqlite_fts5  — FTS5 extension (lexical/BM25 half of the hybrid retriever).
+#   sqlite_json1 — JSON1 functions (json_extract/json_each) used across metadata,
+#                  entity search, source_ref lookup, mail filtering.
+# Unlike mattn (which bundled JSON1 by default), mutecomm gates BOTH behind tags,
+# and both fail at RUNTIME if missing ("no such module: fts5" / "no such function:
+# json_extract") while the build stays green — so this tag list must be on every
+# build AND test path.
+GO_TAGS := sqlite_fts5 sqlite_json1
 
 # Version information injected at build time
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")

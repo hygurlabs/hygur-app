@@ -47,15 +47,17 @@ test: test-go test-binary build-app
 	@echo ""
 	@echo "✅ Tout est vert. Lance \`make verify-dmg\` pour tester le packaging complet."
 
-# sqlite_fts5 must match the sidecar Makefile's GO_TAGS: the FTS5 lexical index
-# is a runtime SQLite module, absent without this tag (build stays green, app breaks).
+# sqlite_fts5 + sqlite_json1 must match the sidecar Makefile's GO_TAGS: both are
+# runtime SQLite features under mutecomm/go-sqlcipher, absent without these tags
+# (build stays green, app breaks: "no such module: fts5" / "no such function:
+# json_extract").
 # Depends on `webui`: the api/webui package go:embed's dist/, which is generated
 # (not committed), so the Go build/test can't compile until the SPA is built.
 test-go: webui
 	@echo "→ Tests Go (race detector)..."
-	cd $(SIDECAR) && go test -tags sqlite_fts5 -race ./...
+	cd $(SIDECAR) && go test -tags 'sqlite_fts5 sqlite_json1' -race ./...
 	@echo "→ go vet..."
-	cd $(SIDECAR) && go vet -tags sqlite_fts5 ./...
+	cd $(SIDECAR) && go vet -tags 'sqlite_fts5 sqlite_json1' ./...
 	@echo "✅ Tests Go OK"
 
 test-binary: build-sidecar
@@ -149,7 +151,7 @@ webui:
 ## or a per-OS CI runner — cross-compiling CGO+sqlite from macOS is brittle.
 build-server: webui
 	@echo "→ Build hygur-server (host natif)..."
-	cd $(SIDECAR) && CGO_ENABLED=1 go build -tags sqlite_fts5 \
+	cd $(SIDECAR) && CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
 		-ldflags "-X github.com/hygur/sidecar/internal/version.Version=$(VERSION)" \
 		-o bin/hygur-server ./cmd/hygur
 	@echo "✅ $(SIDECAR)/bin/hygur-server"

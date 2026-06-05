@@ -29,7 +29,7 @@ COPY sidecar ./
 # Bring in the freshly built SPA so go:embed has something to embed.
 COPY --from=webui /src/sidecar/internal/api/webui/dist ./internal/api/webui/dist
 ARG VERSION=docker
-RUN CGO_ENABLED=1 go build -tags sqlite_fts5 \
+RUN CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
     -ldflags "-X github.com/hygur/sidecar/internal/version.Version=${VERSION}" \
     -o /out/hygur-server ./cmd/hygur
 

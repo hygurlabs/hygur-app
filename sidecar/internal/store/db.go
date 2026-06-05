@@ -6,13 +6,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
+	// SQLCipher-enabled SQLite (drop-in for mattn/go-sqlite3; registers driver
+	// "sqlite3"). A plaintext DB opens unchanged when no key is supplied — see
+	// NewDBWithKey — so existing unencrypted databases keep working.
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // DB wraps the SQLite database connection and provides CRUD operations.
@@ -27,10 +31,19 @@ func (d *DB) SQLDB() *sql.DB {
 	return d.db
 }
 
-// NewDB opens or creates a SQLite database at the given path and applies migrations.
-// The database file is created with 0600 permissions for security.
-// For in-memory databases, use ":memory:" as the path.
+// NewDB opens or creates a plaintext SQLite database at the given path and
+// applies migrations. The database file is created with 0600 permissions for
+// security. For in-memory databases, use ":memory:" as the path.
 func NewDB(path string) (*DB, error) {
+	return NewDBWithKey(path, "")
+}
+
+// NewDBWithKey is NewDB with optional SQLCipher encryption at rest. When key is
+// non-empty the database is opened encrypted (DSN _pragma_key); an empty key
+// opens a plaintext database — the default — so existing unencrypted files keep
+// working unchanged. The key is the SQLCipher passphrase (e.g. an OS-keychain
+// secret locally, or the tenant DEK in the cloud).
+func NewDBWithKey(path, key string) (*DB, error) {
 	// For non-memory databases, ensure the directory exists and set file permissions
 	if path != ":memory:" {
 		dir := filepath.Dir(path)
@@ -57,6 +70,12 @@ func NewDB(path string) (*DB, error) {
 		// Use a unique name so each NewDB(":memory:") call creates a separate database
 		uniqueID := uuid.New().String()[:8]
 		dsn = fmt.Sprintf("file:memdb_%s?mode=memory&cache=shared&_foreign_keys=on", uniqueID)
+	}
+
+	// Encrypt at rest when a key is supplied. _pragma_key is applied on every
+	// pooled connection by the SQLCipher driver before any read.
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
 	}
 
 	db, err := sql.Open("sqlite3", dsn)
@@ -102,6 +121,63 @@ func NewDB(path string) (*DB, error) {
 	}
 
 	return &DB{db: db}, nil
+}
+
+// MigratePlaintextToEncrypted converts an existing plaintext database at path
+// into a SQLCipher-encrypted one keyed by key, in place. It exports via
+// sqlcipher_export (schema + data + FTS5 indexes), verifies the result opens
+// with the key, then swaps it in — keeping the original as "<path>.plaintext.bak"
+// so a failed migration is recoverable. Call only on a plaintext DB (e.g. when
+// a user first opts into local encryption).
+func MigratePlaintextToEncrypted(path, key string) error {
+	if key == "" {
+		return fmt.Errorf("migrate: empty key")
+	}
+	tmp := path + ".sqlcipher-tmp"
+	_ = os.Remove(tmp)
+
+	// Export the plaintext DB into a fresh encrypted DB via SQLCipher.
+	src, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return fmt.Errorf("migrate: open source: %w", err)
+	}
+	exportErr := func() error {
+		if _, err := src.Exec(`ATTACH DATABASE ? AS enc KEY ?`, tmp, key); err != nil {
+			return fmt.Errorf("attach: %w", err)
+		}
+		if _, err := src.Exec(`SELECT sqlcipher_export('enc')`); err != nil {
+			return fmt.Errorf("export: %w", err)
+		}
+		if _, err := src.Exec(`DETACH DATABASE enc`); err != nil {
+			return fmt.Errorf("detach: %w", err)
+		}
+		return nil
+	}()
+	src.Close()
+	if exportErr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("migrate: %w", exportErr)
+	}
+
+	// Verify the encrypted copy opens with the key and migrates cleanly.
+	verify, err := NewDBWithKey(tmp, key)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("migrate: verify open: %w", err)
+	}
+	verify.Close()
+
+	// Swap in: keep the original as a backup, then move the encrypted copy in.
+	backup := path + ".plaintext.bak"
+	if err := os.Rename(path, backup); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("migrate: backup original: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Rename(backup, path) // best-effort rollback
+		return fmt.Errorf("migrate: swap: %w", err)
+	}
+	return nil
 }
 
 // ensureRAGSchema idempotently guarantees the sections + chunks_fts objects
