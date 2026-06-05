@@ -1,0 +1,25 @@
+# Hygur control plane (hygur-console): device enroll/refresh + Stripe billing
+# webhook. Serves no SPA, so no webui stage. Build context = repo root.
+#   nerdctl build -f Dockerfile.console -t hygur-console:dev --build-arg VERSION=cloud-dev .
+FROM golang:1.26-bookworm AS build
+WORKDIR /src/sidecar
+COPY sidecar/go.mod sidecar/go.sum ./
+RUN go mod download
+COPY sidecar ./
+ARG VERSION=cloud-dev
+RUN CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
+    -ldflags "-X github.com/hygur/sidecar/internal/version.Version=${VERSION}" \
+    -o /out/hygur-console ./cmd/hygur-console
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/hygur-console /usr/local/bin/hygur-console
+ENV HYGUR_CONSOLE_ADDR=:8090 \
+    HYGUR_CONSOLE_DB=/data/console.db \
+    HYGUR_CONSOLE_DOMAIN=hygur.ai
+VOLUME /data
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/hygur-console"]
+CMD ["serve"]
