@@ -260,6 +260,9 @@ export interface SidecarConfig {
     entity_search_min_score: number;
   };
   mail: { reconcile_deletions: boolean };
+  /** Hygur-operated cloud tenant: the AI-runtime endpoints are operator-controlled
+   *  (redacted server-side). The UI hides the AI-runtime editor when true. */
+  managed?: boolean;
 }
 
 /** Per-1M-token prices for the cost estimate (GET/PUT /usage). Chat is billed

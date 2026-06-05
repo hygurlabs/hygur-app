@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -544,6 +545,11 @@ func main() {
 	configHandler := handlers.NewConfigHandler(cfg, configPath, logger)
 	// Secret config fields (LLM API key) are persisted to the credential store.
 	configHandler.SetCredentialStore(credStore)
+	// Managed cloud tenant (set on the Hygur Cloud pod): redact + lock the
+	// AI-runtime endpoints so the client never sees our upstream Infomaniak ones.
+	managedDeployment := strings.EqualFold(os.Getenv("HYGUR_MANAGED"), "true") ||
+		os.Getenv("HYGUR_MANAGED") == "1"
+	configHandler.SetManaged(managedDeployment)
 	// Apply runtime-relevant config changes from PATCH /config without a restart.
 	configHandler.SetOnChange(func(c *config.Config) {
 		for _, mc := range mailProviders {

@@ -26,12 +26,19 @@ type ConfigHandler struct {
 	mu         sync.RWMutex
 	onChange   func(*config.Config)
 	credStore  *auth.CredentialStore
+	managed    bool
 	logger     zerolog.Logger
 }
 
 func NewConfigHandler(cfg *config.Config, configPath string, logger zerolog.Logger) *ConfigHandler {
 	return &ConfigHandler{cfg: cfg, configPath: configPath, logger: logger}
 }
+
+// SetManaged marks this sidecar as a Hygur-operated cloud tenant. In managed
+// mode the AI-runtime endpoints/models are operator-controlled: GET /config
+// redacts them (the client must never see our upstream Infomaniak endpoints)
+// and PATCH /config rejects any change to them.
+func (h *ConfigHandler) SetManaged(v bool) { h.managed = v }
 
 // SetOnChange registers a callback fired after a successful PATCH so runtime
 // components (e.g. the mail connector) can pick up changes without a restart.
@@ -66,6 +73,9 @@ type ConfigResponse struct {
 	DailyBrief DailyBriefCfgResp `json:"daily_brief"`
 	Retrieval  RetrievalCfgResp  `json:"retrieval"`
 	Mail       MailCfgResp       `json:"mail"`
+	// Managed = Hygur-operated cloud tenant. The client uses this to hide the
+	// AI-runtime editor; the endpoints/models below are redacted server-side.
+	Managed bool `json:"managed"`
 }
 
 type MailCfgResp struct {
@@ -196,6 +206,18 @@ func (h *ConfigHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		Mail: MailCfgResp{
 			ReconcileDeletions: h.cfg.Mail.ReconcileDeletions,
 		},
+		Managed: h.managed,
+	}
+
+	// In a managed cloud tenant the AI runtime is ours: never leak the upstream
+	// endpoints or model identifiers to the client.
+	if h.managed {
+		resp.LMStudio.URL = ""
+		resp.LMStudio.EmbeddingURL = ""
+		resp.LMStudio.IndexingURL = ""
+		resp.LMStudio.ModelDefault = ""
+		resp.LMStudio.ModelIndexing = ""
+		resp.LMStudio.EmbeddingModel = ""
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -216,6 +238,12 @@ func (h *ConfigHandler) PatchConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Apply patches to in-memory config.
 	if lm := body.LMStudio; lm != nil {
+		// Managed cloud tenant: the AI runtime is operator-controlled — the client
+		// can't repoint it (and never saw it). Reject the whole LM block.
+		if h.managed {
+			http.Error(w, `{"error":"AI runtime is managed by the operator"}`, http.StatusForbidden)
+			return
+		}
 		// The API key is a secret: route it to the encrypted credential store,
 		// never to config.yaml. Handle it first so a storage failure short-circuits
 		// before any other field is mutated. The restart at the end reloads it.

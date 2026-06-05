@@ -5,6 +5,7 @@ import { native } from "../lib/native";
 import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
 import type {
   SidecarConfig,
+  SidecarConfigPatch,
   TokenPeriodUsage,
   TokenPricing,
   TokenUsageResponse,
@@ -163,20 +164,8 @@ export function Settings() {
   }
 
   const save = useMutation({
-    mutationFn: (cfg: SidecarConfig) =>
-      api.patchConfig({
-        lm_studio: {
-          url: cfg.lm_studio.url,
-          embedding_url: cfg.lm_studio.embedding_url,
-          indexing_url: cfg.lm_studio.indexing_url,
-          model_default: cfg.lm_studio.model_default,
-          model_indexing: cfg.lm_studio.model_indexing,
-          embedding_model: cfg.lm_studio.embedding_model,
-          embedding_max_tokens: cfg.lm_studio.embedding_max_tokens,
-          embedding_batch_size: cfg.lm_studio.embedding_batch_size,
-          // Only send the key when the user typed one; empty leaves it untouched.
-          ...(apiKey.trim() !== "" ? { api_key: apiKey.trim() } : {}),
-        },
+    mutationFn: (cfg: SidecarConfig) => {
+      const patch: SidecarConfigPatch = {
         logging: { level: cfg.logging.level },
         daily_brief: {
           enabled: cfg.daily_brief.enabled,
@@ -189,7 +178,25 @@ export function Settings() {
           temporal_scoring_mode: cfg.retrieval.temporal_scoring_mode,
         },
         mail: { reconcile_deletions: cfg.mail.reconcile_deletions },
-      }),
+      };
+      // Managed cloud tenant: the AI runtime is operator-controlled — never send
+      // it (the sidecar would reject it with 403 and break the whole save).
+      if (!cfg.managed) {
+        patch.lm_studio = {
+          url: cfg.lm_studio.url,
+          embedding_url: cfg.lm_studio.embedding_url,
+          indexing_url: cfg.lm_studio.indexing_url,
+          model_default: cfg.lm_studio.model_default,
+          model_indexing: cfg.lm_studio.model_indexing,
+          embedding_model: cfg.lm_studio.embedding_model,
+          embedding_max_tokens: cfg.lm_studio.embedding_max_tokens,
+          embedding_batch_size: cfg.lm_studio.embedding_batch_size,
+          // Only send the key when the user typed one; empty leaves it untouched.
+          ...(apiKey.trim() !== "" ? { api_key: apiKey.trim() } : {}),
+        };
+      }
+      return api.patchConfig(patch);
+    },
     onSuccess: () => {
       setApiKey("");
       qc.invalidateQueries({ queryKey: ["config"] });
@@ -212,11 +219,15 @@ export function Settings() {
     );
   }
 
-  // Typed nested setters keep the JSX terse.
+  // Typed nested setters keep the JSX terse. `section` is always one of the
+  // object-valued config groups (never the `managed` flag), so the spread is safe.
   const set = <K extends keyof SidecarConfig>(
     section: K,
     patch: Partial<SidecarConfig[K]>,
-  ) => setDraft((d) => (d ? { ...d, [section]: { ...d[section], ...patch } } : d));
+  ) =>
+    setDraft((d) =>
+      d ? { ...d, [section]: { ...(d[section] as object), ...patch } } : d,
+    );
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(data) || apiKey.trim() !== "";
 
@@ -238,6 +249,9 @@ export function Settings() {
 
       <ConnectionSection />
 
+      {/* In a managed cloud tenant the AI runtime is operator-controlled and
+          redacted server-side — hide the editor entirely. */}
+      {!draft.managed && (
       <Section title="AI runtime">
         <Row label="Inference URL" hint="OpenAI-compatible chat endpoint (LM Studio, vLLM…)">
           <TextInput
@@ -323,6 +337,7 @@ export function Settings() {
           />
         </Row>
       </Section>
+      )}
 
       <Section title="Briefings">
         <Row label="Daily brief" hint="Generate a morning digest of recent activity">
