@@ -16,6 +16,9 @@ export function EdgeProtonCard() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [cfgOpen, setCfgOpen] = useState(false);
+  const [user, setUser] = useState<string | null>(null);
+  const [pass, setPass] = useState("");
 
   // Probe /edge/status: 200 only on a local thin-client sidecar (desktop cloud).
   // This IS the capability gate — no isDesktop()/isTauri() check, which is
@@ -36,6 +39,10 @@ export function EdgeProtonCard() {
       setTimeout(() => void qc.invalidateQueries({ queryKey: ["edge-status"] }), 1500);
     },
   });
+
+  // Current edge config (proton_user + whether a password is stored) so the
+  // Bridge-login form can show what's set without ever echoing the secret.
+  const cfgQ = useQuery({ queryKey: ["edge-cfg"], queryFn: () => getDesktopConfig(), retry: false });
 
   // Hide ONLY when genuinely not a thin client: a browser shell hits a static host
   // (404), a local/self-host sidecar returns 503. ANY other state — loading, 200,
@@ -62,6 +69,8 @@ export function EdgeProtonCard() {
           ? st.last_error
           : `Last synced ${st?.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : "never"}${st?.mail_pushed ? ` · ${st.mail_pushed} pushed last run` : ""}`;
   const syncing = !!st?.running;
+  const userVal = user ?? cfgQ.data?.proton_user ?? "";
+  const pwSet = !!cfgQ.data?.proton_password_set;
 
   const loadFolders = async () => {
     setBusy(true);
@@ -125,6 +134,32 @@ export function EdgeProtonCard() {
     }
   };
 
+  // Save the Proton Bridge credentials to the edge config (via Tauri). A blank
+  // password means "keep the stored one" — it is never echoed back to the page.
+  const saveCredentials = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const c = await getDesktopConfig();
+      await setDesktopConfig({
+        mode: c.mode || "cloud",
+        server: c.server,
+        folder: c.folder,
+        proton_user: userVal.trim(),
+        proton_password: pass, // blank = keep stored
+        proton_mailbox: c.proton_mailbox,
+        interval_secs: c.interval_secs,
+      });
+      setPass("");
+      setSaved(true);
+      void qc.invalidateQueries({ queryKey: ["edge-cfg"] });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="mb-6 rounded-xl border border-border bg-surface p-4">
       <div className="flex items-center justify-between">
@@ -136,6 +171,16 @@ export function EdgeProtonCard() {
           </div>
         </div>
         <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setCfgOpen((v) => !v);
+              setSaved(false);
+            }}
+            className="rounded-md border border-border px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            Bridge login
+          </button>
           <button
             type="button"
             onClick={loadFolders}
@@ -156,6 +201,53 @@ export function EdgeProtonCard() {
       </div>
 
       {err && <p className="mt-3 text-[12px] text-danger">{err}</p>}
+
+      {cfgOpen && (
+        <div className="mt-3 space-y-2 rounded-lg border border-border p-3">
+          <p className="text-[12px] text-muted">
+            Proton Bridge runs on this Mac. Use its <strong>Bridge</strong> address + the
+            app password it shows (not your Proton password).
+          </p>
+          <label className="block">
+            <span className="mb-1 block text-[12px] font-medium">Bridge username</span>
+            <input
+              value={userVal}
+              onChange={(e) => {
+                setUser(e.target.value);
+                setSaved(false);
+              }}
+              placeholder="you@proton.me"
+              spellCheck={false}
+              autoCapitalize="off"
+              className="w-full rounded-md border border-border bg-bg px-2.5 py-1 text-[12.5px]"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[12px] font-medium">Bridge app password</span>
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => {
+                setPass(e.target.value);
+                setSaved(false);
+              }}
+              placeholder={pwSet ? "•••••••• (stored — leave blank to keep)" : "from Proton Bridge"}
+              spellCheck={false}
+              autoCapitalize="off"
+              className="w-full rounded-md border border-border bg-bg px-2.5 py-1 text-[12.5px]"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={saveCredentials}
+            disabled={busy || !userVal.trim() || (!pass && !pwSet)}
+            className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            Save login
+          </button>
+          {saved && <span className="ml-2 text-[12px] text-green-600">Saved — applies on next sync.</span>}
+        </div>
+      )}
 
       {folders && (
         <div className="mt-3">

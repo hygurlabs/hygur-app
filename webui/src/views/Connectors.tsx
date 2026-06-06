@@ -44,6 +44,12 @@ export function Connectors() {
     queryKey: ["marketplace"],
     queryFn: () => api.marketplace(),
   });
+  // Cloud desktop thin client (/edge/status 200): local-source connectors (Proton,
+  // Files) run on-device via the edge cards above — hide their pod entries here so
+  // there's one place to manage each. (They stay "installed" so the marketplace
+  // doesn't re-offer them.)
+  const edgeQ = useQuery({ queryKey: ["edge-status"], queryFn: () => api.edgeStatus(), retry: false });
+  const thinClient = !edgeQ.isError && !!edgeQ.data;
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["connector-instances"] });
@@ -90,7 +96,10 @@ export function Connectors() {
     },
   });
 
-  const instances = instancesQ.data ?? [];
+  const allInstances = instancesQ.data ?? [];
+  // Edge cards replace these pod connectors on a cloud thin client.
+  const edgeReplaced = new Set(["proton", "files"]);
+  const instances = allInstances.filter((i) => !(thinClient && edgeReplaced.has(i.type_id)));
   // Multi-instance types present (each has its singleton entry already). Used to
   // render an "Add account" (+) button and to count existing accounts per type.
   const multiTypes = Array.from(
@@ -106,7 +115,7 @@ export function Connectors() {
   );
 
   // Catalog entries not yet installed as any instance.
-  const installedTypes = new Set(instances.map((i) => i.type_id));
+  const installedTypes = new Set(allInstances.map((i) => i.type_id));
   const available = (marketQ.data ?? []).filter(
     (m) => !m.is_installed && !installedTypes.has(m.id),
   );
