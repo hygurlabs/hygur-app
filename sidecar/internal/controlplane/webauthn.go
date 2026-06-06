@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -59,6 +60,77 @@ func (a *WebAuthnService) Register(r chi.Router) {
 	r.Post("/passkey/register/finish", a.registerFinish)
 	r.Post("/passkey/login/begin", a.loginBegin)
 	r.Post("/passkey/login/finish", a.loginFinish)
+	// Desktop passkey handoff: the system browser logs in, then hands a long-lived
+	// token to the native app via a hygur:// deep-link carrying only a one-time code.
+	r.Post("/desktop/handoff", a.handleDesktopHandoff)
+	r.Post("/desktop/claim", a.handleDesktopClaim)
+}
+
+type desktopReq struct {
+	State string `json:"state"`
+}
+
+// handleDesktopHandoff: the web shell, right after a passkey login, calls this with
+// the desktop-generated `state` to stash a fresh LONG-LIVED desktop token for the
+// native app. Authed by the shell's access token. The bundle is parked one-time
+// under `state` (5-min TTL); the desktop claims it via the deep-link. The raw token
+// NEVER travels in the deep-link URL — only `state` does (anti scheme-hijack).
+func (a *WebAuthnService) handleDesktopHandoff(w http.ResponseWriter, r *http.Request) {
+	acc, err := a.accountFromToken(r)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var in desktopReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.State) == "" {
+		writeErr(w, http.StatusBadRequest, "state required")
+		return
+	}
+	now := a.clock()
+	if !acc.IsActive(now) {
+		writeErr(w, http.StatusForbidden, "subscription inactive")
+		return
+	}
+	dev, refresh, err := a.store.CreateDeviceForAccount(now, acc.AccountNumber, "desktop")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "device")
+		return
+	}
+	access, err := a.svc.mintDesktopToken(now, acc, dev)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "token")
+		return
+	}
+	bundle, _ := json.Marshal(tokenResp{
+		AccessToken:  access,
+		RefreshToken: refresh,
+		Endpoint:     fmt.Sprintf("https://%s.%s", acc.TenantID, a.svc.domain),
+		TenantID:     acc.TenantID,
+		ExpiresIn:    90 * 24 * 3600,
+	})
+	if err := a.store.PutWebauthnSession(in.State, acc.AccountNumber, "desktop", bundle, now.Add(5*time.Minute)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "stash")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleDesktopClaim: the native app posts the `state` from the deep-link and gets
+// the stashed token bundle (one-time, expiry-checked). No auth — `state` is the
+// short-lived, desktop-generated secret.
+func (a *WebAuthnService) handleDesktopClaim(w http.ResponseWriter, r *http.Request) {
+	var in desktopReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.State) == "" {
+		writeErr(w, http.StatusBadRequest, "state required")
+		return
+	}
+	_, purpose, data, err := a.store.TakeWebauthnSession(a.clock(), in.State)
+	if err != nil || purpose != "desktop" {
+		writeErr(w, http.StatusUnauthorized, "invalid or expired")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
 }
 
 // webauthnUser adapts an Account + its stored credentials to webauthn.User. The

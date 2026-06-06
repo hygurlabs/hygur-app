@@ -198,6 +198,21 @@ func (s *Service) mintAccess(now time.Time, acc Account, dev Device) (string, er
 	})
 }
 
+// mintDesktopToken issues a LONG-LIVED (90-day) access token for the native
+// desktop client. Unlike the web shell (which refreshes a 15-min token), the
+// desktop's loopback proxy injects this token on every request and has no refresh
+// loop — so it must outlive a session. Tenant-pinned + jti-revocable like any device.
+func (s *Service) mintDesktopToken(now time.Time, acc Account, dev Device) (string, error) {
+	return auth.SignDeviceToken(s.signer, auth.DeviceClaims{
+		Sub: acc.AccountNumber,
+		Acc: acc.TenantID,
+		Dev: dev.DeviceID,
+		Jti: dev.JTI,
+		Iat: now.Unix(),
+		Exp: now.Add(90 * 24 * time.Hour).Unix(),
+	})
+}
+
 // verifyAccessToken validates a device access token this control plane issued,
 // using the issuer key's public half. Used to authorize passkey registration (the
 // just-enrolled device adds a passkey to its account). Returns the claims.
