@@ -1,5 +1,5 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { apiBase, apiKey } from "./connection";
+import { apiBase, apiKey, refreshAccessToken } from "./connection";
 import type {
   AgendaAction,
   Briefing,
@@ -51,8 +51,25 @@ function httpError(r: Response): Error {
   return new Error(`HTTP ${r.status}`);
 }
 
+/** fetch + auth headers, with a single transparent refresh-and-retry on 401 so a
+ *  short-lived cloud access token expiring mid-session is renewed via the refresh
+ *  token without surfacing to the UI. Headers are rebuilt per attempt to pick up
+ *  the rotated key. */
+async function fetchAuthed(
+  path: string,
+  init: RequestInit = {},
+  extra?: Record<string, string>,
+): Promise<Response> {
+  const build = (): RequestInit => ({ ...init, headers: authHeaders(extra) });
+  let r = await fetch(u(path), build());
+  if (r.status === 401 && (await refreshAccessToken())) {
+    r = await fetch(u(path), build());
+  }
+  return r;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
-  const r = await fetch(u(path), { headers: authHeaders() });
+  const r = await fetchAuthed(path);
   if (!r.ok) throw httpError(r);
   return (await r.json()) as T;
 }
@@ -62,10 +79,8 @@ async function sendJSON<T>(
   path: string,
   body: unknown,
 ): Promise<T> {
-  const r = await fetch(u(path), {
-    method,
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
+  const r = await fetchAuthed(path, { method, body: JSON.stringify(body) }, {
+    "Content-Type": "application/json",
   });
   if (!r.ok) throw httpError(r);
   // Some endpoints (PUT) may return an empty body.
@@ -79,15 +94,13 @@ const putJSON = <T>(path: string, body: unknown) =>
   sendJSON<T>("PUT", path, body);
 
 async function del(path: string): Promise<void> {
-  const r = await fetch(u(path), { method: "DELETE", headers: authHeaders() });
+  const r = await fetchAuthed(path, { method: "DELETE" });
   if (!r.ok) throw httpError(r);
 }
 
 async function patchJSON(path: string, body: unknown): Promise<void> {
-  const r = await fetch(u(path), {
-    method: "PATCH",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
+  const r = await fetchAuthed(path, { method: "PATCH", body: JSON.stringify(body) }, {
+    "Content-Type": "application/json",
   });
   if (!r.ok) throw httpError(r);
 }

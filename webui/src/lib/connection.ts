@@ -18,6 +18,7 @@ const META_TOKEN: string = (() => {
 
 const ENDPOINT_KEY = "hygur.endpoint";
 const API_KEY_KEY = "hygur.key";
+const REFRESH_KEY = "hygur.refresh";
 
 function ls(key: string): string | null {
   try {
@@ -85,4 +86,67 @@ export function clearConnection(): void {
   } catch {
     /* ignore */
   }
+}
+
+/** Base URL of the control plane (enroll + passkey ceremonies + token refresh).
+ *  Cross-origin from the cloud web shell; overridable for dev via the
+ *  "hygur.console" localStorage key. */
+export const CONSOLE_URL: string = (ls("hygur.console") || "https://console.hygur.ai").replace(
+  /\/+$/,
+  "",
+);
+
+/** Persists the token bundle from a passkey login / enrollment / refresh: the
+ *  tenant endpoint + access key (sent to the tenant) + the refresh token (held
+ *  for renewing the short-lived access token against the control plane). */
+export function setTokens(endpoint: string, accessToken: string, refreshToken?: string): void {
+  setConnection(endpoint, accessToken);
+  try {
+    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Drops the connection AND the refresh token (full sign-out). */
+export function clearTokens(): void {
+  clearConnection();
+  try {
+    localStorage.removeItem(REFRESH_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+let refreshing: Promise<boolean> | null = null;
+
+/** Exchanges the stored refresh token for a fresh access token (rotating both)
+ *  against the control plane. De-duped so several concurrent 401s trigger a
+ *  single refresh. Returns false (and signs out) when there is no/invalid refresh
+ *  token. Talks to the console directly to avoid an api.ts import cycle. */
+export function refreshAccessToken(): Promise<boolean> {
+  if (refreshing) return refreshing;
+  refreshing = (async (): Promise<boolean> => {
+    const rt = ls(REFRESH_KEY);
+    if (!rt) return false;
+    try {
+      const r = await fetch(`${CONSOLE_URL}/token/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!r.ok) {
+        clearTokens();
+        return false;
+      }
+      const b = (await r.json()) as { access_token: string; refresh_token: string; endpoint: string };
+      setTokens(b.endpoint, b.access_token, b.refresh_token);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
 }
