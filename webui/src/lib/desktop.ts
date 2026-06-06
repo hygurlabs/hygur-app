@@ -59,6 +59,21 @@ export async function getDesktopConfig(): Promise<DesktopConfig> {
   return withTimeout(invoke<DesktopConfig>("get_desktop_config"), 5000);
 }
 
+/** Opens a URL in the user's default browser via the Tauri shell. Used to run the
+ *  passkey ceremony where WebAuthn works (cloud.hygur.ai), since the loopback
+ *  webview can't satisfy the hygur.ai relying party. */
+export async function openExternal(url: string): Promise<void> {
+  await withTimeout(invoke<void>("open_external", { url }), 5000);
+}
+
+/** A 128-bit hex nonce for the desktop passkey handoff. Identifies the one-time
+ *  token bundle the browser stashes; the only value that travels in the deep link. */
+export function randomState(): string {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Persists the config. Returns true if the sidecar was restarted (a proxy-mode
  *  change), false if only source fields changed (the running edge loop re-reads
  *  those, no restart). The caller reloads only when restarted. */

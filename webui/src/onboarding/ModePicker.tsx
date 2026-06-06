@@ -1,13 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { listen } from "@tauri-apps/api/event";
 import { Button, TextInput } from "../components/ui";
 import {
   getDesktopConfig,
+  openExternal,
+  randomState,
   setDesktopConfig,
   waitForSidecarThenReload,
   type DesktopConfigInput,
 } from "../lib/desktop";
+import { desktopClaim } from "../lib/passkey";
 import logo from "../assets/logo.png";
+
+/** Web shell that runs the passkey ceremony for the desktop handoff. */
+const SHELL_URL = "https://cloud.hygur.ai";
 
 /** Desktop engine-mode chooser. Shown full-screen at first run (no onCancel), or
  *  as a modal from Settings to switch/edit later (onCancel closes it). Writes the
@@ -33,6 +40,18 @@ export function ModePicker({
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Desktop passkey handoff: waiting for the browser, then the signed-in instance.
+  const [waiting, setWaiting] = useState(false);
+  const [signedInAs, setSignedInAs] = useState<string | null>(null);
+  const unlistenRef = useRef<(() => void) | null>(null);
+
+  // Tear down a dangling deep-link listener if the user navigates away mid-handoff.
+  useEffect(() => {
+    return () => {
+      unlistenRef.current?.();
+      unlistenRef.current = null;
+    };
+  }, []);
 
   // Prefill from the stored config so the Settings re-config path can edit values
   // (secrets come back only as *_set flags — blank fields keep them).
@@ -106,6 +125,53 @@ export function ModePicker({
     });
   };
 
+  // Passkey sign-in: WebAuthn can't run in the loopback webview, so the ceremony
+  // happens in the system browser (cloud.hygur.ai). It stashes a long-lived token
+  // keyed by a one-time `state`, then wakes us via the hygur:// deep link carrying
+  // only that `state`; we claim the bundle and pre-fill the server + token. The
+  // user reviews local sources, then hits Connect.
+  const signInWithPasskey = async () => {
+    setError(null);
+    setSignedInAs(null);
+    const state = randomState();
+    let settled = false;
+    try {
+      unlistenRef.current?.();
+      unlistenRef.current = await listen<string>("deeplink-auth", (e) => {
+        if (settled) return;
+        let parsed: URL;
+        try {
+          parsed = new URL(e.payload);
+        } catch {
+          return; // not a URL we recognize
+        }
+        if (parsed.searchParams.get("state") !== state) return; // stale / unrelated deep link
+        settled = true;
+        unlistenRef.current?.();
+        unlistenRef.current = null;
+        void desktopClaim(state)
+          .then((b) => {
+            setServer(b.endpoint);
+            setToken(b.access_token);
+            setTokenSet(true);
+            setSignedInAs(b.tenant_id);
+            setWaiting(false);
+          })
+          .catch((err) => {
+            setError((err as Error).message);
+            setWaiting(false);
+          });
+      });
+      setWaiting(true);
+      await openExternal(`${SHELL_URL}/?desktop=${state}`);
+    } catch (err) {
+      unlistenRef.current?.();
+      unlistenRef.current = null;
+      setError(`Couldn't open the browser — ${(err as Error).message}`);
+      setWaiting(false);
+    }
+  };
+
   if (restarting) {
     return createPortal(
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8 text-center">
@@ -171,6 +237,35 @@ export function ModePicker({
           </div>
         ) : (
           <div className="flex flex-col gap-3">
+            {signedInAs ? (
+              <div className="rounded-lg border border-accent/40 bg-accent/5 px-3.5 py-2.5 text-[12.5px]">
+                <span className="font-medium text-accent">✓ Signed in as {signedInAs}</span>
+                <span className="text-muted"> — review your local sources, then Connect.</span>
+              </div>
+            ) : (
+              <>
+                <Button onClick={signInWithPasskey} disabled={busy || waiting}>
+                  {waiting ? "Waiting for your browser…" : "Sign in with a passkey"}
+                </Button>
+                {waiting && (
+                  <button
+                    onClick={() => {
+                      unlistenRef.current?.();
+                      unlistenRef.current = null;
+                      setWaiting(false);
+                    }}
+                    className="self-center text-[12.5px] text-muted transition-colors hover:text-text"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <div className="flex items-center gap-3 text-[11.5px] uppercase tracking-wide text-muted">
+                  <span className="h-px flex-1 bg-border" />
+                  or enter a device token
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              </>
+            )}
             <label className="block">
               <span className="mb-1.5 block text-[13px] font-medium">Server URL</span>
               <TextInput

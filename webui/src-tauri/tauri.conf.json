@@ -9,6 +9,13 @@
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build:tauri"
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["hygur"]
+      }
+    }
+  },
   "app": {
     "windows": [
       {

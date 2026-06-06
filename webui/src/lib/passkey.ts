@@ -4,9 +4,9 @@
 // boots against the instance. @simplewebauthn/browser handles the base64url ↔
 // ArrayBuffer glue + navigator.credentials.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
-import { CONSOLE_URL, setTokens } from "./connection";
+import { apiKey, CONSOLE_URL, setTokens } from "./connection";
 
-interface TokenBundle {
+export interface TokenBundle {
   access_token: string;
   refresh_token: string;
   endpoint: string;
@@ -73,4 +73,29 @@ export async function registerPasskey(accessToken: string): Promise<void> {
     },
   );
   if (!finish.ok) throw new Error("Passkey registration failed.");
+}
+
+// --- Desktop handback ----------------------------------------------------
+// The desktop webview (loopback origin) can't run WebAuthn, so passkey sign-in
+// happens in the system browser (cloud.hygur.ai). Once the browser is logged in
+// it stashes a short-lived bundle under a random `state`; the desktop is woken
+// via the hygur:// deep link and claims it. The state is the only thing on the
+// wire — the token bundle never travels through the deep-link URL.
+
+/** Browser side: stash the current session as a one-time bundle keyed by `state`,
+ *  authorized by the just-obtained access token. */
+export async function desktopHandoff(state: string): Promise<void> {
+  const token = apiKey();
+  if (!token) throw new Error("Not signed in.");
+  const r = await consolePost("/desktop/handoff", { state }, token);
+  if (!r.ok) throw new Error("Could not prepare the desktop sign-in.");
+}
+
+/** Desktop side: redeem the one-time `state` for the token bundle. Returns it for
+ *  the caller to apply — on the native app this goes into the desktop config
+ *  (cloud engine mode), NOT the browser's localStorage. */
+export async function desktopClaim(state: string): Promise<TokenBundle> {
+  const r = await consolePost("/desktop/claim", { state });
+  if (!r.ok) throw new Error("Desktop sign-in expired — try again.");
+  return (await r.json()) as TokenBundle;
 }

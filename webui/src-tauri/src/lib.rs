@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -269,11 +270,20 @@ fn restart_sidecar(app: &AppHandle) {
     }
 }
 
+/// Open a URL in the user's default SYSTEM browser (not the loopback webview) —
+/// used by the desktop passkey sign-in to launch cloud.hygur.ai, where the WebAuthn
+/// ceremony can run (it can't on the 127.0.0.1 webview origin).
+#[tauri::command]
+fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    app.shell().open(url, None).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -285,7 +295,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![get_desktop_config, set_desktop_config])
+        .invoke_handler(tauri::generate_handler![get_desktop_config, set_desktop_config, open_external])
         .manage(Sidecar {
             child: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
@@ -298,6 +308,18 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+
+            // Passkey deep-link: cloud.hygur.ai redirects to hygur://auth?state=…
+            // after a browser passkey login; forward the URL to the webview, which
+            // claims the one-time token bundle and applies the cloud config.
+            {
+                let h = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        let _ = h.emit("deeplink-auth", url.to_string());
+                    }
+                });
             }
 
             // Global hotkey ⌘⇧H toggles the quick-capture palette (the combo the

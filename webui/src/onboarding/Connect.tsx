@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { setConnection } from "../lib/connection";
 import {
+  desktopHandoff,
   enrollWithCode,
   passkeyLogin,
   passkeysSupported,
@@ -10,6 +11,11 @@ import { Button, TextInput } from "../components/ui";
 import logo from "../assets/logo.png";
 
 type Mode = "login" | "enroll" | "advanced";
+
+/** Set when the web shell was opened by the desktop app for a passkey handoff
+ *  (cloud.hygur.ai/?desktop=<state>). After login we stash a long-lived token
+ *  under this state and bounce back to the native app via the hygur:// scheme. */
+const DESKTOP_STATE = new URLSearchParams(window.location.search).get("desktop");
 
 /** Hygur Cloud sign-in (the web shell at cloud.hygur.ai). Primary path: instance
  *  slug + passkey. Secondary: redeem a one-time enrollment code, then add a
@@ -25,6 +31,19 @@ export function Connect() {
   const [enrolledToken, setEnrolledToken] = useState<string | null>(null);
   const [endpoint, setEndpoint] = useState("https://app.hygur.eu");
   const [key, setKey] = useState("");
+  const [handedOff, setHandedOff] = useState(false);
+
+  // After a successful sign-in: a desktop handoff hands the session back to the
+  // native app (deep link) instead of using the session here; otherwise reload.
+  const finish = async () => {
+    if (DESKTOP_STATE) {
+      await desktopHandoff(DESKTOP_STATE);
+      setHandedOff(true);
+      window.location.href = `hygur://auth?state=${encodeURIComponent(DESKTOP_STATE)}`;
+      return;
+    }
+    window.location.reload();
+  };
 
   // Runs an async action with busy/error handling. On success the caller reloads.
   const run = async (fn: () => Promise<void>) => {
@@ -41,7 +60,7 @@ export function Connect() {
   const doLogin = () =>
     run(async () => {
       await passkeyLogin(instance);
-      window.location.reload();
+      await finish();
     });
 
   const doEnroll = () =>
@@ -54,7 +73,7 @@ export function Connect() {
   const doRegister = () =>
     run(async () => {
       if (enrolledToken) await registerPasskey(enrolledToken);
-      window.location.reload();
+      await finish();
     });
 
   const doAdvanced = () =>
@@ -75,13 +94,31 @@ export function Connect() {
     setError(null);
   };
 
+  // Desktop handoff complete: the native app is being woken via the deep link.
+  if (handedOff) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8 text-center">
+        <img src={logo} alt="" className="mb-5 size-16 rounded-[22%] shadow-sm" />
+        <h1 className="font-display text-[22px] font-semibold tracking-tight">Back to the app</h1>
+        <p className="mt-2 max-w-[40ch] text-[13.5px] leading-relaxed text-muted">
+          You're signed in. Return to the Hygur app — if it didn't open automatically, your browser
+          will ask for permission to launch it. You can close this tab.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8">
       <div className="w-full max-w-[420px]">
         <div className="mb-7 flex flex-col items-center text-center">
           <img src={logo} alt="" className="mb-4 size-20 rounded-[22%] shadow-sm" />
           <h1 className="font-display text-[26px] font-semibold leading-tight tracking-tight">
-            {enrolledToken ? "You're in" : "Sign in to Hygur Cloud"}
+            {enrolledToken
+              ? "You're in"
+              : DESKTOP_STATE
+                ? "Sign in for the desktop app"
+                : "Sign in to Hygur Cloud"}
           </h1>
           <p className="mt-2 max-w-[40ch] text-[13.5px] leading-relaxed text-muted">
             {enrolledToken
@@ -108,7 +145,7 @@ export function Connect() {
             </Button>
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              onClick={() => void finish()}
               className="block w-full text-center text-[12.5px] text-muted hover:text-text"
             >
               Skip for now
