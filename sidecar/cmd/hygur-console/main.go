@@ -156,11 +156,18 @@ func runAccount(args []string) {
 		fs := flag.NewFlagSet("account create", flag.ExitOnError)
 		email := fs.String("email", "", "account email (required)")
 		status := fs.String("status", "trialing", "subscription status")
+		tenant := fs.String("tenant", "", "pin tenant id (e.g. home); default auto instance-personal-<num>")
 		_ = fs.Parse(args[1:])
 		if *email == "" {
 			die(fmt.Errorf("account create: --email is required"))
 		}
-		acc, err := store.CreateAccount(time.Now(), *email, *status, nil)
+		var acc controlplane.Account
+		var err error
+		if strings.TrimSpace(*tenant) != "" {
+			acc, err = store.CreateAccountWithTenant(time.Now(), *email, *status, *tenant, nil)
+		} else {
+			acc, err = store.CreateAccount(time.Now(), *email, *status, nil)
+		}
 		die(err)
 		fmt.Printf("account_number: %s\ntenant_id:      %s\nemail:          %s\nstatus:         %s\n",
 			acc.AccountNumber, acc.TenantID, acc.Email, acc.Status)

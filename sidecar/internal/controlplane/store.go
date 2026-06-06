@@ -183,6 +183,26 @@ func parseTime(s sql.NullString) *time.Time {
 // and the derived tenant id (instance-personal-<number>). validUntil may be nil
 // (set later by the billing webhook).
 func (s *Store) CreateAccount(now time.Time, email string, status string, validUntil *time.Time) (Account, error) {
+	return s.createAccount(now, email, status, "", validUntil)
+}
+
+// CreateAccountWithTenant provisions an account pinned to an explicit tenant id —
+// the operator's own instance (e.g. "home") or, later, a generated slug — rather
+// than the auto instance-personal-<number>. The tenant id must be free.
+func (s *Store) CreateAccountWithTenant(now time.Time, email, status, tenantID string, validUntil *time.Time) (Account, error) {
+	tenantID = strings.ToLower(strings.TrimSpace(tenantID))
+	if tenantID == "" {
+		return Account{}, errors.New("tenant id required")
+	}
+	if _, err := s.getAccountByTenantID(tenantID); err == nil {
+		return Account{}, fmt.Errorf("controlplane: tenant id %q already in use", tenantID)
+	}
+	return s.createAccount(now, email, status, tenantID, validUntil)
+}
+
+// createAccount allocates a unique account number and inserts the row. tenantID
+// pins the tenant id; empty derives the default instance-personal-<number>.
+func (s *Store) createAccount(now time.Time, email, status, tenantID string, validUntil *time.Time) (Account, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		return Account{}, errors.New("email required")
@@ -196,10 +216,14 @@ func (s *Store) CreateAccount(now time.Time, email string, status string, validU
 		if err != nil {
 			return Account{}, err
 		}
+		tid := tenantID
+		if tid == "" {
+			tid = "instance-personal-" + num
+		}
 		acc := Account{
 			AccountNumber: num,
 			Email:         email,
-			TenantID:      "instance-personal-" + num,
+			TenantID:      tid,
 			Status:        status,
 			ValidUntil:    validUntil,
 			CreatedAt:     now.UTC(),
