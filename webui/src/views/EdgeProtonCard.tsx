@@ -19,6 +19,7 @@ export function EdgeProtonCard() {
   const [cfgOpen, setCfgOpen] = useState(false);
   const [user, setUser] = useState<string | null>(null);
   const [pass, setPass] = useState("");
+  const [backfill, setBackfill] = useState<number | null>(null);
 
   // Probe /edge/status: 200 only on a local thin-client sidecar (desktop cloud).
   // This IS the capability gate — no isDesktop()/isTauri() check, which is
@@ -83,6 +84,7 @@ export function EdgeProtonCard() {
   const syncing = !!st?.running;
   const userVal = user ?? cfgQ.data?.proton_user ?? "";
   const pwSet = !!cfgQ.data?.proton_password_set;
+  const backfillVal = backfill ?? cfgQ.data?.backfill_count ?? 200;
 
   const loadFolders = async () => {
     setBusy(true);
@@ -137,6 +139,7 @@ export function EdgeProtonCard() {
         proton_user: c.proton_user,
         proton_mailbox: Array.from(selected).join(",") || "All Mail",
         interval_secs: c.interval_secs,
+        backfill_count: backfillVal,
       });
       setSaved(true);
     } catch (e) {
@@ -285,6 +288,19 @@ export function EdgeProtonCard() {
               ))
             )}
           </div>
+          <label className="mt-2 flex items-center gap-2 text-[12px]">
+            <span className="text-muted">Mails to backfill per folder (first sync):</span>
+            <input
+              type="number"
+              min={1}
+              value={backfillVal}
+              onChange={(e) => {
+                setBackfill(Math.max(1, Number(e.target.value) || 0));
+                setSaved(false);
+              }}
+              className="w-20 rounded-md border border-border bg-bg px-2 py-1 text-[12.5px] tabular-nums"
+            />
+          </label>
           <div className="mt-2 flex items-center gap-3">
             <button
               type="button"

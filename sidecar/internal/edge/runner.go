@@ -111,18 +111,17 @@ func Sync(ctx context.Context, cfg *Config, stateDir string) (files, mail, errs 
 		errs += st.Errors
 	}
 	if cfg.ProtonUser != "" && cfg.ProtonPassword != "" {
-		wm := filepath.Join(stateDir, watermarkName("proton", cfg.Server))
+		statePath := filepath.Join(stateDir, folderStateName("proton", cfg.Server))
 		conn := proton.NewDefaultIMAPConnector()
 		conn.SetCredentials(cfg.ProtonUser, cfg.ProtonPassword)
 		if cerr := conn.Connect(ctx); cerr != nil {
 			errs++
 			lastErr = "proton (is Proton Bridge running?): " + cerr.Error()
 		} else {
-			st, _ := NewMailSync(client, "proton").Run(ctx, conn, splitMailboxes(cfg.ProtonMailbox), ReadWatermark(wm))
+			fs := ReadFolderState(statePath)
+			st, fs, _ := NewMailSync(client, "proton").Run(ctx, conn, splitMailboxes(cfg.ProtonMailbox), fs, cfg.Backfill())
 			_ = conn.Disconnect()
-			if st.Newest.After(ReadWatermark(wm)) {
-				_ = WriteWatermark(wm, st.Newest)
-			}
+			_ = WriteFolderState(statePath, fs)
 			mail = st.Pushed
 			errs += st.Errors
 		}
@@ -157,15 +156,29 @@ func (r *Runner) fail(msg string) Status {
 // of being silenced by progress made against the previous instance (regression:
 // switching cloud→home left the watermark past all mail, so nothing was pushed).
 func watermarkName(source, server string) string {
+	if host := destHost(server); host != "" {
+		return source + "." + host + ".watermark"
+	}
+	return source + ".watermark"
+}
+
+// folderStateName is the per-folder watermark map for a source+destination
+// (mail uses this instead of a single watermark, so each folder backfills and
+// syncs independently).
+func folderStateName(source, server string) string {
+	if host := destHost(server); host != "" {
+		return source + "." + host + ".folders.json"
+	}
+	return source + ".folders.json"
+}
+
+// destHost derives a filesystem-safe host token from the server URL.
+func destHost(server string) string {
 	host := strings.TrimSpace(server)
 	if u, err := url.Parse(server); err == nil && u.Host != "" {
 		host = u.Host
 	}
-	host = strings.NewReplacer(":", "_", "/", "_", "@", "_").Replace(host)
-	if host == "" {
-		return source + ".watermark"
-	}
-	return source + "." + host + ".watermark"
+	return strings.NewReplacer(":", "_", "/", "_", "@", "_").Replace(host)
 }
 
 // Mailboxes lists the Proton mailboxes/folders available for selection in the UI

@@ -38,7 +38,7 @@ func NewMailSync(client *Client, provider string) *MailSync {
 }
 
 // MailStats reports a run's outcome; Newest is the latest message date pushed
-// (the new watermark).
+// across all mailboxes (informational; per-folder watermarks live in the state).
 type MailStats struct {
 	Pushed  int
 	Errors  int
@@ -46,27 +46,38 @@ type MailStats struct {
 	Newest  time.Time
 }
 
-// Run pulls threads (across mailboxes) modified since `since`, extracts message
-// text, and pushes each. Per-thread/message errors are counted, not fatal.
-func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes []string, since time.Time) (MailStats, error) {
-	st := MailStats{Newest: since}
+// Run syncs each mailbox independently against its per-folder watermark in
+// `state`: a folder ABSENT from the map (never synced) pulls its most recent
+// `backfill` messages; a folder present pulls only messages newer than its
+// watermark. The map is updated in place and returned so the caller persists it.
+// Per-thread/message errors are counted, not fatal.
+func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes []string, state FolderState, backfill int) (MailStats, FolderState, error) {
+	st := MailStats{}
+	if state == nil {
+		state = FolderState{}
+	}
 	if len(mailboxes) == 0 {
 		mailboxes = []string{""} // provider default (all)
-	}
-	var sincePtr *time.Time
-	if !since.IsZero() {
-		sincePtr = &since
 	}
 
 	for _, mbox := range mailboxes {
 		if err := ctx.Err(); err != nil {
-			return st, err
+			return st, state, err
 		}
-		threads, err := conn.ListThreads(ctx, mail.ListOptions{Since: sincePtr, MailboxID: mbox})
+		wm, known := state[mbox]
+		opts := mail.ListOptions{MailboxID: mbox}
+		if known && !wm.IsZero() {
+			since := wm
+			opts.Since = &since // incremental: only newer than the watermark
+		} else {
+			opts.Limit = backfill // first sync: the most recent N messages
+		}
+		threads, err := conn.ListThreads(ctx, opts)
 		if err != nil {
 			st.Errors++
 			continue
 		}
+		newest := wm
 		for i := range threads {
 			st.Threads++
 			msgs, err := conn.GetMessagesByThread(ctx, &threads[i])
@@ -76,7 +87,7 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 			}
 			for _, m := range msgs {
 				if err := ctx.Err(); err != nil {
-					return st, err
+					return st, state, err
 				}
 				// Plain text, falling back to stripped HTML for HTML-only mail.
 				body := ms.norm.NormalizeMessage(&m)
@@ -103,13 +114,20 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 					continue
 				}
 				st.Pushed++
-				if m.Date.After(st.Newest) {
-					st.Newest = m.Date
+				if m.Date.After(newest) {
+					newest = m.Date
 				}
 			}
 		}
+		// Advance this folder's watermark so the next run is incremental.
+		if newest.After(wm) {
+			state[mbox] = newest
+			if newest.After(st.Newest) {
+				st.Newest = newest
+			}
+		}
 	}
-	return st, nil
+	return st, state, nil
 }
 
 // messageText assembles the plain text the center will index: subject + sender +

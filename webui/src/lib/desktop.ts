@@ -22,6 +22,7 @@ export interface DesktopConfig {
   proton_user: string;
   proton_mailbox: string;
   interval_secs: number;
+  backfill_count: number; // mails fetched per folder on its first sync
   token_set: boolean;
   proton_password_set: boolean;
 }
@@ -36,6 +37,7 @@ export interface DesktopConfigInput {
   proton_password?: string;
   proton_mailbox?: string;
   interval_secs?: number;
+  backfill_count?: number; // 0 / omitted = keep stored
 }
 
 /** Rejects after `ms` so a hung IPC never wedges the UI behind a pending promise. */

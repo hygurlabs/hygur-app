@@ -11,14 +11,16 @@ import (
 
 // mockMail is a canned MailConnector for the edge puller test.
 type mockMail struct {
-	threads []mail.Thread
-	msgs    map[string][]mail.Message
+	threads  []mail.Thread
+	msgs     map[string][]mail.Message
+	lastOpts []mail.ListOptions // records each ListThreads call
 }
 
-func (m *mockMail) Connect(context.Context) error  { return nil }
-func (m *mockMail) Disconnect() error               { return nil }
-func (m *mockMail) IsConnected() bool               { return true }
-func (m *mockMail) ListThreads(_ context.Context, _ mail.ListOptions) ([]mail.Thread, error) {
+func (m *mockMail) Connect(context.Context) error { return nil }
+func (m *mockMail) Disconnect() error             { return nil }
+func (m *mockMail) IsConnected() bool             { return true }
+func (m *mockMail) ListThreads(_ context.Context, opts mail.ListOptions) ([]mail.Thread, error) {
+	m.lastOpts = append(m.lastOpts, opts)
 	return m.threads, nil
 }
 func (m *mockMail) GetThread(_ context.Context, id string) (*mail.Thread, error) {
@@ -53,9 +55,12 @@ func TestMailSync_PushesMessages(t *testing.T) {
 		},
 	}
 	ms := NewMailSync(NewClient(srv.URL, "tok"), "proton")
-	st, err := ms.Run(context.Background(), conn, []string{"INBOX"}, time.Time{})
+	st, state, err := ms.Run(context.Background(), conn, []string{"INBOX"}, nil, 200)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if !state["INBOX"].Equal(date) {
+		t.Errorf("folder watermark = %v, want %v", state["INBOX"], date)
 	}
 	if st.Pushed != 2 {
 		t.Fatalf("pushed = %d, want 2 (only the wholly-empty mail skipped)", st.Pushed)
@@ -92,5 +97,42 @@ func TestMailSync_PushesMessages(t *testing.T) {
 	}
 	if !st.Newest.Equal(date) {
 		t.Errorf("watermark = %v, want %v", st.Newest, date)
+	}
+}
+
+// TestMailSync_BackfillThenIncremental verifies the per-folder model: an unknown
+// folder fetches the most recent N (Limit set, no Since); a folder already in the
+// state syncs incrementally (Since set, no Limit).
+func TestMailSync_BackfillThenIncremental(t *testing.T) {
+	srv, _, _ := captureServer(t)
+	date := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
+	conn := &mockMail{
+		threads: []mail.Thread{{ID: "t1"}},
+		msgs:    map[string][]mail.Message{"t1": {{ID: "m1", Subject: "Hi", Body: "body", Date: date}}},
+	}
+	ms := NewMailSync(NewClient(srv.URL, "tok"), "proton")
+
+	// First sync: folder unknown → backfill of N, no Since.
+	_, state, err := ms.Run(context.Background(), conn, []string{"INBOX"}, nil, 150)
+	if err != nil {
+		t.Fatalf("Run 1: %v", err)
+	}
+	o1 := conn.lastOpts[len(conn.lastOpts)-1]
+	if o1.Limit != 150 || o1.Since != nil {
+		t.Errorf("backfill: got Limit=%d Since=%v, want Limit=150 Since=nil", o1.Limit, o1.Since)
+	}
+	if !state["INBOX"].Equal(date) {
+		t.Fatalf("watermark not recorded: %v", state["INBOX"])
+	}
+
+	// Second sync: folder known → incremental, Since = watermark, no Limit.
+	conn.lastOpts = nil
+	_, _, err = ms.Run(context.Background(), conn, []string{"INBOX"}, state, 150)
+	if err != nil {
+		t.Fatalf("Run 2: %v", err)
+	}
+	o2 := conn.lastOpts[len(conn.lastOpts)-1]
+	if o2.Limit != 0 || o2.Since == nil || !o2.Since.Equal(date) {
+		t.Errorf("incremental: got Limit=%d Since=%v, want Limit=0 Since=%v", o2.Limit, o2.Since, date)
 	}
 }

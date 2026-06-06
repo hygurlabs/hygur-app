@@ -146,6 +146,8 @@ struct EdgeFileConfig {
     proton_mailbox: String,
     #[serde(default)]
     interval_secs: u64,
+    #[serde(default)]
+    backfill_count: u64,
 }
 
 fn load_edge_file() -> EdgeFileConfig {
@@ -165,6 +167,7 @@ struct DesktopConfigView {
     proton_user: String,
     proton_mailbox: String,
     interval_secs: u64,
+    backfill_count: u64,
     token_set: bool,
     proton_password_set: bool,
 }
@@ -183,6 +186,8 @@ fn get_desktop_config() -> DesktopConfigView {
             c.proton_mailbox
         },
         interval_secs: c.interval_secs,
+        // Surface the effective value so the field shows the default until set.
+        backfill_count: if c.backfill_count == 0 { 200 } else { c.backfill_count },
         token_set: !c.token.is_empty(),
         proton_password_set: !c.proton_password.is_empty(),
     }
@@ -208,6 +213,8 @@ struct DesktopConfigInput {
     proton_mailbox: String,
     #[serde(default)]
     interval_secs: u64,
+    #[serde(default)]
+    backfill_count: u64,
 }
 
 #[tauri::command]
@@ -236,6 +243,9 @@ fn set_desktop_config(app: AppHandle, cfg: DesktopConfigInput) -> Result<bool, S
         cfg.proton_mailbox.trim().to_string()
     };
     next.interval_secs = cfg.interval_secs;
+    if cfg.backfill_count > 0 {
+        next.backfill_count = cfg.backfill_count; // 0 = keep stored (callers may omit it)
+    }
 
     let restart =
         next.mode != old_mode || next.server != old_server || next.token != old_token;
