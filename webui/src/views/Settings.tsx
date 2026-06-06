@@ -34,6 +34,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/** One labelled progress bar for the token-budget gauge. */
+function GaugeRow({
+  label,
+  used,
+  budget,
+  pct,
+  over,
+  color,
+}: {
+  label: string;
+  used: number;
+  budget: number;
+  pct: number;
+  over: boolean;
+  color: string;
+}) {
+  const f = (n: number) => n.toLocaleString("fr-FR");
+  return (
+    <div className="mb-2.5 last:mb-0">
+      <div className="mb-1 flex items-baseline justify-between text-[12px]">
+        <span className="font-medium">{label}</span>
+        <span className={`tabular-nums ${over ? "font-semibold text-danger" : "text-muted"}`}>
+          {f(used)} / {f(budget)}
+          {over && " — over budget"}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-border">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function Row({
   label,
   hint,
@@ -788,8 +821,34 @@ function TokenUsageSection() {
   ];
   const dirty = JSON.stringify(price) !== JSON.stringify(data.pricing);
 
+  // Monthly inference caps (hardcoded) and the weekly slice we watch against.
+  // Both directions sit in one weekly gauge so we can judge whether 8M IN / 2M
+  // OUT per month leaves enough gross margin at the current price.
+  const MONTHLY_IN = 8_000_000;
+  const MONTHLY_OUT = 2_000_000;
+  const weekBudget = (monthly: number) => Math.round((monthly * 7) / 30);
+  const wk = data.periods.this_week;
+  const gauge = (used: number, budget: number) => {
+    const pct = budget > 0 ? Math.min(used / budget, 1) : 0;
+    const over = budget > 0 && used > budget;
+    const color = over ? "bg-danger" : pct >= 0.75 ? "bg-amber-500" : "bg-green-500";
+    return { pct, over, color };
+  };
+  const inG = gauge(wk.total_in, weekBudget(MONTHLY_IN));
+  const outG = gauge(wk.total_out, weekBudget(MONTHLY_OUT));
+
   return (
     <Section title="Token usage & cost">
+      <div className="px-4 pb-1 pt-3">
+        <div className="mb-1 flex items-baseline justify-between">
+          <span className="text-[12px] font-medium">This week's budget</span>
+          <span className="text-[11px] text-faint">
+            caps: {fmtTok(MONTHLY_IN)} IN · {fmtTok(MONTHLY_OUT)} OUT / month
+          </span>
+        </div>
+        <GaugeRow label="Input" used={wk.total_in} budget={weekBudget(MONTHLY_IN)} {...inG} />
+        <GaugeRow label="Output" used={wk.total_out} budget={weekBudget(MONTHLY_OUT)} {...outG} />
+      </div>
       <div className="overflow-x-auto px-4 py-3">
         <table className="w-full text-[13px]">
           <thead>

@@ -275,12 +275,15 @@ export interface TokenPricing {
 }
 
 /** Token totals for one period. Chat keeps IN/OUT split; embeddings/indexing
- *  are reported as total tokens each. */
+ *  are reported as total tokens each; total_in/total_out sum every category
+ *  (the input/output budget the inference box sees — drives the usage gauge). */
 export interface TokenPeriodUsage {
   chat_in: number;
   chat_out: number;
   embedding: number;
   indexing: number;
+  total_in: number;
+  total_out: number;
 }
 
 /** Response of GET /usage/tokens. */
