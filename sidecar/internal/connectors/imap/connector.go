@@ -957,24 +957,51 @@ func decodeTransferEncoding(cte string, raw []byte, charset string) string {
 
 // stripHTMLTags removes HTML tags from s using a simple state machine that
 // does not allocate a full DOM. Good enough for search-index normalization.
+// The CONTENT of <style>/<script> elements is dropped too — otherwise the CSS
+// of templated mail (MJML/Mailjet etc.) leaks into the indexed text as noise.
 func stripHTMLTags(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	inTag := false
-	for _, r := range s {
+	readingName := false  // accumulating the tag name right after '<'
+	skip := 0             // >0 while inside <style>/<script> content
+	var name []byte
+	for i := 0; i < len(s); i++ {
+		r := s[i]
 		switch {
 		case r == '<':
 			inTag = true
+			readingName = true
+			name = name[:0]
 		case r == '>':
 			inTag = false
-			b.WriteRune(' ') // preserve word boundaries
-		case !inTag:
-			b.WriteRune(r)
+			readingName = false
+			switch strings.ToLower(string(name)) {
+			case "style", "script":
+				skip++
+			case "/style", "/script":
+				if skip > 0 {
+					skip--
+				}
+			}
+			if skip == 0 {
+				b.WriteByte(' ') // preserve word boundaries
+			}
+		case inTag:
+			// Tag name runs until the first whitespace or '/' (after the leading one).
+			if readingName {
+				if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+					readingName = false
+				} else {
+					name = append(name, r)
+				}
+			}
+		case skip == 0:
+			b.WriteByte(r) // raw byte keeps multi-byte UTF-8 intact
 		}
 	}
 	// Collapse consecutive whitespace.
-	result := strings.Join(strings.Fields(b.String()), " ")
-	return result
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // setHealth updates the health status under the write lock.

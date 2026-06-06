@@ -73,3 +73,28 @@ func TestExtractPlainText_DecodesLatin1Charset(t *testing.T) {
 		t.Fatalf("expected accented text decoded, got %q", got)
 	}
 }
+
+// TestStripHTMLTags_DropsStyleAndScript guards the regression where the CSS
+// inside a <style> block (templated MJML/Mailjet mail) leaked into the indexed
+// text as noise, and ensures real body text + UTF-8 survive.
+func TestStripHTMLTags_DropsStyleAndScript(t *testing.T) {
+	html := `<html><head><style type="text/css">#outlook a { padding:0; } body { margin:0;` +
+		`-webkit-text-size-adjust:100%; } @media only screen and (min-width:480px) { ` +
+		`.mj-column-per-100 { width:100% !important; } }</style></head>` +
+		`<body><script>var x = 1 < 2;</script>` +
+		`<p>Paiement réussi ✅</p><p>Votre facture n°20260602 d'un montant de 11.93 €.</p></body></html>`
+	got := stripHTMLTags(html)
+	for _, leak := range []string{"padding", "margin", "min-width", "width:100%", "var x", "!important"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("CSS/JS leaked into output (%q): %q", leak, got)
+		}
+	}
+	for _, want := range []string{"Paiement réussi ✅", "Votre facture", "11.93 €"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body text dropped (%q): %q", want, got)
+		}
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("output is not valid UTF-8: %q", got)
+	}
+}
