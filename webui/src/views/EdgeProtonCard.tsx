@@ -35,9 +35,21 @@ export function EdgeProtonCard() {
   const sync = useMutation({
     mutationFn: () => api.edgeSync(),
     onSuccess: () => {
-      // give the push a moment, then refresh the status badge
-      setTimeout(() => void qc.invalidateQueries({ queryKey: ["edge-status"] }), 1500);
+      // give the push a moment, then refresh the status badge + indexed count
+      setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["edge-status"] });
+        void qc.invalidateQueries({ queryKey: ["mail-count"] });
+      }, 1500);
     },
+  });
+
+  // Total mail indexed in the library (cloud KB) — the "something is happening"
+  // signal: it grows after each sync. Counts all mail sources, not Proton only.
+  const mailCountQ = useQuery({
+    queryKey: ["mail-count"],
+    queryFn: () => api.knowledgeCount("mail"),
+    retry: false,
+    refetchInterval: 30000,
   });
 
   // Current edge config (proton_user + whether a password is stored) so the
@@ -166,7 +178,14 @@ export function EdgeProtonCard() {
         <div className="flex items-center gap-2.5">
           <span className={`inline-block size-2.5 rounded-full ${dot}`} />
           <div>
-            <h3 className="text-[14px] font-semibold">Proton Mail · this device</h3>
+            <h3 className="text-[14px] font-semibold">
+              Proton Mail · this device
+              {typeof mailCountQ.data?.total === "number" && (
+                <span className="ml-2 rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
+                  {mailCountQ.data.total.toLocaleString("fr-FR")} mails indexed
+                </span>
+              )}
+            </h3>
             <p className="text-[12px] text-muted">{statusLine}</p>
           </div>
         </div>

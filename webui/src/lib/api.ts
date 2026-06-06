@@ -159,6 +159,11 @@ export const api = {
         sourceType ? `&source_type=${encodeURIComponent(sourceType)}` : ""
       }`,
     ),
+  /** Just the count for a source type (the list response carries `total`). */
+  knowledgeCount: (sourceType: string) =>
+    getJSON<{ total: number }>(
+      `/knowledge/items?limit=1&offset=0&source_type=${encodeURIComponent(sourceType)}`,
+    ),
   knowledgeItem: (contentId: string) =>
     getJSON<KnowledgeItem>(`/knowledge/${cidPath(contentId)}`),
 
