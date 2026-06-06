@@ -40,6 +40,13 @@ export function apiKey(): string {
   return ls(API_KEY_KEY) || META_TOKEN;
 }
 
+/** The token injected by the LOCAL sidecar that served this page (empty on a
+ *  static host like the cloud web shell). Used for same-origin, sidecar-local
+ *  routes (/edge/*) that must bypass any configured remote endpoint/key. */
+export function localToken(): string {
+  return META_TOKEN;
+}
+
 /** True when the client is configured to talk to a remote endpoint. */
 export function isRemote(): boolean {
   return !!ls(ENDPOINT_KEY);

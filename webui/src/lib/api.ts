@@ -1,5 +1,5 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { apiBase, apiKey, refreshAccessToken } from "./connection";
+import { apiBase, apiKey, localToken, refreshAccessToken } from "./connection";
 import type {
   AgendaAction,
   Briefing,
@@ -113,6 +113,24 @@ async function patchJSON(path: string, body: unknown): Promise<void> {
   const r = await fetchAuthed(path, { method: "PATCH", body: JSON.stringify(body) }, {
     "Content-Type": "application/json",
   });
+  if (!r.ok) throw httpError(r);
+}
+
+// Edge routes (/edge/*) are served by the LOCAL sidecar that served this page —
+// never the remote tenant. They MUST bypass apiBase() (which may point at the
+// cloud tenant) and the remote key: use a same-origin relative URL + the LOCAL
+// loopback token. (Regression: with a remote endpoint configured, /edge went to
+// the tenant pod → 404 → the desktop Proton card hid.)
+function edgeHeaders(): Record<string, string> {
+  return { "X-Hygur-Token": localToken(), "X-Hygur-API": API_VERSION };
+}
+async function edgeGet<T>(path: string): Promise<T> {
+  const r = await fetch(path, { headers: edgeHeaders() });
+  if (!r.ok) throw httpError(r);
+  return (await r.json()) as T;
+}
+async function edgePost(path: string): Promise<void> {
+  const r = await fetch(path, { method: "POST", headers: edgeHeaders() });
   if (!r.ok) throw httpError(r);
 }
 
@@ -251,9 +269,9 @@ export const api = {
 
   // Edge thin-client (cloud desktop): on-device Proton sync. Served locally by
   // the sidecar (never proxied to the tenant). 503 when not a cloud thin client.
-  edgeStatus: () => getJSON<EdgeStatus>("/edge/status"),
-  edgeMailboxes: () => getJSON<{ mailboxes: string[] }>("/edge/proton/mailboxes"),
-  edgeSync: () => postJSON<unknown>("/edge/sync", {}),
+  edgeStatus: () => edgeGet<EdgeStatus>("/edge/status"),
+  edgeMailboxes: () => edgeGet<{ mailboxes: string[] }>("/edge/proton/mailboxes"),
+  edgeSync: () => edgePost("/edge/sync"),
 
   // Multi-instance connectors ("+").
   connectorInstances: () =>
