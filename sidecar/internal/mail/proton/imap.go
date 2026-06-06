@@ -348,8 +348,11 @@ func (c *IMAPConnector) ListThreads(ctx context.Context, opts mail.ListOptions) 
 		// Build search criteria based on options
 		searchCriteria := buildSearchCriteria(opts)
 
-		// Search for messages
-		searchCmd := c.client.Search(searchCriteria, nil)
+		// UID SEARCH (not a plain SEARCH): we read the result via AllUIDs(), which
+		// only yields UIDs when the server returned a UID set. A sequence-number
+		// SEARCH leaves AllUIDs() empty — which silently returned zero messages for
+		// every date-filtered (watermark/incremental) sync.
+		searchCmd := c.client.UIDSearch(searchCriteria, nil)
 		searchData, err := searchCmd.Wait()
 		if err != nil {
 			if c.isConnectionLost(err) {
