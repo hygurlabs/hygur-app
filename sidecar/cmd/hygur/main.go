@@ -728,9 +728,14 @@ func main() {
 		}
 		logger.Info().Str("upstream", cloudUpstream).Msg("cloud-backed mode: data/AI routes proxied to tenant")
 		// One process: push local sources (Files/Proton) to the tenant from the
-		// same config instead of a separate `hygur edge` process.
+		// same config instead of a separate `hygur edge` process. The runner also
+		// backs the local /edge/* routes (folder listing, status, sync) the WebUI's
+		// Proton card uses — wired even before sources are configured so "Load
+		// folders" works once credentials are entered.
+		runner := edge.NewRunner(edgeCfgPath)
+		server.SetEdgeRunner(runner)
 		if edgeCloud && (edgeCfg.Folder != "" || edgeCfg.ProtonUser != "") {
-			go edge.NewRunner(edgeCfgPath).RunLoop(ctx)
+			go runner.RunLoop(ctx)
 			logger.Info().Msg("edge push loop started in-process")
 		}
 	}

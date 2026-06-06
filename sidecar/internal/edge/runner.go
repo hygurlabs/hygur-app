@@ -2,6 +2,8 @@ package edge
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -100,7 +102,7 @@ func Sync(ctx context.Context, cfg *Config, stateDir string) (files, mail, errs 
 		return 0, 0, 1, "server unreachable: " + err.Error()
 	}
 	if cfg.Folder != "" {
-		wm := filepath.Join(stateDir, "files.watermark")
+		wm := filepath.Join(stateDir, watermarkName("files", cfg.Server))
 		st, _ := NewFileSync(client, TextParsers()).Run(ctx, cfg.Folder, ReadWatermark(wm))
 		if st.Newest.After(ReadWatermark(wm)) {
 			_ = WriteWatermark(wm, st.Newest)
@@ -109,7 +111,7 @@ func Sync(ctx context.Context, cfg *Config, stateDir string) (files, mail, errs 
 		errs += st.Errors
 	}
 	if cfg.ProtonUser != "" && cfg.ProtonPassword != "" {
-		wm := filepath.Join(stateDir, "proton.watermark")
+		wm := filepath.Join(stateDir, watermarkName("proton", cfg.Server))
 		conn := proton.NewDefaultIMAPConnector()
 		conn.SetCredentials(cfg.ProtonUser, cfg.ProtonPassword)
 		if cerr := conn.Connect(ctx); cerr != nil {
@@ -148,6 +150,42 @@ func (r *Runner) fail(msg string) Status {
 	r.status.Running = false
 	r.status.LastError = msg
 	return r.status
+}
+
+// watermarkName scopes the per-source watermark to the destination server, so
+// re-pointing the edge at a different/fresh tenant triggers a full re-sync instead
+// of being silenced by progress made against the previous instance (regression:
+// switching cloud→home left the watermark past all mail, so nothing was pushed).
+func watermarkName(source, server string) string {
+	host := strings.TrimSpace(server)
+	if u, err := url.Parse(server); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	host = strings.NewReplacer(":", "_", "/", "_", "@", "_").Replace(host)
+	if host == "" {
+		return source + ".watermark"
+	}
+	return source + "." + host + ".watermark"
+}
+
+// Mailboxes lists the Proton mailboxes/folders available for selection in the UI
+// ("Load folders"). It connects to the LOCAL Proton Bridge with the configured
+// credentials — the cloud pod can't reach the Bridge, so this MUST run on-device.
+func (r *Runner) Mailboxes(ctx context.Context) ([]string, error) {
+	cfg, err := LoadConfig(r.cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ProtonUser == "" || cfg.ProtonPassword == "" {
+		return nil, fmt.Errorf("proton credentials not configured")
+	}
+	conn := proton.NewDefaultIMAPConnector()
+	conn.SetCredentials(cfg.ProtonUser, cfg.ProtonPassword)
+	if err := conn.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("proton (is Proton Bridge running?): %w", err)
+	}
+	defer func() { _ = conn.Disconnect() }()
+	return conn.ListMailboxes(ctx)
 }
 
 func splitMailboxes(s string) []string {

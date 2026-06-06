@@ -72,6 +72,11 @@ func keepLocalPath(p string) bool {
 	case "/", "/app", "/health", "/version":
 		return true
 	}
+	// Edge thin-client routes run on THIS device (local Proton Bridge access) and
+	// must never be forwarded to the tenant.
+	if strings.HasPrefix(p, "/edge/") {
+		return true
+	}
 	return strings.HasPrefix(p, "/assets/")
 }
 

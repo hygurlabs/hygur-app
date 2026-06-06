@@ -14,6 +14,7 @@ import (
 	"github.com/hygur/sidecar/internal/api/handlers"
 	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
+	"github.com/hygur/sidecar/internal/edge"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/rs/zerolog"
 )
@@ -58,6 +59,7 @@ type Server struct {
 	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
 	cloudProxy       *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
 	extraOrigins     map[string]bool        // extra CORS-allowed origins (SetAllowedOrigins) — e.g. the cloud web shell
+	edgeRunner       *edge.Runner           // local edge push loop (cloud thin client) — backs the /edge/* routes
 }
 
 // SetManaged marks this as a Hygur-operated cloud tenant. The served SPA then
@@ -89,6 +91,11 @@ func (s *Server) SetAllowedOrigins(origins []string) {
 		}
 	}
 }
+
+// SetEdgeRunner wires the on-device edge push loop so the /edge/* routes can list
+// local Proton folders, report sync status, and trigger a sync. Cloud thin client
+// only; nil in local/self-host mode (the routes then return 503).
+func (s *Server) SetEdgeRunner(r *edge.Runner) { s.edgeRunner = r }
 
 // NewServer creates a new API server instance.
 // The token parameter is used for authenticating API requests via the X-Hygur-Token header.

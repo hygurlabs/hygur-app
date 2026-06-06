@@ -54,6 +54,13 @@ func (s *Server) setupRoutes() {
 		// Model endpoints
 		r.Get("/models", s.handleModels)
 
+		// Edge (cloud thin client): on-device Proton folder listing + sync
+		// status/trigger. Served LOCALLY (kept off the cloud proxy) because only
+		// this device can reach the local Proton Bridge. 503 in non-thin-client.
+		r.Get("/edge/status", s.handleEdgeStatus)
+		r.Get("/edge/proton/mailboxes", s.handleEdgeMailboxes)
+		r.Post("/edge/sync", s.handleEdgeSync)
+
 		// Knowledge endpoints (fast operations)
 		r.Route("/knowledge", func(r chi.Router) {
 			r.Get("/items", s.handleKnowledgeList)
