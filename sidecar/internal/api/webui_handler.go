@@ -33,6 +33,20 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	// Lock the embedded SPA down: code + styles + images same-origin only, and
+	// network egress restricted to THIS sidecar (loopback), the Hygur cloud
+	// (*.hygur.ai tenant + console) and the Tauri IPC. An XSS-injected script then
+	// cannot exfiltrate to an arbitrary host, frame the app, or load remote code.
+	// (The Tauri init scripts are native-injected and bypass page CSP; on macOS
+	// invoke() is postMessage, not a fetch, so it isn't connect-src-gated — the
+	// ipc: sources keep Windows working too.)
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; font-src 'self'; "+
+			"connect-src 'self' https://*.hygur.ai ipc: http://ipc.localhost; "+
+			"object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = io.WriteString(w, page)
 }
 
