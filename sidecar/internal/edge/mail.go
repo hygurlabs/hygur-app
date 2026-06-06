@@ -1,13 +1,20 @@
 package edge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/hygur/sidecar/internal/ingest"
+	"github.com/hygur/sidecar/internal/ingest/parsers"
 	"github.com/hygur/sidecar/internal/mail"
 )
+
+// maxAttachmentTextBytes caps the extracted text of a single PDF attachment to
+// keep the push payload bounded (the center chunks it anyway).
+const maxAttachmentTextBytes = 100_000
 
 // MailSync is the edge mail-puller (C7-E5, approach B): given an already-connected
 // mail.MailConnector (e.g. Proton Bridge over local IMAP), it lists threads since
@@ -22,6 +29,7 @@ type MailSync struct {
 	client   *Client
 	provider string // "proton" | "mailapp" → source_ref prefix
 	norm     *mail.ThreadNormalizer
+	pdf      ingest.Parser // extracts embedded text from PDF attachments (no OCR)
 }
 
 // NewMailSync wires a mail puller to a push client. provider prefixes source_refs.
@@ -34,7 +42,7 @@ func NewMailSync(client *Client, provider string) *MailSync {
 	// statements/invoices). Headers are added by messageText, so skip metadata here.
 	norm := mail.NewThreadNormalizer()
 	norm.IncludeMetadata = false
-	return &MailSync{client: client, provider: provider, norm: norm}
+	return &MailSync{client: client, provider: provider, norm: norm, pdf: parsers.NewPDFParserTextOnly()}
 }
 
 // MailStats reports a run's outcome; Newest is the latest message date pushed
@@ -89,32 +97,66 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 				if err := ctx.Err(); err != nil {
 					return st, state, err
 				}
-				// Plain text, falling back to stripped HTML for HTML-only mail.
-				body := ms.norm.NormalizeMessage(&m)
-				// Skip only when there's genuinely nothing to index — an empty
-				// plain-text part alone is NOT a reason to drop a mail whose
-				// subject (and HTML body) carry the content.
-				if strings.TrimSpace(m.Subject) == "" && strings.TrimSpace(body) == "" {
-					continue
-				}
-				text := messageText(m, body)
-				in := IngestText{
-					Title:      m.Subject,
-					Text:       text,
-					SourceType: "mail",
-					SourceRef:  ms.provider + ":" + m.ID,
-					Author:     m.From,
-					Metadata:   map[string]any{"from": m.From, "mailbox": mbox, "provider": ms.provider},
-				}
+				createdAt := ""
 				if !m.Date.IsZero() {
-					in.CreatedAt = m.Date.UTC().Format(time.RFC3339)
+					createdAt = m.Date.UTC().Format(time.RFC3339)
 				}
-				if _, err := ms.client.PushText(ctx, in); err != nil {
-					st.Errors++
-					continue
+				ref := ms.provider + ":" + m.ID
+				pushedAny := false
+
+				// 1) The mail body. Index it unless there's genuinely nothing — an
+				// empty plain-text part alone is NOT a reason to drop a mail whose
+				// subject (and HTML body) carry the content.
+				body := ms.norm.NormalizeMessage(&m)
+				if strings.TrimSpace(m.Subject) != "" || strings.TrimSpace(body) != "" {
+					if _, err := ms.client.PushText(ctx, IngestText{
+						Title:      m.Subject,
+						Text:       messageText(m, body),
+						SourceType: "mail",
+						SourceRef:  ref,
+						Author:     m.From,
+						CreatedAt:  createdAt,
+						Metadata:   map[string]any{"from": m.From, "mailbox": mbox, "provider": ms.provider},
+					}); err != nil {
+						st.Errors++
+					} else {
+						st.Pushed++
+						pushedAny = true
+					}
 				}
-				st.Pushed++
-				if m.Date.After(newest) {
+
+				// 2) PDF attachments → separate knowledge items LINKED to the mail.
+				// The title embeds the mail subject so searching the mail surfaces
+				// its attachments too; metadata.parent records the link for the UI.
+				for _, att := range m.Attachments {
+					if err := ctx.Err(); err != nil {
+						return st, state, err
+					}
+					atext := ms.attachmentText(ctx, att)
+					if atext == "" {
+						continue
+					}
+					if _, err := ms.client.PushText(ctx, IngestText{
+						Title:      attachmentTitle(m.Subject, att.Filename),
+						Text:       atext,
+						SourceType: "mail",
+						SourceRef:  ref + ":att:" + att.Filename,
+						Author:     m.From,
+						CreatedAt:  createdAt,
+						Metadata: map[string]any{
+							"from": m.From, "mailbox": mbox, "provider": ms.provider,
+							"attachment": true, "filename": att.Filename,
+							"parent": ref, "parent_subject": m.Subject,
+						},
+					}); err != nil {
+						st.Errors++
+					} else {
+						st.Pushed++
+						pushedAny = true
+					}
+				}
+
+				if pushedAny && m.Date.After(newest) {
 					newest = m.Date
 				}
 			}
@@ -150,4 +192,35 @@ func messageText(m mail.Message, body string) string {
 	}
 	b.WriteString(body)
 	return b.String()
+}
+
+// attachmentText extracts indexable text from a PDF attachment (embedded text
+// only — no OCR). Non-PDF, empty, or unparseable attachments yield "".
+func (ms *MailSync) attachmentText(ctx context.Context, att mail.Attachment) string {
+	if len(att.Data) == 0 || !isPDF(att) {
+		return ""
+	}
+	text, _, err := ms.pdf.Parse(ctx, bytes.NewReader(att.Data))
+	if err != nil {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	if len(text) > maxAttachmentTextBytes {
+		text = text[:maxAttachmentTextBytes]
+	}
+	return text
+}
+
+func isPDF(att mail.Attachment) bool {
+	return strings.EqualFold(att.MimeType, "application/pdf") ||
+		strings.HasSuffix(strings.ToLower(att.Filename), ".pdf")
+}
+
+// attachmentTitle ties the attachment to its mail by title, so a search for the
+// mail's subject also surfaces the attachment.
+func attachmentTitle(subject, filename string) string {
+	if strings.TrimSpace(subject) == "" {
+		return "📎 " + filename
+	}
+	return subject + " — 📎 " + filename
 }

@@ -2,12 +2,23 @@ package edge
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/mail"
 )
+
+// stubParser stands in for the PDF parser so attachment linking can be tested
+// without a real PDF byte stream.
+type stubParser struct{ text string }
+
+func (s stubParser) SupportedExtensions() []string { return []string{".pdf"} }
+func (s stubParser) Parse(context.Context, io.Reader) (string, ingest.Metadata, error) {
+	return s.text, nil, nil
+}
 
 // mockMail is a canned MailConnector for the edge puller test.
 type mockMail struct {
@@ -134,5 +145,56 @@ func TestMailSync_BackfillThenIncremental(t *testing.T) {
 	o2 := conn.lastOpts[len(conn.lastOpts)-1]
 	if o2.Limit != 0 || o2.Since == nil || !o2.Since.Equal(date) {
 		t.Errorf("incremental: got Limit=%d Since=%v, want Limit=0 Since=%v", o2.Limit, o2.Since, date)
+	}
+}
+
+// TestMailSync_LinksPDFAttachment verifies a PDF attachment is pushed as its own
+// knowledge item, titled with the mail subject (so a subject search surfaces it)
+// and carrying parent metadata that records the link to the mail.
+func TestMailSync_LinksPDFAttachment(t *testing.T) {
+	srv, got, _ := captureServer(t)
+	date := time.Date(2026, 4, 15, 18, 23, 0, 0, time.UTC)
+	conn := &mockMail{
+		threads: []mail.Thread{{ID: "t1"}},
+		msgs: map[string][]mail.Message{
+			"t1": {{
+				ID: "m1", Subject: "Déclaration TVA [FID1266295]", From: "acct@example.com",
+				HTMLBody: "<p>Votre déclaration</p>", Date: date,
+				Attachments: []mail.Attachment{
+					{Filename: "declaration.pdf", MimeType: "application/pdf", Data: []byte("%PDF-1.4 fake")},
+					{Filename: "logo.png", MimeType: "image/png", Data: []byte("PNG")}, // ignored
+				},
+			}},
+		},
+	}
+	ms := NewMailSync(NewClient(srv.URL, "tok"), "proton")
+	ms.pdf = stubParser{text: "TVA à payer: 1234,56 EUR — FID1266295"}
+
+	st, _, err := ms.Run(context.Background(), conn, []string{"INBOX"}, nil, 200)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if st.Pushed != 2 { // mail body + the PDF; the PNG is ignored
+		t.Fatalf("pushed = %d, want 2 (mail + pdf)", st.Pushed)
+	}
+	byRef := map[string]IngestText{}
+	for _, g := range *got {
+		byRef[g.SourceRef] = g
+	}
+	att, ok := byRef["proton:m1:att:declaration.pdf"]
+	if !ok {
+		t.Fatalf("PDF attachment not pushed: %+v", *got)
+	}
+	if !strings.Contains(att.Title, "FID1266295") || !strings.Contains(att.Title, "declaration.pdf") {
+		t.Errorf("attachment title doesn't link to the mail: %q", att.Title)
+	}
+	if !strings.Contains(att.Text, "1234,56 EUR") {
+		t.Errorf("attachment text not the extracted PDF: %q", att.Text)
+	}
+	if att.Metadata["parent"] != "proton:m1" || att.Metadata["attachment"] != true {
+		t.Errorf("attachment metadata missing link: %+v", att.Metadata)
+	}
+	if _, ok := byRef["proton:m1:att:logo.png"]; ok {
+		t.Errorf("non-PDF attachment should be ignored")
 	}
 }
