@@ -21,6 +21,7 @@ import (
 type MailSync struct {
 	client   *Client
 	provider string // "proton" | "mailapp" → source_ref prefix
+	norm     *mail.ThreadNormalizer
 }
 
 // NewMailSync wires a mail puller to a push client. provider prefixes source_refs.
@@ -28,7 +29,12 @@ func NewMailSync(client *Client, provider string) *MailSync {
 	if provider == "" {
 		provider = "mail"
 	}
-	return &MailSync{client: client, provider: provider}
+	// Normalizer derives indexable text from each message, falling back to the
+	// HTML part when there's no plain-text body (HTML-only mail — common for
+	// statements/invoices). Headers are added by messageText, so skip metadata here.
+	norm := mail.NewThreadNormalizer()
+	norm.IncludeMetadata = false
+	return &MailSync{client: client, provider: provider, norm: norm}
 }
 
 // MailStats reports a run's outcome; Newest is the latest message date pushed
@@ -72,10 +78,15 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 				if err := ctx.Err(); err != nil {
 					return st, err
 				}
-				if strings.TrimSpace(m.Body) == "" {
-					continue // nothing to index beyond headers (HTML-only fallback = later)
+				// Plain text, falling back to stripped HTML for HTML-only mail.
+				body := ms.norm.NormalizeMessage(&m)
+				// Skip only when there's genuinely nothing to index — an empty
+				// plain-text part alone is NOT a reason to drop a mail whose
+				// subject (and HTML body) carry the content.
+				if strings.TrimSpace(m.Subject) == "" && strings.TrimSpace(body) == "" {
+					continue
 				}
-				text := messageText(m)
+				text := messageText(m, body)
 				in := IngestText{
 					Title:      m.Subject,
 					Text:       text,
@@ -102,8 +113,10 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 }
 
 // messageText assembles the plain text the center will index: subject + sender +
-// body (the connector already provides Body as plain text).
-func messageText(m mail.Message) string {
+// date headers, then the normalized body (plain text, or stripped HTML for
+// HTML-only mail). The subject is always included so a mail is findable by it
+// even when the body is empty.
+func messageText(m mail.Message, body string) string {
 	var b strings.Builder
 	if m.Subject != "" {
 		fmt.Fprintf(&b, "Subject: %s\n", m.Subject)
@@ -117,6 +130,6 @@ func messageText(m mail.Message) string {
 	if b.Len() > 0 {
 		b.WriteByte('\n')
 	}
-	b.WriteString(m.Body)
+	b.WriteString(body)
 	return b.String()
 }

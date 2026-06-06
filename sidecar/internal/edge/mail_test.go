@@ -44,7 +44,11 @@ func TestMailSync_PushesMessages(t *testing.T) {
 		msgs: map[string][]mail.Message{
 			"t1": {
 				{ID: "m1", Subject: "Invoice", From: "edf@example.com", Body: "Total: 42 EUR", Date: date},
-				{ID: "m2", Subject: "Empty", From: "x@y.com", Body: "   "}, // skipped (blank)
+				// HTML-only mail (no plain-text part): indexed via stripped HTML so
+				// it stays findable — common for statements/invoices.
+				{ID: "m2", Subject: "Statement", From: "bank@example.com", HTMLBody: "<html><body><p>Balance: 99 EUR</p></body></html>", Date: date},
+				// Wholly empty (no subject, no body, no HTML): the only case skipped.
+				{ID: "m3", From: "noise@y.com", Body: "   "},
 			},
 		},
 	}
@@ -53,21 +57,38 @@ func TestMailSync_PushesMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if st.Pushed != 1 {
-		t.Fatalf("pushed = %d, want 1 (blank body skipped)", st.Pushed)
+	if st.Pushed != 2 {
+		t.Fatalf("pushed = %d, want 2 (only the wholly-empty mail skipped)", st.Pushed)
 	}
-	if len(*got) != 1 {
+	if len(*got) != 2 {
 		t.Fatalf("server received %d", len(*got))
 	}
-	g := (*got)[0]
-	if g.SourceRef != "proton:m1" || g.SourceType != "mail" {
-		t.Errorf("bad ref/type: %+v", g)
+	byRef := map[string]IngestText{}
+	for _, g := range *got {
+		byRef[g.SourceRef] = g
+		if g.SourceType != "mail" {
+			t.Errorf("bad type: %+v", g)
+		}
 	}
-	if g.CreatedAt != date.Format(time.RFC3339) {
-		t.Errorf("created_at = %q, want %q", g.CreatedAt, date.Format(time.RFC3339))
+	m1, ok := byRef["proton:m1"]
+	if !ok {
+		t.Fatalf("m1 not pushed: %+v", *got)
 	}
-	if !strings.Contains(g.Text, "Invoice") || !strings.Contains(g.Text, "Total: 42 EUR") {
-		t.Errorf("text missing subject/body: %q", g.Text)
+	if m1.CreatedAt != date.Format(time.RFC3339) {
+		t.Errorf("created_at = %q, want %q", m1.CreatedAt, date.Format(time.RFC3339))
+	}
+	if !strings.Contains(m1.Text, "Invoice") || !strings.Contains(m1.Text, "Total: 42 EUR") {
+		t.Errorf("m1 text missing subject/body: %q", m1.Text)
+	}
+	m2, ok := byRef["proton:m2"]
+	if !ok {
+		t.Fatalf("m2 (HTML-only) not pushed: %+v", *got)
+	}
+	if !strings.Contains(m2.Text, "Statement") || !strings.Contains(m2.Text, "Balance: 99 EUR") {
+		t.Errorf("m2 HTML body not indexed: %q", m2.Text)
+	}
+	if _, pushed := byRef["proton:m3"]; pushed {
+		t.Errorf("m3 (wholly empty) should be skipped")
 	}
 	if !st.Newest.Equal(date) {
 		t.Errorf("watermark = %v, want %v", st.Newest, date)
