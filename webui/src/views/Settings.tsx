@@ -345,7 +345,9 @@ export function Settings() {
         <ErrorBanner message={`Couldn't save: ${(save.error as Error).message}`} />
       )}
 
-      <ConnectionSection />
+      {/* Connection (endpoint + device key) is an advanced/self-host control; in a
+          managed cloud tenant the connection is handled for the user — hide it. */}
+      {!draft.managed && <ConnectionSection />}
       <EngineModeSection />
       <BillingSection />
 
@@ -465,6 +467,8 @@ export function Settings() {
         </Row>
       </Section>
 
+      {/* Retrieval tuning is a power-user/debug knob — hide on a managed tenant. */}
+      {!draft.managed && (
       <Section title="Retrieval">
         <Row label="LLM intent classifier" hint="Slower, sometimes sharper routing">
           <Toggle
@@ -491,6 +495,7 @@ export function Settings() {
           </select>
         </Row>
       </Section>
+      )}
 
       <Section title="Mail">
         <Row
@@ -504,6 +509,8 @@ export function Settings() {
         </Row>
       </Section>
 
+      {/* Log level is a debug control — hide on a managed tenant. */}
+      {!draft.managed && (
       <Section title="Logging">
         <Row label="Log level">
           <select
@@ -519,10 +526,13 @@ export function Settings() {
           </select>
         </Row>
       </Section>
+      )}
 
       <TokenUsageSection />
-      <EncryptionSection />
-      <BackupSection />
+      {/* Local at-rest encryption + DB backup/restore are admin operations; on a
+          managed cloud tenant the server owns them — hide for standard users. */}
+      {!draft.managed && <EncryptionSection />}
+      {!draft.managed && <BackupSection />}
       <NotificationsSection />
       <PermissionsSection />
     </Page>
