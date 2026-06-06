@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { getDesktopConfig, isDesktop, setDesktopConfig } from "../lib/desktop";
+import { getDesktopConfig, setDesktopConfig } from "../lib/desktop";
 
 /** Proton "connector" for the cloud desktop thin client. Proton Bridge lives on
  *  THIS device (loopback), so the cloud pod can never reach it — this card talks
@@ -17,12 +17,16 @@ export function EdgeProtonCard() {
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  // Probe /edge/status: 200 only on a local thin-client sidecar (desktop cloud).
+  // This IS the capability gate — no isDesktop()/isTauri() check, which is
+  // unreliable on the remote-origin (127.0.0.1:8420) webview. A browser shell
+  // (404) or local/self-host sidecar (503) errors → the card hides. Stop polling
+  // once it errors so a non-thin-client doesn't get hammered.
   const statusQ = useQuery({
     queryKey: ["edge-status"],
     queryFn: () => api.edgeStatus(),
-    enabled: isDesktop(),
-    retry: false, // a 503 (not a thin client) should resolve to "hidden" fast
-    refetchInterval: 5000,
+    retry: false,
+    refetchInterval: (q) => (q.state.error ? false : 5000),
   });
 
   const sync = useMutation({
@@ -33,8 +37,8 @@ export function EdgeProtonCard() {
     },
   });
 
-  // Web shell (no local Bridge) or local/self-host sidecar (/edge → 503) → hide.
-  if (!isDesktop() || statusQ.isError || statusQ.isLoading || !statusQ.data) return null;
+  // Web shell (no local Bridge) or local/self-host sidecar (/edge → 503/404) → hide.
+  if (statusQ.isError || statusQ.isLoading || !statusQ.data) return null;
   const st = statusQ.data;
   const healthy = !st.last_error && st.errors === 0 && !!st.last_sync_at;
   const dot = st.last_error || st.errors > 0 ? "bg-danger" : healthy ? "bg-green-500" : "bg-amber-500";
@@ -45,15 +49,21 @@ export function EdgeProtonCard() {
     try {
       const r = await api.edgeMailboxes();
       setFolders(r.mailboxes ?? []);
-      const c = await getDesktopConfig();
-      setSelected(
-        new Set(
-          (c.proton_mailbox || "All Mail")
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        ),
-      );
+      // Pre-select the currently configured mailbox(es). Best-effort: a Tauri IPC
+      // hiccup must not block showing the folders.
+      try {
+        const c = await getDesktopConfig();
+        setSelected(
+          new Set(
+            (c.proton_mailbox || "All Mail")
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          ),
+        );
+      } catch {
+        setSelected(new Set(["All Mail"]));
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
