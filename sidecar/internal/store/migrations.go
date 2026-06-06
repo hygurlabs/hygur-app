@@ -410,15 +410,30 @@ func applySectionsAndFTSV9Migration(tx *sql.Tx) error {
 		}
 	}
 
-	// 4. Backfill the FTS index from any chunks predating the triggers (no-op
-	//    on a fresh DB; idempotent via NOT EXISTS on re-run).
-	if _, err := tx.Exec(`
-		INSERT INTO chunks_fts(chunk_id, content_id, text)
-		SELECT c.chunk_id, c.content_id, c.text
-		FROM chunks c
-		WHERE NOT EXISTS (SELECT 1 FROM chunks_fts f WHERE f.chunk_id = c.chunk_id)
-	`); err != nil {
-		return fmt.Errorf("backfill fts5: %w", err)
+	// 4. Backfill the FTS index from any chunks predating the triggers. The
+	//    anti-join probes chunks_fts by chunk_id, which is UNINDEXED in FTS5, so
+	//    it falls back to a full FTS scan PER chunk → O(n²). ensureRAGSchema re-runs
+	//    this on EVERY boot, so guard it with a cheap count: skip when the index is
+	//    already in sync (the steady state). Only an out-of-sync DB — the table was
+	//    just created, or a version-mismatch skipped v9 — pays the one-time backfill.
+	//    (Without the guard, boot time grew quadratically with the chunk count:
+	//    ~10s at 2.7k chunks, ~106s at 5.2k.)
+	var nChunks, nFTS int
+	if err := tx.QueryRow(`SELECT count(*) FROM chunks`).Scan(&nChunks); err != nil {
+		return fmt.Errorf("count chunks: %w", err)
+	}
+	if err := tx.QueryRow(`SELECT count(*) FROM chunks_fts`).Scan(&nFTS); err != nil {
+		return fmt.Errorf("count chunks_fts: %w", err)
+	}
+	if nFTS < nChunks {
+		if _, err := tx.Exec(`
+			INSERT INTO chunks_fts(chunk_id, content_id, text)
+			SELECT c.chunk_id, c.content_id, c.text
+			FROM chunks c
+			WHERE NOT EXISTS (SELECT 1 FROM chunks_fts f WHERE f.chunk_id = c.chunk_id)
+		`); err != nil {
+			return fmt.Errorf("backfill fts5: %w", err)
+		}
 	}
 	return nil
 }
