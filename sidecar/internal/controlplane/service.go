@@ -167,3 +167,14 @@ func (s *Service) mintAccess(now time.Time, acc Account, dev Device) (string, er
 		Exp: now.Add(s.accessTTL).Unix(),
 	})
 }
+
+// verifyAccessToken validates a device access token this control plane issued,
+// using the issuer key's public half. Used to authorize passkey registration (the
+// just-enrolled device adds a passkey to its account). Returns the claims.
+func (s *Service) verifyAccessToken(raw string) (auth.DeviceClaims, error) {
+	pub, ok := s.signer.Public().(ed25519.PublicKey)
+	if !ok {
+		return auth.DeviceClaims{}, fmt.Errorf("controlplane: issuer key not ed25519")
+	}
+	return auth.VerifyDeviceToken(pub, raw, s.clock())
+}

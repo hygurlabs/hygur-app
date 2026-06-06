@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -84,7 +85,20 @@ func runServe(args []string) {
 	die(err)
 
 	root := chi.NewRouter()
+	// The cloud web shell (cloud.hygur.ai) calls enroll + passkey ceremonies
+	// cross-origin; permit it (+ console) here. Loopback is always allowed.
+	rpOrigins := splitCSV(envOr("HYGUR_RP_ORIGINS", "https://cloud.hygur.ai,https://console.hygur.ai"))
+	root.Use(controlplane.CORSMiddleware(rpOrigins))
 	svc.Register(root)
+
+	// Passkeys (WebAuthn): RP ID is the registrable parent domain so a passkey
+	// registered on console.hygur.ai authenticates on cloud.hygur.ai.
+	rpID := envOr("HYGUR_RP_ID", "hygur.ai")
+	wa, err := controlplane.NewWebAuthnService(store, svc, rpID, "Hygur Cloud", rpOrigins)
+	die(err)
+	wa.Register(root)
+	fmt.Printf("hygur-console: passkey (WebAuthn) enabled — RP %q, origins %v\n", rpID, rpOrigins)
+
 	if wh := os.Getenv("HYGUR_STRIPE_WEBHOOK_SECRET"); wh != "" {
 		controlplane.NewBilling(store, wh).Register(root)
 		fmt.Println("hygur-console: Stripe billing webhook + success page enabled")
@@ -224,4 +238,15 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitCSV splits a comma-separated env value into trimmed, non-empty entries.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

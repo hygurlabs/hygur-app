@@ -124,7 +124,26 @@ CREATE TABLE IF NOT EXISTS stripe_subscriptions (
   provisioned_at      TEXT,
   created_at          TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);`
+CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);
+-- Passkeys (WebAuthn): one credential row per registered authenticator, stored as
+-- an opaque JSON blob (the go-webauthn Credential) so the store stays decoupled
+-- from the ceremony types. Ceremony SessionData (challenge etc.) is parked between
+-- begin/finish under a one-time id with a short TTL.
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  credential_id   TEXT PRIMARY KEY,
+  account_number  TEXT NOT NULL REFERENCES accounts(account_number),
+  cred_json       BLOB NOT NULL,
+  name            TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_cred_account ON webauthn_credentials(account_number);
+CREATE TABLE IF NOT EXISTS webauthn_sessions (
+  id              TEXT PRIMARY KEY,
+  account_number  TEXT NOT NULL DEFAULT '',
+  purpose         TEXT NOT NULL,
+  data            BLOB NOT NULL,
+  expires_at      TEXT NOT NULL
+);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("controlplane: migrate: %w", err)
 	}
@@ -403,6 +422,117 @@ func (s *Store) ListDevices(accountNumber string) ([]Device, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// getAccountByTenantID resolves the account whose tenant_id (instance slug) matches.
+func (s *Store) getAccountByTenantID(tenantID string) (Account, error) {
+	row := s.db.QueryRow(
+		`SELECT account_number,email,tenant_id,status,valid_until,created_at FROM accounts WHERE tenant_id=?`,
+		tenantID)
+	return scanAccount(row)
+}
+
+// CreateDeviceForAccount provisions a new device for an account (passkey login or
+// direct issue) and returns it plus the PLAINTEXT refresh token (shown once).
+// Mirrors the device creation in RedeemEnrollCode but without an enrollment code.
+func (s *Store) CreateDeviceForAccount(now time.Time, accountNumber, label string) (Device, string, error) {
+	if _, err := s.GetAccount(accountNumber); err != nil {
+		return Device{}, "", err
+	}
+	dev := Device{
+		DeviceID:      newID(),
+		AccountNumber: accountNumber,
+		Label:         label,
+		JTI:           newID(),
+		CreatedAt:     now.UTC(),
+	}
+	refresh, err := randomToken()
+	if err != nil {
+		return Device{}, "", err
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO devices(device_id,account_number,label,jti,refresh_hash,created_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)`,
+		dev.DeviceID, dev.AccountNumber, dev.Label, dev.JTI, hashToken(refresh), dev.CreatedAt.Format(rfc),
+	); err != nil {
+		return Device{}, "", fmt.Errorf("controlplane: create device: %w", err)
+	}
+	return dev, refresh, nil
+}
+
+// AddWebauthnCredential stores a registered passkey (opaque JSON blob) for an
+// account. credID is the base64url credential id (primary key / lookup).
+func (s *Store) AddWebauthnCredential(now time.Time, accountNumber, credID string, credJSON []byte, name string) error {
+	if _, err := s.GetAccount(accountNumber); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(
+		`INSERT OR REPLACE INTO webauthn_credentials(credential_id,account_number,cred_json,name,created_at) VALUES(?,?,?,?,?)`,
+		credID, accountNumber, credJSON, name, now.UTC().Format(rfc),
+	); err != nil {
+		return fmt.Errorf("controlplane: add webauthn credential: %w", err)
+	}
+	return nil
+}
+
+// WebauthnCredentialBlobs returns the stored credential JSON blobs for an account.
+func (s *Store) WebauthnCredentialBlobs(accountNumber string) ([][]byte, error) {
+	rows, err := s.db.Query(`SELECT cred_json FROM webauthn_credentials WHERE account_number=?`, accountNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][]byte
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// UpdateWebauthnCredential rewrites a credential blob (e.g. after a sign-count bump).
+func (s *Store) UpdateWebauthnCredential(credID string, credJSON []byte) error {
+	_, err := s.db.Exec(`UPDATE webauthn_credentials SET cred_json=? WHERE credential_id=?`, credJSON, credID)
+	return err
+}
+
+// PutWebauthnSession parks ceremony SessionData (opaque blob) under a one-time id.
+func (s *Store) PutWebauthnSession(id, accountNumber, purpose string, data []byte, expires time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO webauthn_sessions(id,account_number,purpose,data,expires_at) VALUES(?,?,?,?,?)`,
+		id, accountNumber, purpose, data, expires.UTC().Format(rfc))
+	return err
+}
+
+// TakeWebauthnSession atomically fetches and deletes a ceremony session, enforcing
+// expiry. One-time: a replayed id returns ErrNotFound; an expired one ErrCodeInvalid.
+func (s *Store) TakeWebauthnSession(now time.Time, id string) (accountNumber, purpose string, data []byte, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var expiresAt string
+	err = tx.QueryRow(`SELECT account_number,purpose,data,expires_at FROM webauthn_sessions WHERE id=?`, id).
+		Scan(&accountNumber, &purpose, &data, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil, ErrNotFound
+	}
+	if err != nil {
+		return "", "", nil, err
+	}
+	if _, derr := tx.Exec(`DELETE FROM webauthn_sessions WHERE id=?`, id); derr != nil {
+		return "", "", nil, derr
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", nil, err
+	}
+	if exp, perr := time.Parse(rfc, expiresAt); perr != nil || !exp.After(now) {
+		return "", "", nil, ErrCodeInvalid
+	}
+	return accountNumber, purpose, data, nil
 }
 
 // --- helpers ---
