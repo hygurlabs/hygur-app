@@ -37,11 +37,31 @@ export function EdgeProtonCard() {
     },
   });
 
-  // Web shell (no local Bridge) or local/self-host sidecar (/edge → 503/404) → hide.
-  if (statusQ.isError || statusQ.isLoading || !statusQ.data) return null;
+  // Hide ONLY when genuinely not a thin client: a browser shell hits a static host
+  // (404), a local/self-host sidecar returns 503. ANY other state — loading, 200,
+  // or a transient 401/network error — keeps the card visible on the desktop so it
+  // can never silently vanish; we surface the reason instead of disappearing.
+  const errMsg = statusQ.error instanceof Error ? statusQ.error.message : "";
+  if (errMsg.includes("404") || errMsg.includes("503")) return null;
+
   const st = statusQ.data;
-  const healthy = !st.last_error && st.errors === 0 && !!st.last_sync_at;
-  const dot = st.last_error || st.errors > 0 ? "bg-danger" : healthy ? "bg-green-500" : "bg-amber-500";
+  const healthy = !!st && !st.last_error && st.errors === 0 && !!st.last_sync_at;
+  const dot =
+    errMsg || st?.last_error || (st && st.errors > 0)
+      ? "bg-danger"
+      : healthy
+        ? "bg-green-500"
+        : "bg-amber-500";
+  const statusLine = statusQ.isLoading
+    ? "Checking on-device sync…"
+    : errMsg
+      ? `Edge unreachable: ${errMsg}`
+      : st?.running
+        ? "Syncing…"
+        : st?.last_error
+          ? st.last_error
+          : `Last synced ${st?.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : "never"}${st?.mail_pushed ? ` · ${st.mail_pushed} pushed last run` : ""}`;
+  const syncing = !!st?.running;
 
   const loadFolders = async () => {
     setBusy(true);
@@ -105,8 +125,6 @@ export function EdgeProtonCard() {
     }
   };
 
-  const lastSynced = st.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : "never";
-
   return (
     <div className="mb-6 rounded-xl border border-border bg-surface p-4">
       <div className="flex items-center justify-between">
@@ -114,13 +132,7 @@ export function EdgeProtonCard() {
           <span className={`inline-block size-2.5 rounded-full ${dot}`} />
           <div>
             <h3 className="text-[14px] font-semibold">Proton Mail · this device</h3>
-            <p className="text-[12px] text-muted">
-              {st.running
-                ? "Syncing…"
-                : st.last_error
-                  ? st.last_error
-                  : `Last synced ${lastSynced}${st.mail_pushed ? ` · ${st.mail_pushed} pushed last run` : ""}`}
-            </p>
+            <p className="text-[12px] text-muted">{statusLine}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -135,10 +147,10 @@ export function EdgeProtonCard() {
           <button
             type="button"
             onClick={() => sync.mutate()}
-            disabled={sync.isPending || st.running}
+            disabled={sync.isPending || syncing}
             className="rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            {sync.isPending || st.running ? "Syncing…" : "Sync now"}
+            {sync.isPending || syncing ? "Syncing…" : "Sync now"}
           </button>
         </div>
       </div>
