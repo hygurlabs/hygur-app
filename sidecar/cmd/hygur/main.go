@@ -695,6 +695,16 @@ func main() {
 	}
 	server.SetHostGuard(cfg.Auth.Mode == "local" || len(allowedHosts) > 0, allowedHosts)
 	server.SetManaged(managedDeployment) // don't ship the loopback token into the cloud SPA
+	// Cross-origin web shells allowed to call this API (CORS): the Hygur Cloud web
+	// app is served on a separate host (e.g. cloud.hygur.ai) and calls the tenant
+	// cross-origin. Loopback + Tauri origins are always allowed regardless.
+	var allowedOrigins []string
+	for _, o := range strings.Split(os.Getenv("HYGUR_ALLOWED_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			allowedOrigins = append(allowedOrigins, o)
+		}
+	}
+	server.SetAllowedOrigins(allowedOrigins)
 	// Cloud-backed thin-client mode (desktop "cloud" mode): the local loopback
 	// sidecar proxies data/AI routes to the tenant with the device token injected,
 	// keeping the webview same-origin so the Tauri commands keep working. Two

@@ -50,3 +50,29 @@ func TestCORS_DisallowedOrigin(t *testing.T) {
 		t.Fatalf("ACAO should be empty for a disallowed origin, got %q", got)
 	}
 }
+
+// A configured extra origin (the Hygur Cloud web shell on a separate host) must be
+// allowed cross-origin; an unconfigured HTTPS origin must still be rejected.
+func TestCORS_AllowedExtraOrigin(t *testing.T) {
+	srv := NewServer(&config.Config{}, zerolog.Nop(), "tok")
+	srv.SetAllowedOrigins([]string{"https://cloud.hygur.ai"})
+
+	// Preflight from the configured shell origin → allowed.
+	req := httptest.NewRequest(http.MethodOptions, "/config", nil)
+	req.Header.Set("Origin", "https://cloud.hygur.ai")
+	req.Header.Set("Access-Control-Request-Method", "PATCH")
+	rec := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://cloud.hygur.ai" {
+		t.Fatalf("ACAO = %q, want https://cloud.hygur.ai", got)
+	}
+
+	// A different HTTPS origin remains disallowed.
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2.Header.Set("Origin", "https://other.example.com")
+	rec2 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec2, req2)
+	if got := rec2.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("ACAO should be empty for unconfigured origin, got %q", got)
+	}
+}

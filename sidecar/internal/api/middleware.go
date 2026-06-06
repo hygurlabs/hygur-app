@@ -131,6 +131,12 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			strings.HasPrefix(origin, "http://localhost:") ||
 			strings.HasPrefix(origin, "http://127.0.0.1:")
 
+		// Extra cross-origin shells (Hygur Cloud web app on a separate host) opted
+		// in via HYGUR_ALLOWED_ORIGINS / SetAllowedOrigins.
+		if !allowed && origin != "" && s.extraOrigins[strings.ToLower(origin)] {
+			allowed = true
+		}
+
 		if allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")

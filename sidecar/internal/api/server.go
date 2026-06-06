@@ -57,6 +57,7 @@ type Server struct {
 	allowedHosts     map[string]bool
 	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
 	cloudProxy       *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
+	extraOrigins     map[string]bool        // extra CORS-allowed origins (SetAllowedOrigins) — e.g. the cloud web shell
 }
 
 // SetManaged marks this as a Hygur-operated cloud tenant. The served SPA then
@@ -72,6 +73,19 @@ func (s *Server) SetHostGuard(enabled bool, hosts []string) {
 	for _, h := range hosts {
 		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
 			s.allowedHosts[h] = true
+		}
+	}
+}
+
+// SetAllowedOrigins permits additional cross-origin web shells to call this API
+// (CORS), on top of the always-allowed loopback + Tauri origins. In Hygur Cloud
+// the central web app (e.g. https://cloud.hygur.ai) is served on a different host
+// than the tenant API, so it calls the tenant cross-origin; list its origin here.
+func (s *Server) SetAllowedOrigins(origins []string) {
+	s.extraOrigins = make(map[string]bool, len(origins))
+	for _, o := range origins {
+		if o = strings.ToLower(strings.TrimSpace(o)); o != "" {
+			s.extraOrigins[o] = true
 		}
 	}
 }
