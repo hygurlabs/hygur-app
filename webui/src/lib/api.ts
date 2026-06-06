@@ -33,6 +33,17 @@ import type {
  *  Go constant on a breaking contract change. */
 export const API_VERSION = "1";
 
+/** Last edge-sync summary (cloud desktop thin client). Drives the Proton card's
+ *  green dot + last-synced/error display. */
+export interface EdgeStatus {
+  running: boolean;
+  last_sync_at?: string;
+  files_pushed: number;
+  mail_pushed: number;
+  errors: number;
+  last_error?: string;
+}
+
 /** Prepends the configured API base ("" = same-origin local sidecar, or a
  *  remote endpoint like https://app.hygur.eu). Resolved per call so a connection
  *  change takes effect without reloading the module. */
@@ -237,6 +248,12 @@ export const api = {
     getJSON<string[]>(`/connectors/${id}/mailboxes`),
   connectorLabels: (id: string) =>
     getJSON<{ id: string; name: string }[]>(`/connectors/${id}/labels`),
+
+  // Edge thin-client (cloud desktop): on-device Proton sync. Served locally by
+  // the sidecar (never proxied to the tenant). 503 when not a cloud thin client.
+  edgeStatus: () => getJSON<EdgeStatus>("/edge/status"),
+  edgeMailboxes: () => getJSON<{ mailboxes: string[] }>("/edge/proton/mailboxes"),
+  edgeSync: () => postJSON<unknown>("/edge/sync", {}),
 
   // Multi-instance connectors ("+").
   connectorInstances: () =>

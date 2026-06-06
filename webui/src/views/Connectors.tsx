@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { fmtDateTime } from "../lib/format";
 import type { ConnectorHealth, ConnectorInstance, MarketplaceItem } from "../lib/types";
 import { ConnectorConfigForm } from "./ConnectorConfigForm";
+import { EdgeProtonCard } from "./EdgeProtonCard";
 import {
   Badge,
   Button,
@@ -124,6 +125,10 @@ export function Connectors() {
       />
 
       {err && <ErrorBanner message={`Action failed: ${(err as Error).message}`} />}
+
+      {/* Cloud desktop: Proton runs on THIS device (the pod can't reach the local
+          Bridge). Self-hides in a browser / local mode. */}
+      <EdgeProtonCard />
 
       <h2 className="mb-2 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
         Configured
