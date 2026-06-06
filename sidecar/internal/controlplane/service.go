@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -61,6 +62,35 @@ func (s *Service) Routes() http.Handler {
 func (s *Service) Register(r chi.Router) {
 	r.Post("/enroll", s.handleEnroll)
 	r.Post("/token/refresh", s.handleRefresh)
+	r.Get("/billing/status", s.handleBillingStatus)
+}
+
+// handleBillingStatus returns the caller's subscription status + the Stripe
+// customer-portal link, for the client Settings "Billing" panel. Authed by the
+// device access token (its Sub is the account number). Read-only — no Stripe API,
+// no secret key on the console: the portal is the no-code login link
+// (HYGUR_STRIPE_PORTAL_URL) where the customer self-serves.
+func (s *Service) handleBillingStatus(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.verifyAccessToken(bearer(r))
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	acc, err := s.store.GetAccount(claims.Sub)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "no billing account")
+		return
+	}
+	validUntil := ""
+	if acc.ValidUntil != nil {
+		validUntil = acc.ValidUntil.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      acc.Status, // trialing | active | past_due | canceled
+		"active":      acc.IsActive(s.clock()),
+		"valid_until": validUntil,
+		"portal_url":  os.Getenv("HYGUR_STRIPE_PORTAL_URL"),
+	})
 }
 
 type enrollReq struct {

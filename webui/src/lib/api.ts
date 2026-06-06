@@ -1,5 +1,5 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { apiBase, apiKey, localToken, refreshAccessToken } from "./connection";
+import { apiBase, apiKey, CONSOLE_URL, localToken, refreshAccessToken } from "./connection";
 import type {
   AgendaAction,
   Briefing,
@@ -32,6 +32,14 @@ import type {
  *  with HTTP 426 (see internal/version.APIVersion). Bump in lock-step with the
  *  Go constant on a breaking contract change. */
 export const API_VERSION = "1";
+
+/** Subscription status for the Settings "Billing" panel (from the control plane). */
+export interface BillingStatus {
+  status: string; // trialing | active | past_due | canceled
+  active: boolean;
+  valid_until?: string;
+  portal_url?: string;
+}
 
 /** Last edge-sync summary (cloud desktop thin client). Drives the Proton card's
  *  green dot + last-synced/error display. */
@@ -272,6 +280,15 @@ export const api = {
   edgeStatus: () => edgeGet<EdgeStatus>("/edge/status"),
   edgeMailboxes: () => edgeGet<{ mailboxes: string[] }>("/edge/proton/mailboxes"),
   edgeSync: () => edgePost("/edge/sync"),
+
+  // Billing status from the control plane (cross-origin to console, device token).
+  billingStatus: async (): Promise<BillingStatus> => {
+    const r = await fetch(`${CONSOLE_URL}/billing/status`, {
+      headers: { "X-Hygur-Token": apiKey(), "X-Hygur-API": API_VERSION },
+    });
+    if (!r.ok) throw httpError(r);
+    return (await r.json()) as BillingStatus;
+  },
 
   // Multi-instance connectors ("+").
   connectorInstances: () =>
