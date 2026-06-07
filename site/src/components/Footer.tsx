@@ -11,6 +11,7 @@ const RESOURCES = [
 const LEGAL = [
   { label: "Legal Notice", href: "#/legal" },
   { label: "Privacy Policy", href: "#/privacy" },
+  { label: "Terms of Service", href: "#/terms" },
 ];
 
 export function Footer() {

@@ -25,6 +25,12 @@ export function CtaBand() {
             managed Hygur Cloud instance when you are ready — your data and your
             model come with you.
           </p>
+          <p className="mt-4 max-w-xl text-pretty text-sm leading-relaxed text-faint">
+            Hygur Cloud runs <strong className="font-medium text-muted">exclusively on EU
+            servers</strong>, with GPU inference at an EU provider that guarantees
+            your data is <strong className="font-medium text-muted">never used for
+            training</strong>. Privacy and Europe, by default.
+          </p>
 
           <a
             href={GITHUB_URL}

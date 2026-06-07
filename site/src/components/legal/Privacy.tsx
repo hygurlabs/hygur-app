@@ -55,7 +55,23 @@ export function Privacy() {
         server logs described above on our behalf.
       </p>
 
-      <h2>6. Your rights</h2>
+      <h2>6. Hygur Cloud (optional managed service)</h2>
+      <p>
+        If you subscribe to <strong>Hygur Cloud</strong>, we host a Hygur Server
+        instance for you and act as a processor for the data you choose to push to
+        it (extracted text from your files and mail, your notes and prompts). It
+        runs <strong>exclusively on servers in the European Union</strong>{" "}
+        (Hetzner, Germany); your knowledge base is{" "}
+        <strong>encrypted at rest</strong>; and AI inference runs on{" "}
+        <strong>GPU infrastructure located in the European Union</strong>. We{" "}
+        <strong>never use your data to train any model</strong> and never sell or
+        share it. Payments are processed by <strong>Stripe</strong>; we do not
+        store your card details. You can export or delete your instance's data at
+        any time. The service terms are in our{" "}
+        <a href="#/terms">Terms of Service</a>.
+      </p>
+
+      <h2>7. Your rights</h2>
       <p>
         Under the GDPR you have the right to access, rectify, erase, restrict
         and port your personal data, and to object to its processing. To
@@ -65,13 +81,13 @@ export function Privacy() {
         Authority (Autorité de protection des données / Gegevensbeschermings­autoriteit).
       </p>
 
-      <h2>7. Changes to this policy</h2>
+      <h2>8. Changes to this policy</h2>
       <p>
         We may update this policy as the service evolves. The effective date is
         shown at the top of this page.
       </p>
 
-      <h2>8. Contact</h2>
+      <h2>9. Contact</h2>
       <p>
         For any question about this policy or your data, write to{" "}
         <a href="mailto:privacy@hygur.com">privacy@hygur.com</a>.

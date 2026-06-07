@@ -9,8 +9,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-/** Until the full deployment plan lands, every call-to-action points here. */
+/** App / Server CTAs point to the public repo. */
 export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
+
+/** Hygur Cloud subscription — Stripe payment link (Personal, 29 €/mo). */
+export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/14A9AMgW38NvbgU7MS2Fa01";
+
+/** Master gate for paid signups. Keep FALSE until the production LLM backend is
+ *  settled — closed = the Cloud card shows "coming soon" and never opens Stripe
+ *  checkout (the payment link is also deactivated server-side). Flip to true +
+ *  reactivate the Stripe payment link to open subscriptions. */
+export const CLOUD_OPEN = false;
 
 /** Real example prompts from the app's "Ask Hygur" screen, replayed in the
  *  hero so the conversational product speaks for itself. */
@@ -57,6 +66,8 @@ export interface Edition {
   badges: string[];
   icon: LucideIcon;
   cta: string;
+  /** Per-edition CTA link; falls back to GITHUB_URL when unset. */
+  href?: string;
   /** Featured editions get the warm "core" treatment and span wider. */
   featured?: boolean;
 }
@@ -86,11 +97,15 @@ export const EDITIONS: Edition[] = [
     id: "cloud",
     name: "Hygur Cloud",
     kicker: "Managed",
-    tagline: "Hosted Hygur Server",
-    body: "A managed Hygur Server instance, one per account. We run and update it; you keep full control of your data and the model it talks to.",
-    badges: ["Hosted", "Pricing soon"],
+    tagline: "Hosted Hygur Server — 29 €/mo",
+    body: "A managed Hygur Server instance, one per account, running exclusively on EU servers. GPU inference runs at an EU provider that never trains on your data. We run and update it; you keep full control of your data and the model it talks to.",
+    badges: CLOUD_OPEN
+      ? ["Hosted", "29 €/mo", "EU-only · no training"]
+      : ["29 €/mo", "EU-only · no training", "Coming soon"],
     icon: Cloud,
-    cta: "Join the waitlist",
+    cta: CLOUD_OPEN ? "Subscribe" : "Coming soon",
+    // Closed: stay on the page (never open Stripe). Open: the Stripe payment link.
+    href: CLOUD_OPEN ? CLOUD_SUBSCRIBE_URL : "#editions",
     featured: true,
   },
   {

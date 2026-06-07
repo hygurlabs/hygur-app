@@ -24,8 +24,8 @@ function EditionCard({ edition, delay }: { edition: Edition; delay: number }) {
   return (
     <Reveal as="article" delay={delay} className={cx("group/card", SPAN[edition.id])}>
       <a
-        href={GITHUB_URL}
-        target="_blank"
+        href={edition.href ?? GITHUB_URL}
+        target={(edition.href ?? GITHUB_URL).startsWith("http") ? "_blank" : undefined}
         rel="noreferrer"
         className={cx(
           "flex h-full flex-col rounded-2xl border p-7 transition-[transform,border-color,box-shadow] duration-300 sm:p-8",
