@@ -222,12 +222,11 @@ export function Calendar() {
               link. It's private; no password needed.
             </li>
             <li>
-              <span className="font-medium text-text">iCloud</span> — in the Calendar
-              app, right-click your calendar → “Share Calendar” → enable{" "}
-              <span className="font-medium">Public Calendar</span> and copy the{" "}
-              <span className="font-medium">webcal://</span> link. (Anyone with the
-              link can read it.) Paste a direct calendar link, not a server address
-              like <span className="font-medium">caldav.icloud.com</span>.
+              <span className="font-medium text-text">iCloud</span> — URL{" "}
+              <span className="font-medium">https://caldav.icloud.com</span>, Username =
+              your Apple ID, Password = an{" "}
+              <span className="font-medium">app-specific password</span> (create one at
+              appleid.apple.com). Stays private — no public sharing.
             </li>
           </ul>
           <Link

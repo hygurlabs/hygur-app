@@ -98,11 +98,11 @@ func (c *Connector) ConfigSchema() plugin.ConfigSchema {
 						Key:   "url",
 						Type:  plugin.FieldString,
 						Label: "Calendar URL",
-						Description: "A direct calendar FILE link (not a CalDAV server address). " +
-							"Google Calendar: Settings → your calendar → \"Secret address in iCal format\". " +
-							"iCloud: share the calendar as a Public Calendar and copy the webcal link. " +
-							"Self-hosted (Nextcloud/Radicale): the calendar's .ics export URL — fill " +
-							"Username/Password below if it's private.",
+						Description: "Google Calendar: Settings → your calendar → \"Secret address in " +
+							"iCal format\" (no login). iCloud: https://caldav.icloud.com with your Apple ID " +
+							"(Username below) + an app-specific password from appleid.apple.com (Password). " +
+							"Self-hosted (Nextcloud/Radicale): the CalDAV URL + Username/Password, or a " +
+							"direct .ics export link.",
 						Required: true,
 					},
 				},
@@ -159,7 +159,7 @@ func (c *Connector) Sync(ctx context.Context, opts plugin.SyncOptions) (*plugin.
 	}
 	start := time.Now()
 
-	body, err := c.fetch(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
+	body, err := c.fetchCalendar(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
 	if err != nil {
 		c.setHealth(plugin.StatusUnhealthy, "fetch failed: "+err.Error())
 		return nil, fmt.Errorf("caldav sync: %w", err)
@@ -208,7 +208,7 @@ func (c *Connector) HealthCheck(ctx context.Context) error {
 	if url == "" {
 		return errors.New("caldav: url missing")
 	}
-	_, err := c.fetch(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
+	_, err := c.fetchCalendar(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
 	return err
 }
 
@@ -231,10 +231,9 @@ func (c *Connector) fetch(ctx context.Context, url, username, password string) (
 		// This connector GETs a calendar FILE; it does not speak the CalDAV
 		// protocol. A 401/403 usually means the URL is a CalDAV server (e.g.
 		// caldav.icloud.com) or a private feed missing credentials.
-		return "", fmt.Errorf("HTTP %d — use a direct calendar file link (Google: "+
-			"\"Secret address in iCal format\"; iCloud: a Public Calendar webcal link; "+
-			"self-hosted: the calendar's .ics export URL + username/password), not a "+
-			"CalDAV server address", resp.StatusCode)
+		return "", fmt.Errorf("HTTP %d — for a private/CalDAV calendar (iCloud, Nextcloud), "+
+			"add your Username + an app-specific password; for a public feed use a direct "+
+			".ics link (Google: \"Secret address in iCal format\")", resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
