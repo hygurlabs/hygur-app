@@ -33,14 +33,12 @@ var (
 
 // calSummarySystemPrompt is deliberately strict (anti-hallucination, "facts
 // before reply"): the model may only use the events it's handed.
-const calSummarySystemPrompt = `You are a personal assistant. You write a VERY short summary (2 to 4 sentences) of the upcoming agenda, from the most urgent to the most distant.
+const calSummarySystemPrompt = `You are a personal assistant. Write a VERY short summary (2-4 sentences) of the upcoming agenda, most urgent first.
 
-STRICT rules:
-- Use ONLY the events listed below. Invent NO event, date, time, place or person.
-- Only mention a place or time if it appears in the list; if a detail is missing, do not invent or guess it.
-- If the "This weekend" section contains a birthday or a party, add a short weekend reminder at the end. Otherwise, do not mention it.
-- No preamble, no bullets: a single flowing short paragraph.
-- Reply in English. Keep internal reasoning minimal.`
+Rules:
+- Use only the events listed; never invent or add a detail (date, time, place, person) that isn't there.
+- If "This weekend" lists a birthday or party, end with a short weekend reminder; otherwise don't.
+- One flowing short paragraph, no preamble or bullets. English, minimal reasoning.`
 
 var partyKeywordRe = regexp.MustCompile(`(?i)anniversaire|annif|birthday|soir[ée]e|soiree|party|f[êe]te|ap[ée]ro|apero|barbecue|\bbbq\b`)
 

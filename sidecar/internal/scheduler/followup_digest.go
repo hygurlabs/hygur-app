@@ -62,18 +62,16 @@ var (
 // followupSystemPrompt is strict by design ("facts before reply"): the model may
 // only use the listed messages, and the last rule kills the monthly-invoice
 // false-positive class that made the old deterministic surface useless.
-const followupSystemPrompt = `You are a personal assistant. From ONLY the numbered list of messages below, produce a short follow-up synthesis.
+const followupSystemPrompt = `You are a personal assistant. From ONLY the numbered messages below, produce a short follow-up.
 
-Reply EXCLUSIVELY with a valid JSON object, no surrounding text, no code fences:
+Reply with a valid JSON object only — no surrounding text, no code fences:
 {"topics":[{"title":"...","note":"...","refs":[1,4]}],"contradictions":[{"note":"...","refs":[2,9]}]}
 
-STRICT rules:
-- "topics": group related messages into a few active topics (at most 6). For each, "note" = 1-2 FACTUAL sentences drawn from the messages, and "refs" = the numbers of the messages involved. Do NOT invent any topic absent from the messages.
-- "contradictions": ONLY when at least TWO messages genuinely contradict each other about the SAME thing (an amount, a date, a decision, a commitment). "refs" must cite at least two DIFFERENT numbers. If no real contradiction exists, return "contradictions": [].
-- NEVER invent an amount, date, name or fact absent from the messages. Use only what is written, and keep names, job titles and terms EXACTLY as they appear — do not paraphrase or guess a role/label.
-- Two different monthly invoices, or two distinct events, are NOT contradictions. Do not flag them.
-- IGNORE marketing and phishing: promotions, newsletters, unsolicited "security alert" / "mandatory verification" / "confirm your account" messages, trials that "expire". Do not make them a topic, and above all not an action to take.
-- English. Keep internal reasoning minimal.`
+Rules:
+- "topics": a few active topics (max 6); each a factual note plus the message numbers it draws from.
+- "contradictions": only when >=2 messages genuinely conflict about the same thing; cite >=2 different numbers. None -> return [].
+- Use only what the messages say; never invent or distort. Ignore spam, marketing and phishing.
+- English. Minimal reasoning.`
 
 // FollowUp returns a grounded, LLM-written digest of recent mail + notes:
 // salient topics and any real contradictions, each cited to source items.
@@ -328,20 +326,14 @@ var (
 
 // followupReportSystemPrompt asks for a short, human, grounded report — the same
 // "facts before reply" discipline as the digest, but in natural prose.
-const followupReportSystemPrompt = `You are a personal assistant. You give the user a quick read — like a real assistant talking to them — of what stands out in their recent messages and what deserves attention next.
+const followupReportSystemPrompt = `You are a personal assistant. From ONLY the messages below (recent mail and notes), give the user a short, natural read of what's going on and what to focus on next.
 
-From ONLY the messages listed below (recent mail and notes), write EXACTLY three paragraphs in English, in a natural, human tone:
-1. An overview: the topics occupying this period.
-2. What deserves attention next: deadlines, pending requests, and — ONLY if two messages genuinely contradict each other about the same thing — the contradiction to clarify.
-3. A concrete priority suggestion for the next few days.
+Write three short paragraphs separated by a blank line: an overview of the active topics; what needs attention (deadlines, pending replies, and any genuine contradiction); then a concrete priority for the next few days.
 
-STRICT rules:
-- Use ONLY the facts present in the messages. NEVER invent an amount, date, name, decision or event that is absent. Keep names, job titles and terms EXACTLY as they appear — do not paraphrase or guess a role.
-- If a piece of information is not in the messages, do not guess it and do not mention it.
-- IGNORE noise and NEVER present it as an action to take: promotions, newsletters, automatic confirmations, and especially unsolicited "security alert" / "mandatory verification" / "confirm your account" / "your account will be suspended" messages and trials/subscriptions that "expire". These are almost always marketing or phishing: do not ask the user to act on them. At most, note briefly "a few messages look like phishing/spam — ignore them", without detail and without inviting a click.
-- Three paragraphs of prose separated by a blank line. No headings, no bullets, no greeting, no preamble like "Here is".
-- Concise: 2 to 4 sentences per paragraph.
-- Keep internal reasoning minimal.`
+Rules:
+- Use only what the messages say; never invent or distort.
+- Ignore spam, marketing and phishing — never present them as actions.
+- Plain prose, no headings or bullets, 2-4 sentences per paragraph. Minimal reasoning.`
 
 // StreamFollowUpReport streams a short, grounded natural-language report of
 // recent mail + notes to `emit`, paragraph by paragraph as the model writes it.
