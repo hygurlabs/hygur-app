@@ -232,6 +232,13 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 		return nil
 	}
 
+	// Sources rendered deterministically from the items actually used (W1.2):
+	// never the model's prose, so the brief can't cite inputs it didn't see.
+	// Replace any Sources section the model emitted despite the instruction.
+	if src := deterministicSources(enriched); src != "" {
+		briefText = strings.TrimRight(stripSourcesSection(briefText), "\n") + "\n\n" + src
+	}
+
 	contentID, perr := d.persistBrief(ctx, briefKey, title, briefText, opts)
 	if perr != nil {
 		return fmt.Errorf("persist brief: %w", perr)
@@ -528,8 +535,6 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 		sb.WriteString("Liste les emails du contexte qui attendent une réponse, sous la forme « De [expéditeur] — [sujet] → [action recommandée] ».\n\n")
 		sb.WriteString("## À ajouter dans la task list\n")
 		sb.WriteString("Tâches à créer (verbe d'action en début), avec échéance et montant si présents.\n\n")
-		sb.WriteString("## Sources\n")
-		sb.WriteString("Tags et projets utilisés pour ce brief, séparés par des virgules.\n")
 	} else {
 		hours := opts.LookbackHours
 		if hours == 0 {
@@ -555,21 +560,18 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 		sb.WriteString("- Échéances administratives, fiscales ou juridiques proches.\n\n")
 		sb.WriteString("## Tâches à créer\n")
 		sb.WriteString("Actions à ajouter à la todo (verbe d'action en tête), avec échéance et montant quand ils sont présents.\n\n")
-		sb.WriteString("## Sources\n")
-		sb.WriteString("Tags et projets impliqués dans ce brief, séparés par des virgules.\n")
 	}
 	sb.WriteString("\nRègles :\n")
 	sb.WriteString("- Priorise : ce qui est urgent ou actionnable d'abord ; le bruit, jamais.\n")
 	sb.WriteString("- N'invente rien. Chaque puce doit pouvoir s'appuyer sur un élément du contexte ci-dessous.\n")
 	sb.WriteString("- Ignore newsletters, accusés de réception, notifications automatiques et vieille correspondance.\n")
 	sb.WriteString("- Omets entièrement une section qui n'a aucun contenu pertinent : pas de section vide, pas de remplissage.\n")
+	sb.WriteString("- N'ajoute PAS de section « Sources » : elle est générée automatiquement et ajoutée après ta réponse.\n")
 	sb.WriteString("- Output : Markdown brut, sans préambule, sans bloc de code.\n\n")
 	sb.WriteString("Contexte (")
 	sb.WriteString(strconv.Itoa(len(items)))
 	sb.WriteString(" items) :\n")
 
-	tagSet := map[string]struct{}{}
-	projSet := map[string]struct{}{}
 	for i, it := range items {
 		sb.WriteString(fmt.Sprintf("- [%s] %s", it.SourceType, it.Title))
 		// canonical date helps the model assess freshness and detect stale items.
@@ -598,14 +600,10 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 		if it.projectName != "" {
 			sb.WriteString(" · projet=")
 			sb.WriteString(it.projectName)
-			projSet[it.projectName] = struct{}{}
 		}
 		if len(it.tags) > 0 {
 			sb.WriteString(" · tags=")
 			sb.WriteString(strings.Join(it.tags, ","))
-			for _, t := range it.tags {
-				tagSet[t] = struct{}{}
-			}
 		}
 		// Capped excerpt for context. 600 chars gives the model enough to
 		// surface the actionable bits without ballooning the prompt.
@@ -621,32 +619,66 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 			break
 		}
 	}
+	return sb.String()
+}
 
-	// Append a deterministic Sources hint the model can echo verbatim.
-	if len(tagSet) > 0 || len(projSet) > 0 {
-		sb.WriteString("\nIndices Sources (à reprendre/affiner dans la dernière section) :\n")
-		if len(projSet) > 0 {
-			projs := make([]string, 0, len(projSet))
-			for p := range projSet {
-				projs = append(projs, p)
-			}
-			sort.Strings(projs)
-			sb.WriteString("- Projets : ")
-			sb.WriteString(strings.Join(projs, ", "))
-			sb.WriteByte('\n')
+// deterministicSources renders the "## Sources" section in code from the items
+// actually used — the projects + tags present — so it can't be hallucinated or
+// reworded by the model. Returns "" when there's nothing to cite.
+func deterministicSources(items []briefItem) string {
+	projSet := map[string]struct{}{}
+	tagSet := map[string]struct{}{}
+	for _, it := range items {
+		if it.projectName != "" {
+			projSet[it.projectName] = struct{}{}
 		}
-		if len(tagSet) > 0 {
-			tags := make([]string, 0, len(tagSet))
-			for t := range tagSet {
-				tags = append(tags, t)
-			}
-			sort.Strings(tags)
-			sb.WriteString("- Tags : ")
-			sb.WriteString(strings.Join(tags, ", "))
-			sb.WriteByte('\n')
+		for _, t := range it.tags {
+			tagSet[t] = struct{}{}
 		}
 	}
+	if len(projSet) == 0 && len(tagSet) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## Sources\n")
+	if len(projSet) > 0 {
+		sb.WriteString("- Projets : ")
+		sb.WriteString(strings.Join(sortedSet(projSet), ", "))
+		sb.WriteByte('\n')
+	}
+	if len(tagSet) > 0 {
+		sb.WriteString("- Tags : ")
+		sb.WriteString(strings.Join(sortedSet(tagSet), ", "))
+		sb.WriteByte('\n')
+	}
 	return sb.String()
+}
+
+func sortedSet(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// stripSourcesSection removes a "## Sources" heading and its body (up to the
+// next "## " heading or EOF) so the deterministic section can replace any the
+// model emitted despite being told not to.
+func stripSourcesSection(md string) string {
+	lines := strings.Split(md, "\n")
+	out := make([]string, 0, len(lines))
+	skipping := false
+	for _, ln := range lines {
+		if t := strings.TrimSpace(ln); strings.HasPrefix(t, "## ") {
+			skipping = strings.EqualFold(t, "## Sources")
+		}
+		if !skipping {
+			out = append(out, ln)
+		}
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
 // firstStringFromMetadata pulls the first element from a metadata field

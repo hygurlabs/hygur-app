@@ -339,3 +339,37 @@ func TestFirstBullets_ExtractsLeadingMarkdownBullets(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func TestDeterministicSources(t *testing.T) {
+	items := []briefItem{
+		{KnowledgeItem: &store.KnowledgeItem{ContentID: "a"}, projectName: "SRL", tags: []string{"invoicing", "banking"}},
+		{KnowledgeItem: &store.KnowledgeItem{ContentID: "b"}, projectName: "SRL", tags: []string{"invoicing"}},
+		{KnowledgeItem: &store.KnowledgeItem{ContentID: "c"}, tags: []string{"family"}},
+	}
+	got := deterministicSources(items)
+	want := "## Sources\n- Projets : SRL\n- Tags : banking, family, invoicing\n"
+	if got != want {
+		t.Errorf("deterministicSources:\n got %q\nwant %q", got, want)
+	}
+	if deterministicSources(nil) != "" {
+		t.Error("empty input should yield no Sources section")
+	}
+}
+
+func TestStripSourcesSection(t *testing.T) {
+	md := "## Points importants\n- a\n\n## Sources\n- Tags : x, y\n"
+	got := stripSourcesSection(md)
+	want := "## Points importants\n- a"
+	if got != want {
+		t.Errorf("stripSourcesSection:\n got %q\nwant %q", got, want)
+	}
+	// A Sources section in the middle stops at the next heading.
+	md2 := "## Sources\n- old\n## Plan\n- keep\n"
+	if got := stripSourcesSection(md2); got != "## Plan\n- keep" {
+		t.Errorf("mid-section strip wrong: %q", got)
+	}
+	// No Sources section → unchanged (trailing newline trimmed).
+	if got := stripSourcesSection("## A\n- x\n"); got != "## A\n- x" {
+		t.Errorf("no-sources strip wrong: %q", got)
+	}
+}
