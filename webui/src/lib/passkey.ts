@@ -3,6 +3,14 @@
 // CORS-allowed there); on success the tenant token bundle is persisted and the app
 // boots against the instance. @simplewebauthn/browser handles the base64url ↔
 // ArrayBuffer glue + navigator.credentials.
+//
+// iOS focus rule: every iOS browser (incl. Chrome) is WebKit, and WebKit throws
+// "The document is not focused" when navigator.credentials.get()/create() runs
+// after an intervening await — the options fetch breaks the user-activation/focus
+// chain that the call requires. So each ceremony is split into begin() (does the
+// fetch) and finish() (does the WebAuthn call): the caller runs begin() on the
+// first tap, then finish() on a fresh tap with NOTHING awaited before the
+// startAuthentication/startRegistration call inside it.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { apiKey, CONSOLE_URL, setTokens } from "./connection";
 
@@ -13,27 +21,15 @@ export interface TokenBundle {
   tenant_id: string;
 }
 
+/** Server-issued WebAuthn options + the session that ties begin → finish. */
+export interface PasskeyChallenge {
+  publicKey: unknown;
+  session_id: string;
+}
+
 /** True when this browser supports WebAuthn at all. */
 export function passkeysSupported(): boolean {
   return typeof window !== "undefined" && typeof window.PublicKeyCredential !== "undefined";
-}
-
-/** WebKit (Safari, and every iOS browser including Chrome — they're all WKWebView)
- *  checks `document.hasFocus()` inside navigator.credentials.get()/create() and
- *  throws "The document is not focused" when it's false. On mobile that happens
- *  right after the tap starting sign-in dismisses the soft keyboard, while the
- *  options fetch is in flight. Reclaim window focus and wait a beat for the
- *  webview to settle before the ceremony. No-op when already focused, so desktop
- *  and Android take the fast path unchanged. */
-async function ensureDocumentFocused(): Promise<void> {
-  if (typeof document === "undefined" || document.hasFocus()) return;
-  // Dismissing the keyboard is what drops focus; blur the field, then reclaim it.
-  (document.activeElement as HTMLElement | null)?.blur?.();
-  for (let i = 0; i < 10; i++) {
-    window.focus();
-    if (document.hasFocus()) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
 }
 
 async function consolePost(path: string, body?: unknown, token?: string): Promise<Response> {
@@ -47,18 +43,25 @@ async function consolePost(path: string, body?: unknown, token?: string): Promis
   });
 }
 
-/** Log in to a cloud instance by its slug, authenticated by a passkey. Persists
- *  the resulting token bundle so the app boots against the tenant. */
-export async function passkeyLogin(instance: string): Promise<void> {
+// --- Login (instance slug + passkey) -------------------------------------
+
+/** Step 1: fetch the assertion options for an instance. Safe to await — no
+ *  WebAuthn call happens here. */
+export async function passkeyLoginBegin(instance: string): Promise<PasskeyChallenge> {
   const begin = await consolePost("/passkey/login/begin", {
     instance: instance.trim().toLowerCase(),
   });
   if (!begin.ok) throw new Error("Unknown instance, or no passkey is registered for it.");
-  const opts = (await begin.json()) as { publicKey: unknown; session_id: string };
-  await ensureDocumentFocused();
-  const assertion = await startAuthentication({ optionsJSON: opts.publicKey as never });
+  return (await begin.json()) as PasskeyChallenge;
+}
+
+/** Step 2: run the WebAuthn ceremony and persist the tenant token bundle. MUST be
+ *  called as the first thing in a user gesture — do not await anything before it
+ *  (see the iOS focus rule above). */
+export async function passkeyLoginFinish(challenge: PasskeyChallenge): Promise<void> {
+  const assertion = await startAuthentication({ optionsJSON: challenge.publicKey as never });
   const finish = await fetch(
-    `${CONSOLE_URL}/passkey/login/finish?s=${encodeURIComponent(opts.session_id)}`,
+    `${CONSOLE_URL}/passkey/login/finish?s=${encodeURIComponent(challenge.session_id)}`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(assertion) },
   );
   if (!finish.ok) throw new Error("Passkey authentication failed.");
@@ -76,16 +79,22 @@ export async function enrollWithCode(code: string): Promise<string> {
   return b.access_token;
 }
 
-/** Register a passkey for the just-enrolled device (authorized by its access
- *  token). After this the instance can be reached by slug + passkey. */
-export async function registerPasskey(accessToken: string): Promise<void> {
+// --- Registration (add a passkey to the just-enrolled device) -------------
+
+/** Step 1: fetch the attestation options (authorized by the device token). Safe
+ *  to await — no WebAuthn call happens here. */
+export async function passkeyRegisterBegin(accessToken: string): Promise<PasskeyChallenge> {
   const begin = await consolePost("/passkey/register/begin", undefined, accessToken);
   if (!begin.ok) throw new Error("Could not start passkey registration.");
-  const opts = (await begin.json()) as { publicKey: unknown; session_id: string };
-  await ensureDocumentFocused();
-  const attestation = await startRegistration({ optionsJSON: opts.publicKey as never });
+  return (await begin.json()) as PasskeyChallenge;
+}
+
+/** Step 2: run the WebAuthn creation ceremony. MUST be the first thing in a user
+ *  gesture — do not await anything before it (see the iOS focus rule above). */
+export async function passkeyRegisterFinish(accessToken: string, challenge: PasskeyChallenge): Promise<void> {
+  const attestation = await startRegistration({ optionsJSON: challenge.publicKey as never });
   const finish = await fetch(
-    `${CONSOLE_URL}/passkey/register/finish?s=${encodeURIComponent(opts.session_id)}`,
+    `${CONSOLE_URL}/passkey/register/finish?s=${encodeURIComponent(challenge.session_id)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },

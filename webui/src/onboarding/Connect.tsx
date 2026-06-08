@@ -3,9 +3,12 @@ import { setConnection } from "../lib/connection";
 import {
   desktopHandoff,
   enrollWithCode,
-  passkeyLogin,
+  passkeyLoginBegin,
+  passkeyLoginFinish,
+  passkeyRegisterBegin,
+  passkeyRegisterFinish,
   passkeysSupported,
-  registerPasskey,
+  type PasskeyChallenge,
 } from "../lib/passkey";
 import { Button, TextInput } from "../components/ui";
 import logo from "../assets/logo.png";
@@ -27,6 +30,10 @@ export function Connect() {
   const [error, setError] = useState<string | null>(null);
 
   const [instance, setInstance] = useState("");
+  // Two-phase passkey ceremonies (iOS focus rule): begin() fetches the options
+  // and stashes the challenge here; a second, fresh tap then runs finish().
+  const [loginChallenge, setLoginChallenge] = useState<PasskeyChallenge | null>(null);
+  const [registerChallenge, setRegisterChallenge] = useState<PasskeyChallenge | null>(null);
   const [code, setCode] = useState("");
   const [enrolledToken, setEnrolledToken] = useState<string | null>(null);
   const [endpoint, setEndpoint] = useState("https://app.hygur.eu");
@@ -57,11 +64,24 @@ export function Connect() {
     }
   };
 
-  const doLogin = () =>
+  // First tap: fetch the assertion options, drop the keyboard, and wait for a
+  // confirming tap. Second tap: run the WebAuthn ceremony as the first awaited
+  // call in the gesture (iOS throws "document is not focused" otherwise).
+  const doLogin = () => {
+    if (loginChallenge) {
+      run(async () => {
+        await passkeyLoginFinish(loginChallenge);
+        await finish();
+      });
+      return;
+    }
     run(async () => {
-      await passkeyLogin(instance);
-      await finish();
+      const challenge = await passkeyLoginBegin(instance);
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      setLoginChallenge(challenge);
+      setBusy(false); // re-enable so the user can confirm with a fresh tap
     });
+  };
 
   const doEnroll = () =>
     run(async () => {
@@ -70,11 +90,22 @@ export function Connect() {
       setBusy(false);
     });
 
-  const doRegister = () =>
+  // Same two-phase split as login (see doLogin).
+  const doRegister = () => {
+    if (!enrolledToken) return;
+    if (registerChallenge) {
+      run(async () => {
+        await passkeyRegisterFinish(enrolledToken, registerChallenge);
+        await finish();
+      });
+      return;
+    }
     run(async () => {
-      if (enrolledToken) await registerPasskey(enrolledToken);
-      await finish();
+      const challenge = await passkeyRegisterBegin(enrolledToken);
+      setRegisterChallenge(challenge);
+      setBusy(false);
     });
+  };
 
   const doAdvanced = () =>
     run(async () => {
@@ -141,8 +172,19 @@ export function Connect() {
         {enrolledToken ? (
           <div className="space-y-3">
             <Button onClick={doRegister} disabled={busy}>
-              {busy ? "Waiting for your passkey…" : "Add a passkey"}
+              {busy
+                ? registerChallenge
+                  ? "Waiting for your passkey…"
+                  : "Preparing…"
+                : registerChallenge
+                  ? "Confirm passkey creation"
+                  : "Add a passkey"}
             </Button>
+            {registerChallenge && !busy && (
+              <p className="text-center text-[12px] text-muted">
+                Tap again and confirm with Touch ID / Face ID.
+              </p>
+            )}
             <button
               type="button"
               onClick={() => void finish()}
@@ -160,15 +202,29 @@ export function Connect() {
                 spellCheck={false}
                 autoCapitalize="off"
                 placeholder="e.g. brave-otter-green"
-                onChange={(e) => setInstance(e.target.value)}
+                onChange={(e) => {
+                  setInstance(e.target.value);
+                  setLoginChallenge(null); // editing the slug invalidates a pending challenge
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && instance.trim()) doLogin();
                 }}
               />
             </label>
             <Button onClick={doLogin} disabled={busy || !instance.trim()}>
-              {busy ? "Waiting for your passkey…" : "Continue with passkey"}
+              {busy
+                ? loginChallenge
+                  ? "Waiting for your passkey…"
+                  : "Preparing…"
+                : loginChallenge
+                  ? "Confirm with your passkey"
+                  : "Continue with passkey"}
             </Button>
+            {loginChallenge && !busy && (
+              <p className="mt-2 text-center text-[12px] text-muted">
+                Tap again and confirm with Touch ID / Face ID.
+              </p>
+            )}
             <div className="mt-5 flex flex-col gap-1.5 text-center text-[12.5px] text-muted">
               <button type="button" onClick={() => switchTo("enroll")} className="hover:text-text">
                 Have an enrollment code?
