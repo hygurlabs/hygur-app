@@ -345,10 +345,28 @@ func (d *DailyBrief) gatherItems(ctx context.Context, opts RunOptions) ([]*store
 		return nil, "", fmt.Errorf("list items since: %w", err)
 	}
 	items = d.dropStaleByCanonicalDate(items)
+	items = dropUndatedMail(items)
 	if len(items) > d.cfg.MaxItems {
 		items = items[:d.cfg.MaxItems]
 	}
 	return items, "", nil
+}
+
+// dropUndatedMail removes mail whose canonical (sent) date is absent: for such
+// items ListKnowledgeItemsSince matched on created_at, which is only the
+// ingestion timestamp — so a years-old mail that arrived without a parseable
+// Date header would otherwise leak into the recency window. Non-mail items keep
+// created_at as a legitimate date and are untouched. Applied to the lookback
+// (recent) path only; project briefs intentionally include all linked items.
+func dropUndatedMail(items []*store.KnowledgeItem) []*store.KnowledgeItem {
+	out := items[:0]
+	for _, it := range items {
+		if store.IsMailSourceType(it.SourceType) && store.GetCanonicalDate(it).IsZero() {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 // dropStaleByCanonicalDate removes items whose mail_date / canonical_date is

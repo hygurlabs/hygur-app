@@ -801,18 +801,24 @@ func (c *Connector) buildKnowledgeItem(buf *imapclient.FetchMessageBuffer) (*sto
 		"from":       fromStr,
 		"message_id": msgID,
 	}
-	if !env.Date.IsZero() {
-		// "mail_date" is the canonical key the retrieval/date stack reads (same as
-		// the Proton/Gmail pipeline). Stamp the message's real sent date so it
-		// drives recency, date-range filtering and the date shown to the LLM —
-		// never the ingestion timestamp.
-		d := env.Date.Format(time.RFC3339)
+	// Date priority: the message's real sent date (Date header) → the IMAP
+	// server's INTERNALDATE (received time, essentially always present). Only if
+	// BOTH are missing do we leave the canonical date UNSET — an undated mail must
+	// not masquerade as recent by borrowing the ingestion timestamp. "mail_date"
+	// is the canonical key the retrieval/date stack reads (same as the
+	// Proton/Gmail pipeline); "date" stays for back-compat.
+	mailDate := env.Date
+	if mailDate.IsZero() {
+		mailDate = buf.InternalDate
+	}
+	if !mailDate.IsZero() {
+		d := mailDate.UTC().Format(time.RFC3339)
 		metadata["mail_date"] = d
-		metadata["date"] = d // back-compat with items already indexed under "date"
+		metadata["date"] = d
 	}
 
 	now := time.Now().UTC()
-	sentAt := env.Date
+	sentAt := mailDate
 	if sentAt.IsZero() {
 		sentAt = now
 	}

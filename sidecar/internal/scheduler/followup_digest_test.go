@@ -108,3 +108,21 @@ func TestSnippetTruncates(t *testing.T) {
 		t.Errorf("snippet truncate failed: %q", s)
 	}
 }
+
+func TestRecencyDate(t *testing.T) {
+	const sent = "2026-05-01T09:00:00Z"
+	ingest := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+	mailDated := &store.KnowledgeItem{SourceType: store.SourceTypeMail, Metadata: map[string]any{"canonical_date": sent}, CreatedAt: ingest}
+	mailUndated := &store.KnowledgeItem{SourceType: store.SourceTypeMail, Metadata: map[string]any{}, CreatedAt: ingest}
+	noteUndated := &store.KnowledgeItem{SourceType: store.SourceTypeNote, Metadata: map[string]any{}, CreatedAt: ingest}
+
+	if got := recencyDate(mailDated); got.UTC().Format(time.RFC3339) != sent {
+		t.Errorf("dated mail: got %v, want %s", got, sent)
+	}
+	if got := recencyDate(mailUndated); !got.IsZero() {
+		t.Errorf("undated mail must be zero (excluded), got %v", got)
+	}
+	if got := recencyDate(noteUndated); !got.Equal(ingest) {
+		t.Errorf("note falls back to created_at: got %v, want %v", got, ingest)
+	}
+}

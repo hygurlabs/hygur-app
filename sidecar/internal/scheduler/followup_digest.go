@@ -130,12 +130,12 @@ func (d *DailyBrief) gatherFollowupItems(ctx context.Context) ([]*store.Knowledg
 	}
 	var recent []*store.KnowledgeItem
 	for _, it := range all {
-		if itemDate(it).After(since) {
+		if d := recencyDate(it); !d.IsZero() && d.After(since) {
 			recent = append(recent, it)
 		}
 	}
 	sort.Slice(recent, func(i, j int) bool {
-		return itemDate(recent[i]).After(itemDate(recent[j]))
+		return recencyDate(recent[i]).After(recencyDate(recent[j]))
 	})
 	if len(recent) > followupMaxItems {
 		recent = recent[:followupMaxItems]
@@ -269,9 +269,26 @@ func gateDigest(rd rawDigest, items []*store.KnowledgeItem) FollowUpDigest {
 }
 
 // itemDate returns the canonical date (mail/note date) falling back to created_at.
+// Used for display/sort of items already admitted to the window.
 func itemDate(it *store.KnowledgeItem) time.Time {
 	if cd := store.GetCanonicalDate(it); !cd.IsZero() {
 		return cd
+	}
+	return it.CreatedAt
+}
+
+// recencyDate is the date used to decide whether an item belongs in the recent
+// window. For mail it is ONLY the real sent date (canonical): the ingestion
+// timestamp must never stand in, or a years-old mail that arrived without a
+// parseable Date header would look recent (it was stamped with the backfill
+// time). For notes/docs the creation time IS the real date, so fall back to
+// created_at. Returns zero when the item can't be placed in time (→ excluded).
+func recencyDate(it *store.KnowledgeItem) time.Time {
+	if cd := store.GetCanonicalDate(it); !cd.IsZero() {
+		return cd
+	}
+	if store.IsMailSourceType(it.SourceType) {
+		return time.Time{}
 	}
 	return it.CreatedAt
 }
