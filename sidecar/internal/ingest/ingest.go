@@ -533,16 +533,12 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	}
 
 	// Auto-tag mail pushed as text (the edge agent's Proton path). The file and
-	// direct-IMAP ingest paths tag at ingest time, but this text-push path didn't
-	// — so cloud/edge mail had no tags at all. Derive tags from the sender domain
-	// and mailbox folder carried in the payload (Author / metadata.from + mailbox).
-	if i.autoTagger != nil && sourceType == "mail" {
-		sender := in.Author
-		if sender == "" {
-			sender, _ = metadata["from"].(string)
-		}
-		mailbox, _ := metadata["mailbox"].(string)
-		_, _ = i.autoTagger.TagMail(ctx, contentID, sender, mailbox)
+	// direct-IMAP ingest paths tag at their own ingest time, but this text-push
+	// path didn't — so cloud/edge mail had no tags at all. Tags = mailbox folder
+	// + semantic topics from the Tier-2 extractor, run inline so a freshly-synced
+	// mail is classified immediately (one bounded LLM call per new mail).
+	if sourceType == "mail" {
+		i.tagMailItem(ctx, item, true)
 	}
 
 	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, text, DefaultChunkTokenBudget, now)
@@ -555,15 +551,77 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	return &IngestResult{ContentID: contentID, Status: status, ChunkCount: chunkCount}, nil
 }
 
-// RetagMail re-applies mail auto-tags to every already-ingested mail item, using
-// the sender + mailbox stored in each item's metadata. It backfills tags for mail
-// ingested before the text-push path learned to tag; TagMail is idempotent, so
-// it's safe to run more than once. Returns the number of items processed.
+// tagMailItem applies the mailbox-folder tag and semantic topic tags to one mail
+// item. Topics come from the Tier-2 LLM extractor: if the item has none cached in
+// its metadata, Tier-2 runs inline and the result is persisted. When prune is
+// true the auto-tag set is capped afterwards; a batch caller passes false and
+// prunes once at the end (pruning mid-batch would orphan tags from earlier items).
+func (i *Ingestor) tagMailItem(ctx context.Context, item *store.KnowledgeItem, prune bool) {
+	if i.autoTagger == nil || item == nil {
+		return
+	}
+	mailbox, _ := item.Metadata["mailbox"].(string)
+	i.autoTagger.tagMailFolder(ctx, item.ContentID, mailbox)
+
+	topics := topicsFromMetadata(item.Metadata)
+	if len(topics) == 0 {
+		if t2 := i.tier2Client(); t2 != nil && strings.TrimSpace(item.NormalizedText) != "" {
+			if ents, err := extract.ExtractTier2(ctx, t2, item.NormalizedText); err == nil {
+				extract.MergeTier2IntoMetadata(item.Metadata, ents)
+				if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
+					log.Printf("[ingest] topic metadata update failed for %s: %v", item.ContentID, uerr)
+				}
+				topics = ents.Topics
+			} else {
+				log.Printf("[ingest] tier2 topics failed for %s: %v", item.ContentID, err)
+			}
+		}
+	}
+	i.autoTagger.tagTopics(ctx, item.ContentID, topics)
+
+	if prune {
+		_ = i.store.PruneAutoTags(ctx)
+	}
+}
+
+// topicsFromMetadata pulls the Tier-2 topic labels out of an item's metadata,
+// tolerating both the in-process []string and the []any shape it takes after a
+// JSON round-trip through the store.
+func topicsFromMetadata(m map[string]any) []string {
+	raw, ok := m["extracted_topics"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// RetagMail rebuilds mail auto-tags across the whole corpus: it purges the
+// existing auto-tags (so stale per-sender-domain tags disappear), then re-tags
+// every mail item with its mailbox folder + Tier-2 topics, running Tier-2 inline
+// for items that don't have topics cached yet. Pruning happens once at the end.
+// Long-running (one LLM call per untagged mail) — callers should run it async.
+// Returns the number of mail items processed.
 func (i *Ingestor) RetagMail(ctx context.Context) (int, error) {
 	if i.autoTagger == nil || i.store == nil {
 		return 0, nil
 	}
-	const batch = 500
+	if err := i.purgeAutoTags(ctx); err != nil {
+		log.Printf("[ingest] retag: purge auto-tags failed: %v", err)
+	}
+
+	const batch = 200
 	processed := 0
 	for offset := 0; ; offset += batch {
 		items, err := i.store.ListKnowledgeItemsBySourceType(ctx, "mail", batch, offset)
@@ -574,20 +632,36 @@ func (i *Ingestor) RetagMail(ctx context.Context) (int, error) {
 			break
 		}
 		for _, it := range items {
-			sender, _ := it.Metadata["from"].(string)
-			mailbox, _ := it.Metadata["mailbox"].(string)
-			if sender == "" && mailbox == "" {
-				continue
+			if ctx.Err() != nil {
+				return processed, ctx.Err()
 			}
-			if _, err := i.autoTagger.TagMail(ctx, it.ContentID, sender, mailbox); err == nil {
-				processed++
-			}
+			i.tagMailItem(ctx, it, false)
+			processed++
 		}
 		if len(items) < batch {
 			break
 		}
 	}
+	_ = i.store.PruneAutoTags(ctx)
 	return processed, nil
+}
+
+// purgeAutoTags deletes every auto-generated tag (and its item links), leaving
+// user-created tags untouched. Used before a full retag so the taxonomy isn't a
+// mix of old and new auto-rules.
+func (i *Ingestor) purgeAutoTags(ctx context.Context) error {
+	tags, err := i.store.ListTags(ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range tags {
+		if t.IsAuto {
+			if derr := i.store.DeleteTag(ctx, t.ID); derr != nil {
+				log.Printf("[ingest] retag: delete auto-tag %s failed: %v", t.ID, derr)
+			}
+		}
+	}
+	return nil
 }
 
 func hashContent(text string) string {

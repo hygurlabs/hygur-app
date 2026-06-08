@@ -192,6 +192,16 @@ func TestExtractMailboxFolderTag(t *testing.T) {
 			mailbox:  "INBOX\\Projects\\Active",
 			expected: "Projects",
 		},
+		{
+			name:     "Proton custom folder (skip Folders/ prefix)",
+			mailbox:  "Folders/Factures",
+			expected: "Factures",
+		},
+		{
+			name:     "Proton label (skip Labels/ prefix)",
+			mailbox:  "Labels/Clients",
+			expected: "Clients",
+		},
 	}
 
 	for _, tt := range tests {
@@ -294,27 +304,19 @@ func TestAutoTaggerTagMail(t *testing.T) {
 	autoTagger := NewAutoTagger(db)
 
 	t.Run("TagMail", func(t *testing.T) {
-		result, err := autoTagger.TagMail(ctx, item.ContentID, "contact@acme.com", "INBOX/Projects")
-		if err != nil {
+		// TagMail now applies only the mailbox-folder tag; sender-domain tags
+		// were dropped in favour of Tier-2 topic tags.
+		if _, err := autoTagger.TagMail(ctx, item.ContentID, "contact@acme.com", "INBOX/Projects"); err != nil {
 			t.Fatalf("failed to tag mail: %v", err)
 		}
 
-		if len(result.Tags) == 0 {
-			t.Error("expected some tags")
-		}
-
-		// Check that tags are applied to the item
 		tags, err := db.GetTagsForItem(ctx, item.ContentID)
 		if err != nil {
 			t.Fatalf("failed to get tags: %v", err)
 		}
-
-		// Should have domain tag and mailbox tag
-		if len(tags) != 2 {
-			t.Errorf("expected 2 tags, got %d", len(tags))
+		if len(tags) != 1 {
+			t.Errorf("expected 1 tag (folder only), got %d", len(tags))
 		}
-
-		// Verify tag names
 		tagNames := make(map[string]bool)
 		for _, tag := range tags {
 			tagNames[tag.Name] = true
@@ -322,11 +324,11 @@ func TestAutoTaggerTagMail(t *testing.T) {
 				t.Error("expected auto tags")
 			}
 		}
-		if !tagNames["mail:acme.com"] {
-			t.Error("expected 'mail:acme.com' tag")
-		}
 		if !tagNames["mail:Projects"] {
 			t.Error("expected 'mail:Projects' tag")
+		}
+		if tagNames["mail:acme.com"] {
+			t.Error("sender-domain tag mail:acme.com should be dropped")
 		}
 	})
 }

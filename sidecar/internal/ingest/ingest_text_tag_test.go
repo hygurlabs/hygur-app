@@ -29,9 +29,10 @@ func contains(names []string, want string) bool {
 	return false
 }
 
-// IngestText is how edge/cloud mail reaches the central KB; it must auto-tag mail
-// (sender domain + mailbox folder) the way the file and direct-IMAP paths do.
-func TestIngestText_AutoTagsMail(t *testing.T) {
+// IngestText is how edge/cloud mail reaches the central KB. It must auto-tag mail
+// with its mailbox folder. (Topic tags need the Tier-2 LLM client, absent here,
+// so only the folder tag is asserted; sender-domain tags were dropped.)
+func TestIngestText_AutoTagsMailFolder(t *testing.T) {
 	db, err := store.NewDB(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -54,15 +55,15 @@ func TestIngestText_AutoTagsMail(t *testing.T) {
 	}
 
 	names := itemTagNames(t, db, res.ContentID)
-	if !contains(names, "mail:edf.fr") {
-		t.Errorf("expected sender-domain tag mail:edf.fr, got %v", names)
-	}
 	if !contains(names, "mail:Factures") {
 		t.Errorf("expected mailbox-folder tag mail:Factures, got %v", names)
 	}
+	if contains(names, "mail:edf.fr") {
+		t.Errorf("sender-domain tags should be dropped, got %v", names)
+	}
 }
 
-// Non-mail text ingest must NOT pick up mail tags.
+// Non-mail text ingest must not pick up mail tags.
 func TestIngestText_NonMailNotTagged(t *testing.T) {
 	db, err := store.NewDB(":memory:")
 	if err != nil {
@@ -86,9 +87,9 @@ func TestIngestText_NonMailNotTagged(t *testing.T) {
 	}
 }
 
-// RetagMail backfills tags for mail ingested before tagging existed (simulated
-// here by tagging items that start with none).
-func TestRetagMail_Backfills(t *testing.T) {
+// RetagMail purges stale auto-tags and re-applies the folder tag. (Topics need
+// the LLM client, absent here.)
+func TestRetagMail_PurgesAndRefoldersMail(t *testing.T) {
 	db, err := store.NewDB(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -98,20 +99,26 @@ func TestRetagMail_Backfills(t *testing.T) {
 	i := NewIngestorWithStore(db)
 	ctx := context.Background()
 
-	// Insert a mail item directly (no tagging), mimicking the pre-fix state.
+	// A mail item under a Proton custom folder, with NO tags yet.
 	item := &store.KnowledgeItem{
 		ContentID:      "c-1",
 		SourceType:     "mail",
 		Title:          "Invoice",
 		NormalizedText: "body",
-		Metadata:       map[string]any{"from": "billing@acme.io", "mailbox": "INBOX"},
+		Metadata:       map[string]any{"from": "billing@acme.io", "mailbox": "Folders/Factures"},
 		VersionID:      "v1",
 	}
 	if err := db.InsertKnowledgeItem(ctx, item); err != nil {
 		t.Fatalf("InsertKnowledgeItem: %v", err)
 	}
-	if names := itemTagNames(t, db, "c-1"); len(names) != 0 {
-		t.Fatalf("precondition: item should start untagged, got %v", names)
+
+	// A stale auto domain-tag from the old scheme, attached to the item.
+	stale, err := db.GetOrCreateTag(ctx, "mail:acme.io", true, "mail:from:@acme.io")
+	if err != nil {
+		t.Fatalf("GetOrCreateTag: %v", err)
+	}
+	if err := db.AddTagToItem(ctx, "c-1", stale.ID); err != nil {
+		t.Fatalf("AddTagToItem: %v", err)
 	}
 
 	n, err := i.RetagMail(ctx)
@@ -119,9 +126,14 @@ func TestRetagMail_Backfills(t *testing.T) {
 		t.Fatalf("RetagMail: %v", err)
 	}
 	if n != 1 {
-		t.Errorf("expected 1 item retagged, got %d", n)
+		t.Errorf("expected 1 item processed, got %d", n)
 	}
-	if names := itemTagNames(t, db, "c-1"); !contains(names, "mail:acme.io") {
-		t.Errorf("expected mail:acme.io after backfill, got %v", names)
+
+	names := itemTagNames(t, db, "c-1")
+	if contains(names, "mail:acme.io") {
+		t.Errorf("stale auto domain-tag should be purged, got %v", names)
+	}
+	if !contains(names, "mail:Factures") {
+		t.Errorf("expected mail:Factures after retag, got %v", names)
 	}
 }

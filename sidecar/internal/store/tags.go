@@ -36,8 +36,10 @@ var TagColors = []string{
 	"#F97316", // orange
 }
 
-// MaxAutoTags is the maximum number of auto-generated tags allowed.
-const MaxAutoTags = 100
+// MaxAutoTags is the maximum number of auto-generated tags allowed. Kept small
+// so the auto-tag set stays meaningful: tagging is by semantic topic (a compact,
+// reused vocabulary) plus mailbox folder, not per-sender domain.
+const MaxAutoTags = 20
 
 // DefaultTagColor returns a color from the palette based on the tag name hash.
 func DefaultTagColor(name string) string {
