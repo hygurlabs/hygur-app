@@ -91,7 +91,7 @@ export function Calendar() {
 
   // Capture "now" once per render — keeps the derivation below free of impure calls.
   const [now] = useState(() => Date.now());
-  const upcomingSynced = (syncedEvents.data?.items ?? [])
+  const allSynced = (syncedEvents.data?.items ?? [])
     .map((it) => {
       const md = (it.metadata ?? {}) as Record<string, unknown>;
       const start = (md.start as string) || it.date || "";
@@ -105,9 +105,48 @@ export function Calendar() {
         body: it.normalized_text ?? "",
       };
     })
-    .filter((e) => !Number.isNaN(e.ts) && e.ts >= now - 12 * 3600_000)
+    .filter((e) => !Number.isNaN(e.ts));
+  const syncedCount = syncedEvents.data?.items.length ?? 0;
+  // Upcoming first; if the connected calendar has no future events (e.g. a
+  // historical feed), fall back to showing the most recent ones so a synced
+  // calendar never looks empty.
+  const upcomingSynced = allSynced
+    .filter((e) => e.ts >= now - 12 * 3600_000)
     .sort((a, b) => a.ts - b.ts)
     .slice(0, 30);
+  const recentSynced = allSynced
+    .filter((e) => e.ts < now - 12 * 3600_000)
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 30);
+  const renderEventList = (list: typeof allSynced) => (
+    <ul className="border-t border-border">
+      {list.map((e) => (
+        <li
+          key={e.content_id}
+          onClick={() =>
+            openDetail({
+              title: e.title,
+              contentId: e.content_id,
+              meta: [
+                e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
+                e.location,
+              ].filter(Boolean),
+              body: e.body,
+            })
+          }
+          className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5 transition-colors hover:bg-surface2"
+        >
+          <span className="truncate font-medium">{e.title}</span>
+          <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
+            {e.allDay ? fmtDate(e.start) : fmtDateTime(e.start)}
+          </span>
+          {e.location && (
+            <span className="col-span-2 text-[13px] text-muted">{e.location}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 
   const selectedSet = new Set(selected);
   const shownEvents = (events.data ?? []).filter(
@@ -142,35 +181,17 @@ export function Calendar() {
       <SectionLabel>Upcoming events</SectionLabel>
 
       {upcomingSynced.length > 0 ? (
-        <ul className="border-t border-border">
-          {upcomingSynced.map((e) => (
-            <li
-              key={e.content_id}
-              onClick={() =>
-                openDetail({
-                  title: e.title,
-                  contentId: e.content_id,
-                  meta: [
-                    e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
-                    e.location,
-                  ].filter(Boolean),
-                  body: e.body,
-                })
-              }
-              className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5 transition-colors hover:bg-surface2"
-            >
-              <span className="truncate font-medium">{e.title}</span>
-              <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
-                {e.allDay ? fmtDate(e.start) : fmtDateTime(e.start)}
-              </span>
-              {e.location && (
-                <span className="col-span-2 text-[13px] text-muted">{e.location}</span>
-              )}
-            </li>
-          ))}
-        </ul>
+        renderEventList(upcomingSynced)
       ) : syncedEvents.isLoading ? (
         <Skeleton rows={3} />
+      ) : recentSynced.length > 0 ? (
+        <>
+          <p className="mb-2 text-[12.5px] text-muted">
+            No upcoming events in your connected calendar — showing your most recent.{" "}
+            {syncedCount} event{syncedCount === 1 ? "" : "s"} synced.
+          </p>
+          {renderEventList(recentSynced)}
+        </>
       ) : (
         <div className="rounded-lg border border-border bg-surface px-5 py-6">
           <p className="mb-3 max-w-[58ch] text-[13.5px] text-muted">
