@@ -7,6 +7,7 @@ import {
   Tag,
   CalendarDays,
   FolderKanban,
+  GitCompareArrows,
   Newspaper,
   Plug,
   Settings as SettingsIcon,
@@ -31,6 +32,7 @@ const NAV: NavItem[] = [
   { to: "/briefings", label: "Briefings", icon: Newspaper },
   { to: "/tags", label: "Tags", icon: Tag },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
 ];
 
 // Pinned to the bottom, just above the health indicator. Settings joins this

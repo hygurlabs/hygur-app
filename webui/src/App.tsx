@@ -14,6 +14,7 @@ import { Connectors } from "./views/Connectors";
 import { Settings } from "./views/Settings";
 import { Tags } from "./views/Tags";
 import { Calendar } from "./views/Calendar";
+import { FollowUp } from "./views/FollowUp";
 
 export default function App() {
   // Left nav is a static column on desktop and an off-canvas drawer on mobile.
@@ -61,6 +62,7 @@ export default function App() {
                 <Route path="/briefings" element={<Briefings />} />
                 <Route path="/tags" element={<Tags />} />
                 <Route path="/calendar" element={<Calendar />} />
+                <Route path="/follow-up" element={<FollowUp />} />
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

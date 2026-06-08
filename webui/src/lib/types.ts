@@ -88,6 +88,23 @@ export interface KnowledgeItem {
   tags?: { id: string; name: string; color?: string }[];
 }
 
+/** One cited side of a contradiction (W5): the divergent value + its source. */
+export interface ConflictMember {
+  content_id: string;
+  title: string;
+  from: string;
+  date: string; // RFC3339
+  value: string;
+}
+
+/** A deterministic contradiction within a thread (GET /knowledge/contradictions). */
+export interface Conflict {
+  type: "amount" | "due_date" | "iban" | "vat" | "structured_comm" | string;
+  cluster: string; // normalized thread subject
+  severity: "high" | "medium" | string;
+  members: ConflictMember[];
+}
+
 export interface NoteTag {
   id: string;
   name: string;

@@ -4,6 +4,7 @@ import type {
   AgendaAction,
   Briefing,
   ChatMessage,
+  Conflict,
   Connector,
   ConnectorConfigValue,
   ConnectorDetail,
@@ -166,6 +167,11 @@ export const api = {
     ),
   knowledgeItem: (contentId: string) =>
     getJSON<KnowledgeItem>(`/knowledge/${cidPath(contentId)}`),
+  /** Deterministic contradictions across mail threads (W5). */
+  contradictions: () =>
+    getJSON<{ conflicts: Conflict[]; scanned: number }>(
+      "/knowledge/contradictions",
+    ),
 
   // Notes — full CRUD.
   notes: () => getJSON<{ notes: Note[] }>("/notes"),
