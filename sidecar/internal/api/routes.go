@@ -72,6 +72,7 @@ func (s *Server) setupRoutes() {
 		r.Route("/knowledge", func(r chi.Router) {
 			r.Get("/items", s.handleKnowledgeList)
 			r.Get("/diagnostic", s.handleKnowledgeDiagnostic)
+			r.Get("/contradictions", s.handleKnowledgeContradictions)
 			r.Post("/ingest", s.handleKnowledgeIngest)
 			r.Post("/ingest-text", s.handleKnowledgeIngestText)
 			r.Post("/ingest-folder", s.handleKnowledgeIngestFolder)
@@ -801,6 +802,16 @@ func (s *Server) handleUnlinkProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDismissProjectSuggestion(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.DismissProjectSuggestion(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeContradictions handles GET /knowledge/contradictions.
+// It delegates to the KnowledgeHandler.
+func (s *Server) handleKnowledgeContradictions(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.Contradictions(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
