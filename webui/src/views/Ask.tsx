@@ -659,7 +659,7 @@ export function Ask() {
             </span>
           </div>
         )}
-        <header className="flex items-center justify-between border-b border-border px-7 py-3 print:hidden">
+        <header className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-7 print:hidden">
           <span className="font-display text-[15px] font-semibold tracking-tight">
             Ask Hygur
           </span>
@@ -668,7 +668,8 @@ export function Ask() {
               onClick={startNewChat}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text"
             >
-              <Plus size={15} strokeWidth={1.9} /> New
+              <Plus size={15} strokeWidth={1.9} />
+              <span className="hidden sm:inline">New</span>
             </button>
             <button
               onClick={toggleHistory}
@@ -679,7 +680,8 @@ export function Ask() {
                   : "text-muted hover:bg-surface2 hover:text-text"
               }`}
             >
-              <History size={15} strokeWidth={1.9} /> History
+              <History size={15} strokeWidth={1.9} />
+              <span className="hidden sm:inline">History</span>
             </button>
             <button
               onClick={() =>
@@ -693,7 +695,8 @@ export function Ask() {
               title="Export conversation as Markdown"
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
             >
-              <FileDown size={15} strokeWidth={1.9} /> MD
+              <FileDown size={15} strokeWidth={1.9} />
+              <span className="hidden sm:inline">MD</span>
             </button>
             <button
               onClick={() => native.print()}
@@ -701,13 +704,14 @@ export function Ask() {
               title="Export as PDF (via system print)"
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
             >
-              <Printer size={15} strokeWidth={1.9} /> PDF
+              <Printer size={15} strokeWidth={1.9} />
+              <span className="hidden sm:inline">PDF</span>
             </button>
           </div>
         </header>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto print:overflow-visible">
-          <div className="view-enter mx-auto max-w-[760px] px-7 pb-8 pt-8">
+          <div className="view-enter mx-auto max-w-[760px] px-4 pb-8 pt-8 sm:px-7">
             {turns.length === 0 ? (
               <div className="pt-8">
                 <h1 className="font-display text-[28px] font-semibold leading-tight tracking-tight">
@@ -827,7 +831,7 @@ export function Ask() {
         </div>
 
         {dropError && (
-          <div className="px-7 print:hidden">
+          <div className="px-4 sm:px-7 print:hidden">
             <div className="mx-auto max-w-[760px] pb-1">
               <ErrorBanner message={`Pièce jointe : ${dropError}`} />
             </div>
@@ -853,17 +857,26 @@ export function Ask() {
       </div>
 
       {panelOpen && (
-        <aside className="hidden w-[300px] shrink-0 flex-col border-l border-border bg-surface2/40 lg:flex print:hidden">
-          {panelMode === "sessions" ? (
-            <SessionsPanel
-              activeId={sessionId}
-              onPick={loadSession}
-              onClose={() => setPanelOpen(false)}
-            />
-          ) : (
-            <ContextPanel sources={liveSources} openDetail={openDetail} />
-          )}
-        </aside>
+        <>
+          {/* Below lg the panel overlays the chat as a right drawer; tap the
+              backdrop to dismiss. From lg it's an inline column. */}
+          <div
+            aria-hidden
+            onClick={() => setPanelOpen(false)}
+            className="fixed inset-0 z-20 bg-text/25 lg:hidden print:hidden"
+          />
+          <aside className="fixed inset-y-0 right-0 z-30 flex w-[min(340px,88vw)] shrink-0 flex-col border-l border-border bg-surface shadow-xl lg:static lg:z-auto lg:w-[300px] lg:bg-surface2/40 lg:shadow-none print:hidden">
+            {panelMode === "sessions" ? (
+              <SessionsPanel
+                activeId={sessionId}
+                onPick={loadSession}
+                onClose={() => setPanelOpen(false)}
+              />
+            ) : (
+              <ContextPanel sources={liveSources} openDetail={openDetail} />
+            )}
+          </aside>
+        </>
       )}
     </div>
   );
@@ -1012,7 +1025,7 @@ function Composer({
     attachments.length > 0 || focusProjects.length > 0 || focusTags.length > 0;
 
   return (
-    <div className="border-t border-border bg-bg/85 px-7 py-4 backdrop-blur">
+    <div className="border-t border-border bg-bg/85 px-4 py-4 backdrop-blur sm:px-7">
       <div className="relative mx-auto max-w-[760px]">
         {mentionQuery !== null && (
           <ul className="absolute bottom-full z-30 mb-2 max-h-64 w-full overflow-auto rounded-xl border border-border bg-surface py-1 shadow-lg">

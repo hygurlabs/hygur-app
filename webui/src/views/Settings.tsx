@@ -77,7 +77,7 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
+    <div className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0">
         <p className="text-[14px]">{label}</p>
         {hint && <p className="mt-0.5 text-[12.5px] text-muted">{hint}</p>}
