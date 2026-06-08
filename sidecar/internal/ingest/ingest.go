@@ -563,48 +563,28 @@ func (i *Ingestor) tagMailItem(ctx context.Context, item *store.KnowledgeItem, p
 	mailbox, _ := item.Metadata["mailbox"].(string)
 	i.autoTagger.tagMailFolder(ctx, item.ContentID, mailbox)
 
-	topics := topicsFromMetadata(item.Metadata)
-	if len(topics) == 0 {
-		if t2 := i.tier2Client(); t2 != nil && strings.TrimSpace(item.NormalizedText) != "" {
-			if ents, err := extract.ExtractTier2(ctx, t2, item.NormalizedText); err == nil {
-				extract.MergeTier2IntoMetadata(item.Metadata, ents)
+	// Semantic category tags: classify the mail into the fixed MailCategories
+	// taxonomy (constrained output → fast + reliable). Cached in metadata so
+	// re-runs reuse the result instead of re-calling the LLM.
+	cats := categoriesFromMetadata(item.Metadata)
+	if len(cats) == 0 {
+		if c := i.tier2Client(); c != nil && strings.TrimSpace(item.NormalizedText) != "" {
+			if got, err := classifyMail(ctx, c, item.NormalizedText); err != nil {
+				log.Printf("[ingest] mail classify failed for %s: %v", item.ContentID, err)
+			} else if len(got) > 0 {
+				cats = got
+				item.Metadata["mail_categories"] = cats
 				if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
-					log.Printf("[ingest] topic metadata update failed for %s: %v", item.ContentID, uerr)
+					log.Printf("[ingest] category metadata update failed for %s: %v", item.ContentID, uerr)
 				}
-				topics = ents.Topics
-			} else {
-				log.Printf("[ingest] tier2 topics failed for %s: %v", item.ContentID, err)
 			}
 		}
 	}
-	i.autoTagger.tagTopics(ctx, item.ContentID, topics)
+	i.autoTagger.tagTopics(ctx, item.ContentID, cats)
 
 	if prune {
 		_ = i.store.PruneAutoTags(ctx)
 	}
-}
-
-// topicsFromMetadata pulls the Tier-2 topic labels out of an item's metadata,
-// tolerating both the in-process []string and the []any shape it takes after a
-// JSON round-trip through the store.
-func topicsFromMetadata(m map[string]any) []string {
-	raw, ok := m["extracted_topics"]
-	if !ok {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, e := range v {
-			if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
 }
 
 // RetagMail rebuilds mail auto-tags across the whole corpus: it purges the
