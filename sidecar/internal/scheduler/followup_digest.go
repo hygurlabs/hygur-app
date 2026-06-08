@@ -115,7 +115,7 @@ func (d *DailyBrief) FollowUp(ctx context.Context) (FollowUpDigest, error) {
 func (d *DailyBrief) gatherFollowupItems(ctx context.Context) ([]*store.KnowledgeItem, error) {
 	since := time.Now().Add(-followupWindowDays * 24 * time.Hour)
 	var all []*store.KnowledgeItem
-	for _, src := range []string{"mail", "note"} {
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote) {
 		const batch = 500
 		for offset := 0; ; offset += batch {
 			page, err := d.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)

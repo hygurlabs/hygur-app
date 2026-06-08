@@ -819,7 +819,7 @@ func (c *Connector) buildKnowledgeItem(buf *imapclient.FetchMessageBuffer) (*sto
 
 	return &store.KnowledgeItem{
 		ContentID:      contentID,
-		SourceType:     "mail",
+		SourceType:     store.SourceTypeMail,
 		Title:          title,
 		NormalizedText: normalizedText,
 		Metadata:       metadata,

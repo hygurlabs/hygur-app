@@ -142,7 +142,7 @@ func (i *Ingestor) SuggestProjects(ctx context.Context) (int, error) {
 	}
 
 	var items []*store.KnowledgeItem
-	for _, src := range []string{"mail", "note", "event"} {
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote, store.SourceTypeEvent) {
 		const batch = 500
 		for offset := 0; ; offset += batch {
 			page, err := i.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)

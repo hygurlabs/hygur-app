@@ -1190,7 +1190,7 @@ func threadToItem(t mailpkg.Thread, connectorID string) plugin.Item {
 	return plugin.Item{
 		ID:          t.ID,
 		ConnectorID: connectorID,
-		SourceType:  "mail",
+		SourceType:  store.SourceTypeMail,
 		Title:       t.Subject,
 		Author:      strings.Join(t.Participants, ", "),
 		CreatedAt:   t.DateRange[0],

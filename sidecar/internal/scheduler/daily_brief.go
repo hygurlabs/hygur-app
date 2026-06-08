@@ -329,10 +329,9 @@ func (d *DailyBrief) gatherItems(ctx context.Context, opts RunOptions) ([]*store
 	}
 	items, err := d.store.ListKnowledgeItemsSince(
 		ctx, since,
-		// "mail" is the edge/Proton source type (the bulk of the KB); without it
-		// the brief saw none of the user's mail. "email" stays for the direct-IMAP
-		// path. "event" folds in CalDAV/iCal calendar items (W3).
-		[]string{"mail", "email", "note", "file", "pdf", "markdown", "md", "txt", "event"},
+		// Mail (both source-type variants) + notes/docs + calendar events (W3).
+		// store.MailAndSourceTypes guarantees no mail variant is forgotten.
+		store.MailAndSourceTypes("note", "file", "pdf", "markdown", "md", "txt", "event"),
 		rawLimit,
 	)
 	if err != nil {

@@ -437,7 +437,7 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 			if hasMailFilter {
 				mailVecResults, err = us.store.SearchChunksVecByMail(gCtx, embedding, fetchLimit, mailFilter)
 			} else {
-				mailTypes := []string{"mail", "email", "thread"}
+				mailTypes := store.MailAndSourceTypes("thread")
 				mailVecResults, err = us.store.SearchChunksVecBySourceType(gCtx, embedding, fetchLimit, mailTypes)
 			}
 			return err

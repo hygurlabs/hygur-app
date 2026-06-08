@@ -537,7 +537,7 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	// path didn't — so cloud/edge mail had no tags at all. Tags = mailbox folder
 	// + semantic topics from the Tier-2 extractor, run inline so a freshly-synced
 	// mail is classified immediately (one bounded LLM call per new mail).
-	if sourceType == "mail" {
+	if store.IsMailSourceType(sourceType) {
 		i.TagItem(ctx, item, true)
 	}
 
@@ -626,7 +626,7 @@ func (i *Ingestor) RetagItems(ctx context.Context) (int, error) {
 
 	// Collect the corpus to tag (mail + notes).
 	var items []*store.KnowledgeItem
-	for _, src := range []string{"mail", "note"} {
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote) {
 		const batch = 500
 		for offset := 0; ; offset += batch {
 			page, err := i.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)

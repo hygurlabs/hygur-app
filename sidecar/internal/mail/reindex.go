@@ -32,12 +32,22 @@ func ReindexEntitiesTier1(ctx context.Context, db *store.DB, logger zerolog.Logg
 	}
 
 	stats := &ReindexStats{}
-	offset := 0
+	// Walk every mail variant ("mail" / "email") so the reindex isn't a silent
+	// no-op depending on the ingestion path.
+	for _, sourceType := range store.MailSourceTypes {
+		if err := reindexSourceType(ctx, db, logger, sourceType, batchSize, stats); err != nil {
+			return stats, err
+		}
+	}
+	return stats, nil
+}
 
+func reindexSourceType(ctx context.Context, db *store.DB, logger zerolog.Logger, sourceType string, batchSize int, stats *ReindexStats) error {
+	offset := 0
 	for {
-		items, err := db.ListKnowledgeItemsBySourceType(ctx, "email", batchSize, offset)
+		items, err := db.ListKnowledgeItemsBySourceType(ctx, sourceType, batchSize, offset)
 		if err != nil {
-			return stats, fmt.Errorf("list emails offset=%d: %w", offset, err)
+			return fmt.Errorf("list %s offset=%d: %w", sourceType, offset, err)
 		}
 		if len(items) == 0 {
 			break
@@ -46,7 +56,7 @@ func ReindexEntitiesTier1(ctx context.Context, db *store.DB, logger zerolog.Logg
 
 		for _, item := range items {
 			if ctx.Err() != nil {
-				return stats, ctx.Err()
+				return ctx.Err()
 			}
 
 			subject := item.Title
@@ -96,8 +106,7 @@ func ReindexEntitiesTier1(ctx context.Context, db *store.DB, logger zerolog.Logg
 		}
 		offset += len(items)
 	}
-
-	return stats, nil
+	return nil
 }
 
 // snapshotExtracted returns a stable string representation of the extracted_*
