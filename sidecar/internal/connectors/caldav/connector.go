@@ -98,9 +98,11 @@ func (c *Connector) ConfigSchema() plugin.ConfigSchema {
 						Key:   "url",
 						Type:  plugin.FieldString,
 						Label: "Calendar URL",
-						Description: "Your calendar's share link. Google Calendar: Settings → your calendar → " +
-							"\"Secret address in iCal format\". iCloud: a Public Calendar share link, or " +
-							"caldav.icloud.com with an app-specific password (fill Username/Password below).",
+						Description: "A direct calendar FILE link (not a CalDAV server address). " +
+							"Google Calendar: Settings → your calendar → \"Secret address in iCal format\". " +
+							"iCloud: share the calendar as a Public Calendar and copy the webcal link. " +
+							"Self-hosted (Nextcloud/Radicale): the calendar's .ics export URL — fill " +
+							"Username/Password below if it's private.",
 						Required: true,
 					},
 				},
@@ -211,7 +213,7 @@ func (c *Connector) HealthCheck(ctx context.Context) error {
 }
 
 func (c *Connector) fetch(ctx context.Context, url, username, password string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeCalURL(url), nil)
 	if err != nil {
 		return "", err
 	}
@@ -225,6 +227,15 @@ func (c *Connector) fetch(ctx context.Context, url, username, password string) (
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		// This connector GETs a calendar FILE; it does not speak the CalDAV
+		// protocol. A 401/403 usually means the URL is a CalDAV server (e.g.
+		// caldav.icloud.com) or a private feed missing credentials.
+		return "", fmt.Errorf("HTTP %d — use a direct calendar file link (Google: "+
+			"\"Secret address in iCal format\"; iCloud: a Public Calendar webcal link; "+
+			"self-hosted: the calendar's .ics export URL + username/password), not a "+
+			"CalDAV server address", resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -341,6 +352,19 @@ func (c *Connector) markSynced(indexed int64) {
 	c.lastSync = now
 	c.health = plugin.HealthStatus{Status: plugin.StatusHealthy, LastSync: now, ItemCount: c.health.ItemCount + indexed}
 	c.mu.Unlock()
+}
+
+// normalizeCalURL makes a user-pasted calendar URL fetchable over HTTP: it maps
+// the webcal:// scheme (used by iCloud "Public Calendar" share links) to https,
+// and prepends https:// when the user pasted a bare host/path with no scheme.
+func normalizeCalURL(u string) string {
+	u = strings.TrimSpace(u)
+	if low := strings.ToLower(u); strings.HasPrefix(low, "webcal://") {
+		u = "https://" + u[len("webcal://"):]
+	} else if !strings.Contains(u, "://") {
+		u = "https://" + u
+	}
+	return u
 }
 
 // eventContentID is stable per (feed URL, event UID) so re-syncs overwrite.

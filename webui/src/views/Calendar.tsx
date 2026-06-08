@@ -188,10 +188,10 @@ export function Calendar() {
             <li>
               <span className="font-medium text-text">iCloud</span> — in the Calendar
               app, right-click your calendar → “Share Calendar” → enable{" "}
-              <span className="font-medium">Public Calendar</span> and copy the link.
-              (Anyone with the link can read it; for a private link, use{" "}
-              <span className="font-medium">caldav.icloud.com</span> with an
-              app-specific password.)
+              <span className="font-medium">Public Calendar</span> and copy the{" "}
+              <span className="font-medium">webcal://</span> link. (Anyone with the
+              link can read it.) Paste a direct calendar link, not a server address
+              like <span className="font-medium">caldav.icloud.com</span>.
             </li>
           </ul>
           <Link
