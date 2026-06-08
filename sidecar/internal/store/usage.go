@@ -39,6 +39,17 @@ ON CONFLICT(day, category) DO UPDATE SET
 	return err
 }
 
+// ResetTokenUsage clears all recorded token usage (the running daily totals).
+// Pricing settings in app_settings are untouched. Returns the rows removed.
+func (d *DB) ResetTokenUsage(ctx context.Context) (int64, error) {
+	res, err := d.db.ExecContext(ctx, `DELETE FROM token_usage`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // TokenUsageSince returns per-category token sums for all days on or after
 // startDay (inclusive, formatted 'YYYY-MM-DD').
 func (d *DB) TokenUsageSince(ctx context.Context, startDay string) ([]CategoryUsage, error) {

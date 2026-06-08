@@ -890,6 +890,17 @@ func main() {
 		}()
 	}
 
+	// One-shot token-usage reset gated by env: clears the running daily totals
+	// (pricing settings untouched). Set HYGUR_RESET_TOKEN_USAGE=1, restart, then
+	// unset. A quick DELETE, so it runs synchronously here.
+	if os.Getenv("HYGUR_RESET_TOKEN_USAGE") == "1" {
+		if n, err := db.ResetTokenUsage(ctx); err != nil {
+			logger.Warn().Err(err).Msg("token usage reset failed")
+		} else {
+			logger.Info().Int64("rows_deleted", n).Msg("token usage reset")
+		}
+	}
+
 	// Meeting briefings — short RAG briefings ahead of events/deadlines.
 	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
 	//    each event (it owns EventKit); the briefer generates + emits the SSE.
