@@ -40,10 +40,10 @@ const (
 )
 
 func mailCatSystemPrompt() string {
-	return "You classify emails. Pick the 1 or 2 categories that best describe the email's " +
-		"subject, STRICTLY from this list:\n" + strings.Join(MailCategories, ", ") +
+	return "You classify emails and notes. Pick the 1 or 2 categories that best describe the " +
+		"document's subject, STRICTLY from this list:\n" + strings.Join(MailCategories, ", ") +
 		"\n\nReply with ONLY the chosen category names, comma-separated, copied exactly from " +
-		"the list. No other text, no explanation. The email may be in any language."
+		"the list. No other text, no explanation. The document may be in any language."
 }
 
 // classifyMail asks the LLM to bucket a mail into MailCategories. The output is a

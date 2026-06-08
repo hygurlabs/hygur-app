@@ -26,7 +26,7 @@ func (h *KnowledgeHandler) Retag(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer retagInFlight.Store(false)
 		// Detached from the request: the backfill outlives the HTTP call.
-		n, err := h.ingestor.RetagMail(context.Background())
+		n, err := h.ingestor.RetagItems(context.Background())
 		if err != nil {
 			h.logger.Error().Err(err).Int("processed", n).Msg("mail retag failed")
 			return

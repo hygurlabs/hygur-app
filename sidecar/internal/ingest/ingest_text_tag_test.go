@@ -87,9 +87,9 @@ func TestIngestText_NonMailNotTagged(t *testing.T) {
 	}
 }
 
-// RetagMail purges stale auto-tags and re-applies the folder tag. (Topics need
+// RetagItems purges stale auto-tags and re-applies the folder tag. (Topics need
 // the LLM client, absent here.)
-func TestRetagMail_PurgesAndRefoldersMail(t *testing.T) {
+func TestRetagItems_PurgesAndRefoldersMail(t *testing.T) {
 	db, err := store.NewDB(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -121,9 +121,9 @@ func TestRetagMail_PurgesAndRefoldersMail(t *testing.T) {
 		t.Fatalf("AddTagToItem: %v", err)
 	}
 
-	n, err := i.RetagMail(ctx)
+	n, err := i.RetagItems(ctx)
 	if err != nil {
-		t.Fatalf("RetagMail: %v", err)
+		t.Fatalf("RetagItems: %v", err)
 	}
 	if n != 1 {
 		t.Errorf("expected 1 item processed, got %d", n)

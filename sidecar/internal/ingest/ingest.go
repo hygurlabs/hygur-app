@@ -538,7 +538,7 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	// + semantic topics from the Tier-2 extractor, run inline so a freshly-synced
 	// mail is classified immediately (one bounded LLM call per new mail).
 	if sourceType == "mail" {
-		i.tagMailItem(ctx, item, true)
+		i.TagItem(ctx, item, true)
 	}
 
 	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, text, DefaultChunkTokenBudget, now)
@@ -551,49 +551,67 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	return &IngestResult{ContentID: contentID, Status: status, ChunkCount: chunkCount}, nil
 }
 
-// tagMailItem applies the mailbox-folder tag and semantic topic tags to one mail
-// item. Topics come from the Tier-2 LLM extractor: if the item has none cached in
-// its metadata, Tier-2 runs inline and the result is persisted. When prune is
-// true the auto-tag set is capped afterwards; a batch caller passes false and
-// prunes once at the end (pruning mid-batch would orphan tags from earlier items).
-func (i *Ingestor) tagMailItem(ctx context.Context, item *store.KnowledgeItem, prune bool) {
-	if i.autoTagger == nil || item == nil {
-		return
+// classifyItem returns the taxonomy categories for an item: the ones cached in
+// metadata, or a fresh LLM classification. fresh=true means the caller should
+// persist them. Pure of DB writes (safe to run concurrently). Empty when there's
+// no indexing LLM client or no text.
+func (i *Ingestor) classifyItem(ctx context.Context, item *store.KnowledgeItem) (cats []string, fresh bool) {
+	if cached := categoriesFromMetadata(item.Metadata); len(cached) > 0 {
+		return cached, false
 	}
-	mailbox, _ := item.Metadata["mailbox"].(string)
-	i.autoTagger.tagMailFolder(ctx, item.ContentID, mailbox)
+	c := i.tier2Client()
+	if c == nil || strings.TrimSpace(item.NormalizedText) == "" {
+		return nil, false
+	}
+	got, err := classifyMail(ctx, c, item.NormalizedText)
+	if err != nil {
+		log.Printf("[ingest] classify failed for %s: %v", item.ContentID, err)
+		return nil, false
+	}
+	return got, len(got) > 0
+}
 
-	// Semantic category tags: classify the mail into the fixed MailCategories
-	// taxonomy (constrained output → fast + reliable). Cached in metadata so
-	// re-runs reuse the result instead of re-calling the LLM.
-	cats := categoriesFromMetadata(item.Metadata)
-	if len(cats) == 0 {
-		if c := i.tier2Client(); c != nil && strings.TrimSpace(item.NormalizedText) != "" {
-			if got, err := classifyMail(ctx, c, item.NormalizedText); err != nil {
-				log.Printf("[ingest] mail classify failed for %s: %v", item.ContentID, err)
-			} else if len(got) > 0 {
-				cats = got
-				item.Metadata["mail_categories"] = cats
-				if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
-					log.Printf("[ingest] category metadata update failed for %s: %v", item.ContentID, uerr)
-				}
-			}
+// applyItemTags writes the mailbox-folder tag (mail only) + topic category tags,
+// and caches fresh categories. DB writes only — in a concurrent backfill the
+// caller must serialize these (SQLite is a single writer).
+func (i *Ingestor) applyItemTags(ctx context.Context, item *store.KnowledgeItem, cats []string, fresh bool) {
+	if mailbox, _ := item.Metadata["mailbox"].(string); mailbox != "" {
+		i.autoTagger.tagMailFolder(ctx, item.ContentID, mailbox)
+	}
+	if fresh && len(cats) > 0 {
+		item.Metadata["mail_categories"] = cats
+		if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
+			log.Printf("[ingest] category metadata update failed for %s: %v", item.ContentID, uerr)
 		}
 	}
 	i.autoTagger.tagTopics(ctx, item.ContentID, cats)
+}
 
+// TagItem classifies one mail or note into the fixed taxonomy and applies its
+// tags (mailbox folder for mail + topic categories). Used inline on ingest /
+// note creation. prune caps the topic-tag set afterwards.
+func (i *Ingestor) TagItem(ctx context.Context, item *store.KnowledgeItem, prune bool) {
+	if i.autoTagger == nil || item == nil {
+		return
+	}
+	cats, fresh := i.classifyItem(ctx, item)
+	i.applyItemTags(ctx, item, cats, fresh)
 	if prune {
 		_ = i.store.PruneAutoTags(ctx)
 	}
 }
 
-// RetagMail rebuilds mail auto-tags across the whole corpus: it purges the
-// existing auto-tags (so stale per-sender-domain tags disappear), then re-tags
-// every mail item with its mailbox folder + Tier-2 topics, running Tier-2 inline
-// for items that don't have topics cached yet. Pruning happens once at the end.
-// Long-running (one LLM call per untagged mail) — callers should run it async.
-// Returns the number of mail items processed.
-func (i *Ingestor) RetagMail(ctx context.Context) (int, error) {
+// retagConcurrency bounds parallel classify (LLM) calls during a backfill. The
+// indexing model handles several concurrent requests comfortably; tag writes
+// stay serialized behind a mutex since SQLite is a single writer.
+const retagConcurrency = 4
+
+// RetagItems rebuilds auto-tags across all mail + notes: it purges existing
+// auto-tags (dropping stale rules), then classifies + tags every item, reusing
+// categories already cached in metadata. Classification runs up to
+// retagConcurrency in parallel; tag writes are serialized. Pruning happens once
+// at the end. Long-running — callers should run it async. Returns items processed.
+func (i *Ingestor) RetagItems(ctx context.Context) (int, error) {
 	if i.autoTagger == nil || i.store == nil {
 		return 0, nil
 	}
@@ -601,27 +619,45 @@ func (i *Ingestor) RetagMail(ctx context.Context) (int, error) {
 		log.Printf("[ingest] retag: purge auto-tags failed: %v", err)
 	}
 
-	const batch = 200
-	processed := 0
-	for offset := 0; ; offset += batch {
-		items, err := i.store.ListKnowledgeItemsBySourceType(ctx, "mail", batch, offset)
-		if err != nil {
-			return processed, err
-		}
-		if len(items) == 0 {
-			break
-		}
-		for _, it := range items {
-			if ctx.Err() != nil {
-				return processed, ctx.Err()
+	// Collect the corpus to tag (mail + notes).
+	var items []*store.KnowledgeItem
+	for _, src := range []string{"mail", "note"} {
+		const batch = 500
+		for offset := 0; ; offset += batch {
+			page, err := i.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)
+			if err != nil {
+				return 0, err
 			}
-			i.tagMailItem(ctx, it, false)
-			processed++
-		}
-		if len(items) < batch {
-			break
+			items = append(items, page...)
+			if len(page) < batch {
+				break
+			}
 		}
 	}
+
+	var (
+		mu        sync.Mutex
+		wg        sync.WaitGroup
+		sem       = make(chan struct{}, retagConcurrency)
+		processed int
+	)
+	for _, it := range items {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(it *store.KnowledgeItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			cats, fresh := i.classifyItem(ctx, it) // LLM — runs in parallel
+			mu.Lock()
+			i.applyItemTags(ctx, it, cats, fresh) // DB — serialized
+			processed++
+			mu.Unlock()
+		}(it)
+	}
+	wg.Wait()
 	_ = i.store.PruneAutoTags(ctx)
 	return processed, nil
 }

@@ -399,6 +399,8 @@ func main() {
 
 	// Create notes tool early — needed by both NotesHandler and plugin manager.
 	createNoteTool := tools.NewCreateNoteToolWithEmbeddings(db, embeddingService)
+	// Auto-classify newly created notes into the tag taxonomy (same as mail).
+	createNoteTool.SetIngestor(ingestor)
 
 	// Calendar tool — schema-only on the sidecar side. The actual EventKit
 	// write is performed by the macOS app after explicit user confirmation,

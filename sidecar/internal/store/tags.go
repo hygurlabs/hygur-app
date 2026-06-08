@@ -648,31 +648,40 @@ func (d *DB) DedupeTags(ctx context.Context) ([]DedupeResult, error) {
 
 // PruneAutoTags removes the least-used auto-generated tags to stay under MaxAutoTags.
 func (d *DB) PruneAutoTags(ctx context.Context) error {
-	count, err := d.CountAutoTags(ctx)
-	if err != nil {
-		return err
+	// The cap applies to semantic topic tags only (auto_rule 'topic:%'). Mailbox
+	// folder tags ('mail:folder:%') are exempt so they never crowd out categories.
+	var count int
+	if err := d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM tags WHERE is_auto = TRUE AND auto_rule LIKE 'topic:%'").Scan(&count); err != nil {
+		return fmt.Errorf("failed to count topic tags: %w", err)
 	}
-
 	if count <= MaxAutoTags {
 		return nil // No pruning needed
 	}
 
-	// Number of tags to remove
 	toRemove := count - MaxAutoTags
-
-	// Get tags to remove
-	tags, err := d.GetLeastUsedAutoTags(ctx, toRemove)
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT t.id
+		FROM tags t
+		LEFT JOIN item_tags it ON t.id = it.tag_id
+		WHERE t.is_auto = TRUE AND t.auto_rule LIKE 'topic:%'
+		GROUP BY t.id
+		ORDER BY COUNT(it.content_id) ASC, t.created_at ASC
+		LIMIT ?`, toRemove)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to select topic tags to prune: %w", err)
 	}
-
-	// Delete each tag
-	for _, tag := range tags {
-		if err := d.DeleteTag(ctx, tag.ID); err != nil {
-			// Log but continue
-			continue
+	var ids []string
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr == nil {
+			ids = append(ids, id)
 		}
 	}
+	rows.Close() // close the read cursor before deleting (SQLite single writer)
 
+	for _, id := range ids {
+		_ = d.DeleteTag(ctx, id)
+	}
 	return nil
 }
