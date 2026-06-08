@@ -92,8 +92,7 @@ export function FollowUp() {
         {paragraphs.length === 0 && streaming && !reportErr ? (
           <div className="flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13.5px] text-accent">
             <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
-            Hygur synthétise vos connaissances pour se concentrer sur l'essentiel
-            pour la suite…
+            Hygur is synthesizing your knowledge to focus on what matters next…
           </div>
         ) : reportErr && paragraphs.length === 0 ? (
           <p className="text-[13.5px] text-muted">
