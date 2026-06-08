@@ -213,6 +213,10 @@ export const api = {
     getJSON<{ actions: AgendaAction[]; generated_at: string }>(
       `/agenda/context?range_hours=${rangeHours}`,
     ),
+  calendarSummary: () =>
+    getJSON<{ summary: string; window: string; count: number }>(
+      `/agenda/calendar-summary`,
+    ),
 
   // Persistent chat sessions.
   sessions: () => getJSON<{ sessions: SessionSummary[] }>("/sessions"),

@@ -506,6 +506,16 @@ func (s *Server) handleAgendaContext(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "agenda handler not configured")
 }
 
+// handleCalendarSummary handles GET /agenda/calendar-summary.
+func (s *Server) handleCalendarSummary(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.CalendarSummary(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"summary":"","window":"","count":0}`))
+}
+
 // SetConfigHandler attaches the config read/write handler.
 func (s *Server) SetConfigHandler(handler *handlers.ConfigHandler) {
 	s.configHandler = handler

@@ -220,6 +220,23 @@ func (h *BriefHandler) List(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"briefings": out})
 }
 
+// CalendarSummary handles GET /agenda/calendar-summary — a short LLM synthesis of
+// upcoming calendar events for the Calendar view header. Returns an empty summary
+// (200) when nothing is upcoming or the brief task isn't configured, so the UI
+// degrades gracefully.
+func (h *BriefHandler) CalendarSummary(w http.ResponseWriter, r *http.Request) {
+	var res scheduler.CalendarSummaryResult
+	if h.brief != nil {
+		if got, err := h.brief.CalendarSummary(r.Context()); err != nil {
+			h.logger.Warn().Err(err).Msg("calendar summary failed")
+		} else {
+			res = got
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

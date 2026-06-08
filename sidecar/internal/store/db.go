@@ -766,6 +766,46 @@ func (d *DB) CountMailItemsByAccount(ctx context.Context, accountID, provider st
 }
 
 // ListKnowledgeItemsBySourceType returns items filtered by source_type.
+// ListEventsInWindow returns source_type="event" items whose start (stored as
+// created_at by the CalDAV connector) falls within [from, to], earliest first.
+// Lets the calendar summary/view surface upcoming events without scanning the
+// whole (mostly historical) calendar.
+func (d *DB) ListEventsInWindow(ctx context.Context, from, to time.Time, limit int) ([]*KnowledgeItem, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		FROM knowledge_items
+		WHERE source_type = 'event' AND created_at >= ? AND created_at <= ?
+		ORDER BY created_at ASC
+		LIMIT ?
+	`, from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list events in window: %w", err)
+	}
+	defer rows.Close()
+
+	var items []*KnowledgeItem
+	for rows.Next() {
+		item := &KnowledgeItem{}
+		var metadataStr, sourcePath sql.NullString
+		if err := rows.Scan(
+			&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
+			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan event: %w", err)
+		}
+		if sourcePath.Valid {
+			item.SourcePath = &sourcePath.String
+		}
+		if metadataStr.Valid && metadataStr.String != "" {
+			if err := json.Unmarshal([]byte(metadataStr.String), &item.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (d *DB) ListKnowledgeItemsBySourceType(ctx context.Context, sourceType string, limit, offset int) ([]*KnowledgeItem, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at

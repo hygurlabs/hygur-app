@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, CalendarClock } from "lucide-react";
+import { Bell, CalendarClock, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
 import { useDetail } from "../components/DetailPanel";
@@ -99,6 +99,14 @@ export function Calendar() {
     (i) => i.type_id === "caldav",
   );
 
+  // Short LLM synthesis of upcoming events (header card). Empty when nothing's
+  // upcoming; refreshes every 30 min (the endpoint caches ~1h).
+  const calSummary = useQuery({
+    queryKey: ["calendar-summary"],
+    queryFn: () => api.calendarSummary(),
+    refetchInterval: 30 * 60_000,
+  });
+
   // Capture "now" once per render — keeps the derivation below free of impure calls.
   const [now] = useState(() => Date.now());
   const allSynced = (syncedEvents.data?.items ?? [])
@@ -185,6 +193,18 @@ export function Calendar() {
           ) : undefined
         }
       />
+
+      {/* --- LLM synthesis of what's coming up (only when there's something) --- */}
+      {calSummary.data?.summary ? (
+        <div className="mb-7 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-accent">
+            <Sparkles size={13} strokeWidth={2} /> What's coming up
+          </div>
+          <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-text">
+            {calSummary.data.summary}
+          </p>
+        </div>
+      ) : null}
 
       {/* --- Upcoming events (synced CalDAV / iCal calendars) — works in every
            shell (web, cloud, desktop). Primary calendar surface. --- */}

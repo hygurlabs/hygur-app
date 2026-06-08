@@ -185,6 +185,8 @@ func (s *Server) setupRoutes() {
 
 		// Agenda context — upcoming deadlines and actions within a time window.
 		r.Get("/agenda/context", s.handleAgendaContext)
+		// Calendar summary — short LLM synthesis of upcoming events (header card).
+		r.Get("/agenda/calendar-summary", s.handleCalendarSummary)
 
 		// On-demand brief — POST /brief/run with optional JSON body
 		// {"project_id": "...", "lookback_hours": 24}. The brief runs
