@@ -532,6 +532,19 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 		return nil, fmt.Errorf("failed to insert knowledge item: %w", err)
 	}
 
+	// Auto-tag mail pushed as text (the edge agent's Proton path). The file and
+	// direct-IMAP ingest paths tag at ingest time, but this text-push path didn't
+	// — so cloud/edge mail had no tags at all. Derive tags from the sender domain
+	// and mailbox folder carried in the payload (Author / metadata.from + mailbox).
+	if i.autoTagger != nil && sourceType == "mail" {
+		sender := in.Author
+		if sender == "" {
+			sender, _ = metadata["from"].(string)
+		}
+		mailbox, _ := metadata["mailbox"].(string)
+		_, _ = i.autoTagger.TagMail(ctx, contentID, sender, mailbox)
+	}
+
 	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, text, DefaultChunkTokenBudget, now)
 	if idxErr != nil {
 		// Keep the item (chunks are FTS-indexed); do NOT roll back on embed
@@ -540,6 +553,41 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	}
 
 	return &IngestResult{ContentID: contentID, Status: status, ChunkCount: chunkCount}, nil
+}
+
+// RetagMail re-applies mail auto-tags to every already-ingested mail item, using
+// the sender + mailbox stored in each item's metadata. It backfills tags for mail
+// ingested before the text-push path learned to tag; TagMail is idempotent, so
+// it's safe to run more than once. Returns the number of items processed.
+func (i *Ingestor) RetagMail(ctx context.Context) (int, error) {
+	if i.autoTagger == nil || i.store == nil {
+		return 0, nil
+	}
+	const batch = 500
+	processed := 0
+	for offset := 0; ; offset += batch {
+		items, err := i.store.ListKnowledgeItemsBySourceType(ctx, "mail", batch, offset)
+		if err != nil {
+			return processed, err
+		}
+		if len(items) == 0 {
+			break
+		}
+		for _, it := range items {
+			sender, _ := it.Metadata["from"].(string)
+			mailbox, _ := it.Metadata["mailbox"].(string)
+			if sender == "" && mailbox == "" {
+				continue
+			}
+			if _, err := i.autoTagger.TagMail(ctx, it.ContentID, sender, mailbox); err == nil {
+				processed++
+			}
+		}
+		if len(items) < batch {
+			break
+		}
+	}
+	return processed, nil
 }
 
 func hashContent(text string) string {

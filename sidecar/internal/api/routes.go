@@ -78,6 +78,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/upload", s.handleKnowledgeUpload)
 			r.Post("/search", s.handleKnowledgeSearch)
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
+			r.Post("/retag", s.handleKnowledgeRetag)
 			r.Delete("/reset", s.handleKnowledgeReset)
 			r.Get("/{content_id}", s.handleKnowledgeGet)
 			r.Delete("/{content_id}", s.handleKnowledgeDelete)
@@ -375,6 +376,15 @@ func (s *Server) handleKnowledgeReset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKnowledgeReembedMissing(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.ReembedMissing(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeRetag handles POST /knowledge/retag — backfill mail auto-tags.
+func (s *Server) handleKnowledgeRetag(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.Retag(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
