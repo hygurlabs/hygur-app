@@ -37,9 +37,9 @@ func NewDailyBrief(store *store.DB, llmClient *llm.Client, broker *events.Broker
 		cfg.MaxItems = 80
 	}
 	if cfg.LookbackHours <= 0 {
-		// 7 days catches yesterday-evening mail without making the morning
-		// brief feel stale on Mondays.
-		cfg.LookbackHours = 168
+		// Daily = delta: the brief reports what moved since yesterday, not a
+		// rolling 7-day re-summary. Matches the config loader default (48h).
+		cfg.LookbackHours = 48
 	}
 	if cfg.HourLocal == "" {
 		cfg.HourLocal = "08:00"
@@ -534,24 +534,25 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 	} else {
 		hours := opts.LookbackHours
 		if hours == 0 {
-			hours = 168
+			hours = 48
 		}
 		if hours <= 72 {
-			sb.WriteString("Voici l'activité des dernières ")
+			sb.WriteString("Voici ce qui a bougé dans les dernières ")
 			sb.WriteString(strconv.Itoa(hours))
 			sb.WriteString(" h ")
 		} else {
-			sb.WriteString("Voici l'activité des ")
+			sb.WriteString("Voici ce qui a bougé dans les ")
 			sb.WriteString(strconv.Itoa(hours / 24))
 			sb.WriteString(" derniers jours ")
 		}
 		sb.WriteString("dans la base personnelle de l'utilisateur (emails, notes, documents). ")
-		sb.WriteString("Génère un brief opérationnel en français qui commence par l'essentiel. Structure :\n\n")
+		sb.WriteString("C'est un point quotidien : concentre-toi sur le DELTA — ce qui est nouveau ou qui demande un suivi — pas sur un résumé exhaustif. Structure :\n\n")
 		sb.WriteString("## Points importants\n")
 		sb.WriteString("Les 3 à 6 éléments qui comptent vraiment sur la période : ce qui demande une action, une décision, ou approche d'une échéance. Une puce par élément, avec l'enjeu et l'action recommandée si pertinent. Si vraiment rien de notable, écris une seule puce : « RAS — rien de critique sur la période. »\n\n")
+		sb.WriteString("## Boucles ouvertes\n")
+		sb.WriteString("Échanges encore en suspens, visibles dans le contexte : un email resté sans réponse, une demande à laquelle l'utilisateur n'a pas encore répondu, un engagement pris non confirmé. Format « [date] — [interlocuteur / sujet] → en attente de [quoi] ». Uniquement ce qui ressort réellement des éléments ; si rien n'est en attente, omets entièrement la section.\n\n")
 		sb.WriteString("## À traiter maintenant\n")
 		sb.WriteString("- Paiements / factures : montant, échéance, à qui.\n")
-		sb.WriteString("- Emails attendant une réponse : « De [expéditeur] — [sujet] → [action recommandée] ».\n")
 		sb.WriteString("- Échéances administratives, fiscales ou juridiques proches.\n\n")
 		sb.WriteString("## Tâches à créer\n")
 		sb.WriteString("Actions à ajouter à la todo (verbe d'action en tête), avec échéance et montant quand ils sont présents.\n\n")

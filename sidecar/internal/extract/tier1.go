@@ -182,6 +182,13 @@ func extractAmounts(text string) []AmountEntity {
 		if numeric == "" {
 			continue
 		}
+		// Reject bare digit-runs that are almost certainly reference / account /
+		// phone numbers sitting next to a currency token ("365138779 EUR"), not
+		// monetary amounts. A real large amount carries a thousands or decimal
+		// separator; 8+ bare digits (≥ 10 M) beside EUR is noise.
+		if digits := strings.TrimSpace(m[1]); isBareDigits(digits) && len(digits) >= 8 {
+			continue
+		}
 		key := numeric + "|EUR"
 		if seen[key] {
 			continue
@@ -190,6 +197,20 @@ func extractAmounts(text string) []AmountEntity {
 		out = append(out, AmountEntity{Value: numeric, Currency: "EUR", Raw: raw})
 	}
 	return out
+}
+
+// isBareDigits reports whether s is a non-empty run of ASCII digits only (no
+// space, dot or comma) — used to spot separator-less reference numbers.
+func isBareDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeAmount converts European-format numbers ("7 421,85" or "7.421,85")
