@@ -244,6 +244,8 @@ export const api = {
     }),
   unlinkItemFromProject: (contentId: string) =>
     del(`/knowledge/${cidPath(contentId)}/project`),
+  dismissProjectSuggestion: (contentId: string) =>
+    del(`/knowledge/${cidPath(contentId)}/project-suggestion`),
 
   // @-mention autocomplete (projects + notes/mails/docs).
   mentions: (q: string) =>

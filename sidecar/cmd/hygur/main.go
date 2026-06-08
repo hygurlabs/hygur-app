@@ -844,6 +844,25 @@ func main() {
 	briefHandler := handlers.NewBriefHandler(dailyBrief, logger)
 	server.SetBriefHandler(briefHandler)
 
+	// W4: project-suggestion backfill — runs once in the background at boot
+	// (idempotent: skips items already linked or already classified), so a
+	// freshly-provisioned tenant gets project suggestions without manual action.
+	// Classification is parallelized inside SuggestProjects.
+	go func() {
+		bctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Second): // let the server come up first
+		}
+		if n, err := ingestor.SuggestProjects(bctx); err != nil {
+			logger.Warn().Err(err).Msg("project-suggestion backfill failed")
+		} else if n > 0 {
+			logger.Info().Int("processed", n).Msg("project-suggestion backfill complete")
+		}
+	}()
+
 	// Meeting briefings — short RAG briefings ahead of events/deadlines.
 	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
 	//    each event (it owns EventKit); the briefer generates + emits the SSE.

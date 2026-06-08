@@ -89,6 +89,8 @@ func (s *Server) setupRoutes() {
 			// Project link operations on knowledge items
 			r.Post("/{content_id}/project", s.handleLinkProject)
 			r.Delete("/{content_id}/project", s.handleUnlinkProject)
+			// Dismiss the proactive project suggestion (W4).
+			r.Delete("/{content_id}/project-suggestion", s.handleDismissProjectSuggestion)
 		})
 
 		// Tag endpoints
@@ -790,6 +792,15 @@ func (s *Server) handleLinkProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnlinkProject(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.UnlinkProject(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleDismissProjectSuggestion handles DELETE /knowledge/{content_id}/project-suggestion.
+func (s *Server) handleDismissProjectSuggestion(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.DismissProjectSuggestion(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

@@ -596,6 +596,11 @@ func (i *Ingestor) TagItem(ctx context.Context, item *store.KnowledgeItem, prune
 	}
 	cats, fresh := i.classifyItem(ctx, item)
 	i.applyItemTags(ctx, item, cats, fresh)
+	// Inline project suggestion (W4): cache the best-matching project so the
+	// detail panel can offer "Add to <project>".
+	if projects := i.activeProjects(ctx); len(projects) > 0 {
+		i.suggestProjectForItem(ctx, item, projects)
+	}
 	if prune {
 		_ = i.store.PruneAutoTags(ctx)
 	}

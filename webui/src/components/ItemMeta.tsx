@@ -52,6 +52,20 @@ export function ItemMeta({ contentId }: { contentId: string }) {
     onSuccess: invalidate,
   });
 
+  const dismissSuggestion = useMutation({
+    mutationFn: () => api.dismissProjectSuggestion(contentId),
+    onSuccess: invalidate,
+  });
+
+  // Proactive project suggestion (W4): only when the item has no project yet.
+  const suggestedId =
+    !projectId && typeof item?.metadata?.suggested_project_id === "string"
+      ? (item.metadata.suggested_project_id as string)
+      : "";
+  const suggestedName = suggestedId
+    ? (projectsQ.data ?? []).find((p) => p.id === suggestedId)?.name
+    : undefined;
+
   if (itemQ.isLoading || !item) return null;
 
   return (
@@ -71,6 +85,28 @@ export function ItemMeta({ contentId }: { contentId: string }) {
           ))}
         </select>
       </div>
+      {suggestedName && (
+        <div className="mb-3 flex items-center gap-2.5">
+          <span className="w-14 shrink-0" />
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="truncate rounded-full bg-accent-weak px-2 py-0.5 text-[12px] text-accent">
+              Suggested: {suggestedName}
+            </span>
+            <button
+              onClick={() => setProject.mutate(suggestedId)}
+              className="shrink-0 text-[12px] font-medium text-accent hover:underline"
+            >
+              Add
+            </button>
+            <button
+              onClick={() => dismissSuggestion.mutate()}
+              className="shrink-0 text-[12px] text-muted hover:text-text"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex items-start gap-2.5">
         <span className="w-14 shrink-0 pt-2 text-[12px] text-muted">Tags</span>
         <div className="min-w-0 flex-1">
