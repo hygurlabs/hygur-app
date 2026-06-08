@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -258,6 +259,40 @@ func (h *BriefHandler) FollowUp(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// FollowUpReport handles GET /knowledge/followup/report — a short, grounded
+// natural-language report streamed over SSE (`data: {"delta":"…"}` … then
+// `data: {"done":true}`), so the UI can render it as it's written. Cached ~1h.
+func (h *BriefHandler) FollowUpReport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable nginx buffering
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		fmt.Fprintf(w, "data: %s\n\n", `{"error":"streaming not supported"}`)
+		return
+	}
+
+	if h.brief != nil {
+		err := h.brief.StreamFollowUpReport(r.Context(), func(delta string) error {
+			b, mErr := json.Marshal(map[string]string{"delta": delta})
+			if mErr != nil {
+				return mErr
+			}
+			if _, wErr := fmt.Fprintf(w, "data: %s\n\n", b); wErr != nil {
+				return wErr
+			}
+			flusher.Flush()
+			return nil
+		})
+		if err != nil && r.Context().Err() == nil {
+			h.logger.Warn().Err(err).Msg("follow-up report stream failed")
+		}
+	}
+	fmt.Fprintf(w, "data: %s\n\n", `{"done":true}`)
+	flusher.Flush()
 }
 
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {

@@ -74,6 +74,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/diagnostic", s.handleKnowledgeDiagnostic)
 			r.Get("/contradictions", s.handleKnowledgeContradictions)
 			r.Get("/followup", s.handleKnowledgeFollowup)
+			r.Get("/followup/report", s.handleKnowledgeFollowupReport)
 			r.Post("/ingest", s.handleKnowledgeIngest)
 			r.Post("/ingest-text", s.handleKnowledgeIngestText)
 			r.Post("/ingest-folder", s.handleKnowledgeIngestFolder)

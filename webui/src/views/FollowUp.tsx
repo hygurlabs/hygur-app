@@ -1,26 +1,69 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle } from "lucide-react";
-import { api } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, ChevronRight, Sparkles } from "lucide-react";
+import { api, streamFollowupReport } from "../lib/api";
 import { useDetail } from "../components/DetailPanel";
 import { fmtDate, fmtDateTime } from "../lib/format";
-import {
-  EmptyState,
-  ErrorBanner,
-  Page,
-  PageHeader,
-  Skeleton,
-} from "../components/ui";
+import { ErrorBanner, Page, PageHeader } from "../components/ui";
+import { useQuery } from "@tanstack/react-query";
 import type { DigestEntry } from "../lib/types";
 
 export function FollowUp() {
   const openDetail = useDetail();
-  const q = useQuery({
-    queryKey: ["followup"],
-    queryFn: () => api.followup(),
-  });
 
-  // Open the cited source item in the reader panel (lazy body fetch; the
-  // panel's ItemMeta loads project/tags by content_id on its own).
+  // --- Streamed natural-language report (hero) ---
+  const targetRef = useRef("");
+  const [target, setTarget] = useState("");
+  const [shown, setShown] = useState(0);
+  const [streaming, setStreaming] = useState(true);
+  const [reportErr, setReportErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    targetRef.current = "";
+    streamFollowupReport(
+      {
+        onDelta: (d) => {
+          targetRef.current += d;
+          setTarget(targetRef.current);
+        },
+        onDone: () => setStreaming(false),
+        onError: (m) => {
+          setReportErr(m);
+          setStreaming(false);
+        },
+      },
+      ctrl.signal,
+    ).catch(() => {});
+    return () => ctrl.abort();
+  }, []);
+
+  // Type-out animation: reveal ~180 chars/s toward whatever has streamed in.
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const tick = (t: number) => {
+      if (!last) last = t;
+      const dt = t - last;
+      last = t;
+      setShown((s) => {
+        const len = targetRef.current.length;
+        return s >= len ? s : Math.min(len, s + Math.max(1, Math.round(dt * 0.18)));
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const visible = target.slice(0, shown);
+  const paragraphs = visible.split(/\n{2,}/).filter((p) => p.trim().length > 0);
+  const typing = streaming || shown < target.length;
+
+  // --- Structured digest (contradictions + collapsible topics) ---
+  const digest = useQuery({ queryKey: ["followup"], queryFn: () => api.followup() });
+  const contradictions = digest.data?.contradictions ?? [];
+  const topics = digest.data?.topics ?? [];
+
   const openItem = async (contentId: string, fallbackTitle: string) => {
     try {
       const it = await api.knowledgeItem(contentId);
@@ -37,69 +80,81 @@ export function FollowUp() {
     }
   };
 
-  const topics = q.data?.topics ?? [];
-  const contradictions = q.data?.contradictions ?? [];
-  const empty = topics.length === 0 && contradictions.length === 0;
-
   return (
     <Page>
       <PageHeader
         title="Follow-up"
-        subtitle="A grounded read of your recent mail & notes — the active topics, and anything that genuinely contradicts. Every line is cited; nothing is invented."
+        subtitle="A grounded read of your recent mail & notes — what's going on and what to focus on next. Refreshes hourly; every fact comes from your own messages."
       />
 
-      {q.isLoading ? (
-        <Skeleton rows={5} />
-      ) : q.isError ? (
-        <ErrorBanner
-          message="Couldn't load the follow-up digest."
-          onRetry={() => q.refetch()}
-        />
-      ) : empty ? (
-        <EmptyState
-          title="Nothing to report"
-          hint={`Hygur read ${q.data?.scanned ?? 0} recent mails & notes and found no active topic or contradiction worth flagging. This refreshes as new mail arrives.`}
-        />
-      ) : (
-        <>
-          {contradictions.length > 0 && (
-            <section className="mb-9">
-              <Label tone="warn">To clarify</Label>
-              <ul className="flex flex-col gap-3">
-                {contradictions.map((c, i) => (
-                  <EntryCard key={i} entry={c} warn onOpen={openItem} />
-                ))}
-              </ul>
-            </section>
-          )}
-
-          <section>
-            <Label>Active topics</Label>
-            {topics.length > 0 ? (
-              <ul className="flex flex-col gap-3">
-                {topics.map((t, i) => (
-                  <EntryCard key={i} entry={t} onOpen={openItem} />
-                ))}
-              </ul>
-            ) : (
-              <p className="text-[13.5px] text-muted">
-                No distinct topic stood out in your recent mail.
+      {/* Report — streamed like an assistant writing. */}
+      <section className="mb-9">
+        {paragraphs.length === 0 && streaming && !reportErr ? (
+          <div className="flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13.5px] text-accent">
+            <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
+            Hygur synthétise vos connaissances pour se concentrer sur l'essentiel
+            pour la suite…
+          </div>
+        ) : reportErr && paragraphs.length === 0 ? (
+          <p className="text-[13.5px] text-muted">
+            The report is unavailable right now. The details below still work.
+          </p>
+        ) : (
+          <div className="prose-answer text-[14.5px] leading-relaxed text-text">
+            {paragraphs.map((p, i) => (
+              <p key={i} className="mb-3 last:mb-0">
+                {p}
+                {typing && i === paragraphs.length - 1 && (
+                  <span className="ml-0.5 inline-block h-[1.05em] w-[2px] -translate-y-[1px] animate-pulse bg-accent align-middle" />
+                )}
               </p>
-            )}
-          </section>
-        </>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Contradictions — the verified, cited signal stays visible. */}
+      {contradictions.length > 0 && (
+        <section className="mb-8">
+          <Label tone="warn">To clarify</Label>
+          <ul className="flex flex-col gap-3">
+            {contradictions.map((c, i) => (
+              <EntryCard key={i} entry={c} warn onOpen={openItem} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Active topics — hidden by default to keep the report front and centre. */}
+      {topics.length > 0 && (
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint transition-colors hover:text-muted">
+            <ChevronRight
+              size={13}
+              strokeWidth={2.2}
+              className="transition-transform group-open:rotate-90"
+            />
+            Active topics ({topics.length})
+          </summary>
+          <ul className="mt-3 flex flex-col gap-3">
+            {topics.map((t, i) => (
+              <EntryCard key={i} entry={t} onOpen={openItem} />
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {digest.isError && (
+        <ErrorBanner
+          message="Couldn't load topics & contradictions."
+          onRetry={() => digest.refetch()}
+        />
       )}
     </Page>
   );
 }
 
-function Label({
-  children,
-  tone,
-}: {
-  children: string;
-  tone?: "warn";
-}) {
+function Label({ children, tone }: { children: string; tone?: "warn" }) {
   return (
     <h2
       className={`mb-2.5 flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] ${

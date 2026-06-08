@@ -527,6 +527,18 @@ func (s *Server) handleKnowledgeFollowup(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write([]byte(`{"topics":[],"contradictions":[],"scanned":0,"window":""}`))
 }
 
+// handleKnowledgeFollowupReport handles GET /knowledge/followup/report — the
+// streamed natural-language report (SSE). Delegates to the BriefHandler.
+func (s *Server) handleKnowledgeFollowupReport(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.FollowUpReport(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write([]byte("data: {\"done\":true}\n\n"))
+}
+
 // SetConfigHandler attaches the config read/write handler.
 func (s *Server) SetConfigHandler(handler *handlers.ConfigHandler) {
 	s.configHandler = handler

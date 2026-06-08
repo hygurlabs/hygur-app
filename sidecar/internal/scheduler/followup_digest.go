@@ -143,7 +143,9 @@ func (d *DailyBrief) gatherFollowupItems(ctx context.Context) ([]*store.Knowledg
 	return recent, nil
 }
 
-func (d *DailyBrief) generateFollowup(ctx context.Context, items []*store.KnowledgeItem) FollowUpDigest {
+// numberedItemsContext renders the items as a numbered list the model can cite
+// by index. Shared by the structured digest and the prose report.
+func numberedItemsContext(items []*store.KnowledgeItem) string {
 	var sb strings.Builder
 	sb.WriteString("Messages (numérotés) :\n")
 	for i, it := range items {
@@ -153,11 +155,14 @@ func (d *DailyBrief) generateFollowup(ctx context.Context, items []*store.Knowle
 		}
 		sb.WriteByte('\n')
 	}
+	return sb.String()
+}
 
+func (d *DailyBrief) generateFollowup(ctx context.Context, items []*store.KnowledgeItem) FollowUpDigest {
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: followupSystemPrompt},
-			{Role: "user", Content: sb.String()},
+			{Role: "user", Content: numberedItemsContext(items)},
 		},
 		Temperature:        0.2,
 		MaxTokens:          1200,
@@ -290,6 +295,94 @@ func snippet(text string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// --- prose report (streamed, human-readable) -------------------------------
+
+const followupReportTTL = time.Hour
+
+var (
+	reportMu      sync.Mutex
+	reportKey     string
+	reportValue   string
+	reportExpires time.Time
+)
+
+// followupReportSystemPrompt asks for a short, human, grounded report — the same
+// "facts before reply" discipline as the digest, but in natural prose.
+const followupReportSystemPrompt = `Tu es l'assistant personnel d'un indépendant. Tu fais le point, comme un vrai assistant qui lui parle, sur ce qui ressort de ses messages récents et sur ce qui mérite son attention pour la suite.
+
+À partir UNIQUEMENT des messages listés ci-dessous (mails et notes récents), écris EXACTEMENT trois paragraphes en français, d'un ton naturel et humain :
+1. Une vue d'ensemble : les sujets qui occupent la période.
+2. Ce qui mérite attention pour la suite : échéances, demandes en attente, et — UNIQUEMENT si deux messages se contredisent réellement sur la même chose — la contradiction à clarifier.
+3. Une suggestion de priorités concrète pour les prochains jours.
+
+Règles STRICTES :
+- N'utilise QUE les faits présents dans les messages. N'invente JAMAIS un montant, une date, un nom, une décision ni un événement absent.
+- Si une information n'est pas dans les messages, ne la devine pas et ne la mentionne pas.
+- Trois paragraphes de prose séparés par une ligne vide. Pas de titres, pas de puces, pas de formule de politesse, pas de préambule du type « Voici ».
+- Concis : 2 à 4 phrases par paragraphe.
+- Raisonnement interne minimal.`
+
+// StreamFollowUpReport streams a short, grounded natural-language report of
+// recent mail + notes to `emit`, paragraph by paragraph as the model writes it.
+// Cached ~1h: a fresh cache replays in one emit; a miss streams live from the
+// inference model and caches the result. Returns nil (nothing emitted) when the
+// brief task or LLM isn't configured.
+func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, emit func(string) error) error {
+	if d == nil || d.store == nil || d.llm == nil {
+		return nil
+	}
+	items, err := d.gatherFollowupItems(ctx)
+	if err != nil {
+		return err
+	}
+	key := followupCacheKey(items)
+
+	reportMu.Lock()
+	if reportKey == key && reportValue != "" && time.Now().Before(reportExpires) {
+		cached := reportValue
+		reportMu.Unlock()
+		return emit(cached)
+	}
+	reportMu.Unlock()
+
+	if len(items) == 0 {
+		msg := "Rien de neuf à synthétiser pour l'instant. Dès que de nouveaux mails ou de nouvelles notes arriveront, je ferai le point ici sur ce qui compte pour la suite."
+		cacheReport(key, msg)
+		return emit(msg)
+	}
+
+	var sb strings.Builder
+	streamErr := d.llm.StreamChat(ctx, llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: "system", Content: followupReportSystemPrompt},
+			{Role: "user", Content: numberedItemsContext(items)},
+		},
+		Stream:             true,
+		Temperature:        0.4,
+		MaxTokens:          700,
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+	}, func(delta string, done bool, _ *llm.Usage) error {
+		if done || delta == "" {
+			return nil
+		}
+		sb.WriteString(delta)
+		return emit(delta)
+	})
+	if streamErr != nil {
+		return streamErr // partial output left uncached → regenerated next time
+	}
+	if full := strings.TrimSpace(stripReasoningTags(sb.String())); full != "" {
+		cacheReport(key, full)
+	}
+	return nil
+}
+
+func cacheReport(key, text string) {
+	reportMu.Lock()
+	reportKey, reportValue, reportExpires = key, text, time.Now().Add(followupReportTTL)
+	reportMu.Unlock()
 }
 
 func followupCacheKey(items []*store.KnowledgeItem) string {

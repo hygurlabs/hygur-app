@@ -401,6 +401,48 @@ export interface ChatOptions {
   focusScope?: FocusScope;
 }
 
+/** Streams the grounded Follow-up report (3-paragraph prose) over SSE so the UI
+ *  can render it as it's written. One-shot: throwing in onerror disables retry. */
+export async function streamFollowupReport(
+  handlers: {
+    onDelta?: (delta: string) => void;
+    onDone?: () => void;
+    onError?: (msg: string) => void;
+  },
+  signal: AbortSignal,
+): Promise<void> {
+  await fetchEventSource(u("/knowledge/followup/report"), {
+    method: "GET",
+    headers: authHeaders(),
+    signal,
+    openWhenHidden: true,
+    onmessage(msg) {
+      const data = msg.data;
+      if (!data) return;
+      let evt: Record<string, unknown>;
+      try {
+        evt = JSON.parse(data);
+      } catch {
+        return;
+      }
+      if (typeof evt.error === "string") {
+        handlers.onError?.(evt.error);
+        return;
+      }
+      if (typeof evt.delta === "string" && evt.delta) {
+        handlers.onDelta?.(evt.delta);
+      }
+      if (evt.done === true) {
+        handlers.onDone?.();
+      }
+    },
+    onerror(err) {
+      handlers.onError?.(err instanceof Error ? err.message : String(err));
+      throw err;
+    },
+  });
+}
+
 /** Streams a RAG chat turn over SSE. EventSource can't POST with headers, so
  *  we use fetch-event-source. Throwing in onerror disables its auto-retry —
  *  a chat turn is one-shot, not a long-lived subscription. */
