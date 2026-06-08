@@ -18,6 +18,24 @@ export function passkeysSupported(): boolean {
   return typeof window !== "undefined" && typeof window.PublicKeyCredential !== "undefined";
 }
 
+/** WebKit (Safari, and every iOS browser including Chrome — they're all WKWebView)
+ *  checks `document.hasFocus()` inside navigator.credentials.get()/create() and
+ *  throws "The document is not focused" when it's false. On mobile that happens
+ *  right after the tap starting sign-in dismisses the soft keyboard, while the
+ *  options fetch is in flight. Reclaim window focus and wait a beat for the
+ *  webview to settle before the ceremony. No-op when already focused, so desktop
+ *  and Android take the fast path unchanged. */
+async function ensureDocumentFocused(): Promise<void> {
+  if (typeof document === "undefined" || document.hasFocus()) return;
+  // Dismissing the keyboard is what drops focus; blur the field, then reclaim it.
+  (document.activeElement as HTMLElement | null)?.blur?.();
+  for (let i = 0; i < 10; i++) {
+    window.focus();
+    if (document.hasFocus()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 async function consolePost(path: string, body?: unknown, token?: string): Promise<Response> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -37,6 +55,7 @@ export async function passkeyLogin(instance: string): Promise<void> {
   });
   if (!begin.ok) throw new Error("Unknown instance, or no passkey is registered for it.");
   const opts = (await begin.json()) as { publicKey: unknown; session_id: string };
+  await ensureDocumentFocused();
   const assertion = await startAuthentication({ optionsJSON: opts.publicKey as never });
   const finish = await fetch(
     `${CONSOLE_URL}/passkey/login/finish?s=${encodeURIComponent(opts.session_id)}`,
@@ -63,6 +82,7 @@ export async function registerPasskey(accessToken: string): Promise<void> {
   const begin = await consolePost("/passkey/register/begin", undefined, accessToken);
   if (!begin.ok) throw new Error("Could not start passkey registration.");
   const opts = (await begin.json()) as { publicKey: unknown; session_id: string };
+  await ensureDocumentFocused();
   const attestation = await startRegistration({ optionsJSON: opts.publicKey as never });
   const finish = await fetch(
     `${CONSOLE_URL}/passkey/register/finish?s=${encodeURIComponent(opts.session_id)}`,
