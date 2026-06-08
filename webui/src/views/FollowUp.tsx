@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { GitCompareArrows } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { api } from "../lib/api";
 import { useDetail } from "../components/DetailPanel";
-import { fmtDateTime } from "../lib/format";
+import { fmtDate, fmtDateTime } from "../lib/format";
 import {
   EmptyState,
   ErrorBanner,
@@ -10,24 +10,16 @@ import {
   PageHeader,
   Skeleton,
 } from "../components/ui";
-import type { Conflict } from "../lib/types";
-
-const TYPE_LABEL: Record<string, string> = {
-  amount: "Amount",
-  due_date: "Due date",
-  iban: "IBAN",
-  vat: "VAT number",
-  structured_comm: "Payment reference",
-};
+import type { DigestEntry } from "../lib/types";
 
 export function FollowUp() {
   const openDetail = useDetail();
   const q = useQuery({
-    queryKey: ["contradictions"],
-    queryFn: () => api.contradictions(),
+    queryKey: ["followup"],
+    queryFn: () => api.followup(),
   });
 
-  // Open the source item in the reader panel (fetches the body lazily; the
+  // Open the cited source item in the reader panel (lazy body fetch; the
   // panel's ItemMeta loads project/tags by content_id on its own).
   const openItem = async (contentId: string, fallbackTitle: string) => {
     try {
@@ -45,94 +37,115 @@ export function FollowUp() {
     }
   };
 
-  const conflicts = q.data?.conflicts ?? [];
+  const topics = q.data?.topics ?? [];
+  const contradictions = q.data?.contradictions ?? [];
+  const empty = topics.length === 0 && contradictions.length === 0;
 
   return (
     <Page>
       <PageHeader
         title="Follow-up"
-        subtitle="Divergent facts Hygur spots across a mail thread — both sides cited, so you decide. Hygur signals, it never asserts."
+        subtitle="A grounded read of your recent mail & notes — the active topics, and anything that genuinely contradicts. Every line is cited; nothing is invented."
       />
 
       {q.isLoading ? (
-        <Skeleton rows={4} />
+        <Skeleton rows={5} />
       ) : q.isError ? (
         <ErrorBanner
-          message="Couldn't load contradictions."
+          message="Couldn't load the follow-up digest."
           onRetry={() => q.refetch()}
         />
-      ) : conflicts.length === 0 ? (
+      ) : empty ? (
         <EmptyState
-          title="No contradictions found"
-          hint={`Hygur scanned ${q.data?.scanned ?? 0} mails and found no conflicting amounts, dates, IBANs, VAT numbers or payment references within a thread. New conflicts will appear here as mail arrives.`}
+          title="Nothing to report"
+          hint={`Hygur read ${q.data?.scanned ?? 0} recent mails & notes and found no active topic or contradiction worth flagging. This refreshes as new mail arrives.`}
         />
       ) : (
         <>
-          <p className="mb-5 text-[13px] text-muted">
-            {conflicts.length} point{conflicts.length === 1 ? "" : "s"} to clarify
-            across {q.data?.scanned ?? 0} mails.
-          </p>
-          <ul className="flex flex-col gap-4">
-            {conflicts.map((c, i) => (
-              <ConflictCard key={i} conflict={c} onOpen={openItem} />
-            ))}
-          </ul>
+          {contradictions.length > 0 && (
+            <section className="mb-9">
+              <Label tone="warn">To clarify</Label>
+              <ul className="flex flex-col gap-3">
+                {contradictions.map((c, i) => (
+                  <EntryCard key={i} entry={c} warn onOpen={openItem} />
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <section>
+            <Label>Active topics</Label>
+            {topics.length > 0 ? (
+              <ul className="flex flex-col gap-3">
+                {topics.map((t, i) => (
+                  <EntryCard key={i} entry={t} onOpen={openItem} />
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[13.5px] text-muted">
+                No distinct topic stood out in your recent mail.
+              </p>
+            )}
+          </section>
         </>
       )}
     </Page>
   );
 }
 
-function ConflictCard({
-  conflict,
-  onOpen,
+function Label({
+  children,
+  tone,
 }: {
-  conflict: Conflict;
-  onOpen: (contentId: string, title: string) => void;
+  children: string;
+  tone?: "warn";
 }) {
-  const high = conflict.severity === "high";
   return (
-    <li
-      className={`rounded-xl border bg-surface ${
-        high ? "border-danger/40" : "border-border"
+    <h2
+      className={`mb-2.5 flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] ${
+        tone === "warn" ? "text-danger" : "text-faint"
       }`}
     >
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <GitCompareArrows
-          size={15}
-          strokeWidth={1.9}
-          className={high ? "text-danger" : "text-muted"}
-        />
-        <span
-          className={`text-[11px] font-semibold uppercase tracking-wide ${
-            high ? "text-danger" : "text-muted"
-          }`}
-        >
-          {TYPE_LABEL[conflict.type] ?? conflict.type}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-muted">
-          {conflict.cluster}
-        </span>
-      </div>
-      <ul>
-        {conflict.members.map((m, j) => (
-          <li
-            key={`${m.content_id}-${j}`}
-            onClick={() => onOpen(m.content_id, m.title)}
-            className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-4 py-3 last:border-b-0 transition-colors hover:bg-surface2"
-          >
-            <span className="tnum truncate font-medium text-text">{m.value}</span>
-            <span className="tnum whitespace-nowrap text-[12px] text-muted">
-              {fmtDateTime(m.date)}
-            </span>
-            {m.from && (
-              <span className="col-span-2 truncate text-[12.5px] text-muted">
-                {m.from}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+      {tone === "warn" && <AlertTriangle size={13} strokeWidth={2} />}
+      {children}
+    </h2>
+  );
+}
+
+function EntryCard({
+  entry,
+  warn,
+  onOpen,
+}: {
+  entry: DigestEntry;
+  warn?: boolean;
+  onOpen: (contentId: string, title: string) => void;
+}) {
+  return (
+    <li
+      className={`rounded-xl border bg-surface px-4 py-3.5 ${
+        warn ? "border-danger/40" : "border-border"
+      }`}
+    >
+      {entry.title && (
+        <div className="mb-1 font-medium text-text">{entry.title}</div>
+      )}
+      <p className="text-[14px] leading-relaxed text-text">{entry.note}</p>
+      {entry.sources.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {entry.sources.map((s) => (
+            <button
+              key={s.content_id}
+              onClick={() => onOpen(s.content_id, s.title)}
+              title={s.title}
+              className="tnum max-w-[16rem] truncate rounded-full border border-border px-2.5 py-0.5 text-[11.5px] text-muted transition-colors hover:border-accent hover:text-accent"
+            >
+              {fmtDate(s.date)}
+              {s.from ? ` · ${s.from}` : ""}
+            </button>
+          ))}
+        </div>
+      )}
     </li>
   );
 }

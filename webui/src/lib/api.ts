@@ -11,6 +11,7 @@ import type {
   ConnectorInstance,
   EncryptionStatus,
   FocusScope,
+  FollowUpDigest,
   KnowledgeItem,
   MarketplaceItem,
   Mention,
@@ -167,11 +168,13 @@ export const api = {
     ),
   knowledgeItem: (contentId: string) =>
     getJSON<KnowledgeItem>(`/knowledge/${cidPath(contentId)}`),
-  /** Deterministic contradictions across mail threads (W5). */
+  /** Deterministic contradictions across mail threads (W5, low-level). */
   contradictions: () =>
     getJSON<{ conflicts: Conflict[]; scanned: number }>(
       "/knowledge/contradictions",
     ),
+  /** Grounded LLM follow-up digest: topics + real contradictions, cited. */
+  followup: () => getJSON<FollowUpDigest>("/knowledge/followup"),
 
   // Notes — full CRUD.
   notes: () => getJSON<{ notes: Note[] }>("/notes"),

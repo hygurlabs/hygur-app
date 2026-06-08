@@ -105,6 +105,29 @@ export interface Conflict {
   members: ConflictMember[];
 }
 
+/** A validated citation back to a real knowledge item (Follow-up digest). */
+export interface DigestSource {
+  content_id: string;
+  title: string;
+  from: string;
+  date: string; // RFC3339
+}
+
+/** One topic or contradiction in the Follow-up digest; title is topics-only. */
+export interface DigestEntry {
+  title?: string;
+  note: string;
+  sources: DigestSource[];
+}
+
+/** Grounded Follow-up synthesis (GET /knowledge/followup). */
+export interface FollowUpDigest {
+  topics: DigestEntry[];
+  contradictions: DigestEntry[];
+  scanned: number;
+  window: string;
+}
+
 export interface NoteTag {
   id: string;
   name: string;

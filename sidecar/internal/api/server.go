@@ -516,6 +516,17 @@ func (s *Server) handleCalendarSummary(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"summary":"","window":"","count":0}`))
 }
 
+// handleKnowledgeFollowup handles GET /knowledge/followup — the grounded
+// Follow-up digest. Delegates to the BriefHandler (it owns the LLM + store).
+func (s *Server) handleKnowledgeFollowup(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.FollowUp(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"topics":[],"contradictions":[],"scanned":0,"window":""}`))
+}
+
 // SetConfigHandler attaches the config read/write handler.
 func (s *Server) SetConfigHandler(handler *handlers.ConfigHandler) {
 	s.configHandler = handler

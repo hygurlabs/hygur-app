@@ -237,6 +237,29 @@ func (h *BriefHandler) CalendarSummary(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
+// FollowUp handles GET /knowledge/followup — a grounded LLM digest (salient
+// topics + real, cited contradictions) for the Follow-up view. Returns an empty
+// digest (200) when there's nothing factual to report or the brief task isn't
+// configured, so the UI degrades gracefully.
+func (h *BriefHandler) FollowUp(w http.ResponseWriter, r *http.Request) {
+	res := scheduler.FollowUpDigest{}
+	if h.brief != nil {
+		if got, err := h.brief.FollowUp(r.Context()); err != nil {
+			h.logger.Warn().Err(err).Msg("follow-up digest failed")
+		} else {
+			res = got
+		}
+	}
+	if res.Topics == nil {
+		res.Topics = []scheduler.DigestEntry{}
+	}
+	if res.Contradictions == nil {
+		res.Contradictions = []scheduler.DigestEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
