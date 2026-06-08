@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bell, CalendarClock } from "lucide-react";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
+import { useDetail } from "../components/DetailPanel";
 import { fmtDate, fmtDateTime } from "../lib/format";
 import {
   Button,
@@ -27,6 +28,7 @@ function SectionLabel({ children }: { children: string }) {
 
 export function Calendar() {
   const isNative = native.available;
+  const openDetail = useDetail();
   const [enabled, setEnabled] = useState(
     () => localStorage.getItem(ENABLED_KEY) === "1",
   );
@@ -100,6 +102,7 @@ export function Calendar() {
         location: typeof md.location === "string" ? md.location : "",
         allDay: md.all_day === true,
         ts: start ? Date.parse(start) : NaN,
+        body: it.normalized_text ?? "",
       };
     })
     .filter((e) => !Number.isNaN(e.ts) && e.ts >= now - 12 * 3600_000)
@@ -143,7 +146,18 @@ export function Calendar() {
           {upcomingSynced.map((e) => (
             <li
               key={e.content_id}
-              className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5"
+              onClick={() =>
+                openDetail({
+                  title: e.title,
+                  contentId: e.content_id,
+                  meta: [
+                    e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
+                    e.location,
+                  ].filter(Boolean),
+                  body: e.body,
+                })
+              }
+              className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5 transition-colors hover:bg-surface2"
             >
               <span className="truncate font-medium">{e.title}</span>
               <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
@@ -159,10 +173,27 @@ export function Calendar() {
         <Skeleton rows={3} />
       ) : (
         <div className="rounded-lg border border-border bg-surface px-5 py-6">
-          <p className="mb-3 max-w-[54ch] text-[13.5px] text-muted">
-            Connect your calendar (an iCloud / Google / CalDAV feed or a published
-            ICS URL) so its events appear here and feed your briefings.
+          <p className="mb-3 max-w-[58ch] text-[13.5px] text-muted">
+            Connect your calendar so its events appear here, become taggable, and
+            feed your briefings. Two common ways:
           </p>
+          <ul className="mb-4 max-w-[64ch] list-disc space-y-1.5 pl-5 text-[12.5px] text-muted">
+            <li>
+              <span className="font-medium text-text">Google Calendar</span> — open
+              Google Calendar in a browser → Settings → click your calendar →
+              “Integrate calendar” → copy the{" "}
+              <span className="font-medium">“Secret address in iCal format”</span>{" "}
+              link. It's private; no password needed.
+            </li>
+            <li>
+              <span className="font-medium text-text">iCloud</span> — in the Calendar
+              app, right-click your calendar → “Share Calendar” → enable{" "}
+              <span className="font-medium">Public Calendar</span> and copy the link.
+              (Anyone with the link can read it; for a private link, use{" "}
+              <span className="font-medium">caldav.icloud.com</span> with an
+              app-specific password.)
+            </li>
+          </ul>
           <Link
             to="/connectors"
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"

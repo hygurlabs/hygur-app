@@ -95,11 +95,13 @@ func (c *Connector) ConfigSchema() plugin.ConfigSchema {
 				Title: "Calendar",
 				Fields: []plugin.ConfigField{
 					{
-						Key:         "url",
-						Type:        plugin.FieldString,
-						Label:       "Calendar URL",
-						Description: "CalDAV per-calendar export or a public iCal/webcal .ics URL",
-						Required:    true,
+						Key:   "url",
+						Type:  plugin.FieldString,
+						Label: "Calendar URL",
+						Description: "Your calendar's share link. Google Calendar: Settings → your calendar → " +
+							"\"Secret address in iCal format\". iCloud: a Public Calendar share link, or " +
+							"caldav.icloud.com with an app-specific password (fill Username/Password below).",
+						Required: true,
 					},
 				},
 			},
