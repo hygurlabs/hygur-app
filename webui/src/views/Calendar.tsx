@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, CalendarClock } from "lucide-react";
 import { api } from "../lib/api";
@@ -133,76 +134,84 @@ export function Calendar() {
         }
       />
 
-      {/* --- Meetings (native only) --- */}
-      <SectionLabel>Upcoming meetings</SectionLabel>
+      {/* --- Upcoming events (synced CalDAV / iCal calendars) — works in every
+           shell (web, cloud, desktop). Primary calendar surface. --- */}
+      <SectionLabel>Upcoming events</SectionLabel>
 
-      {!isNative ? (
-        <p className="rounded-lg border border-border bg-surface px-4 py-3 text-[13.5px] text-muted">
-          Calendar access lives in the Hygur desktop app. Open Hygur to connect
-          your calendars and receive meeting briefings.
-        </p>
-      ) : !enabled ? (
-        <div className="rounded-lg border border-border bg-surface px-5 py-6">
-          <p className="mb-3 max-w-[48ch] text-[13.5px] text-muted">
-            Connect your macOS calendars so Hygur can prepare a short briefing
-            30 minutes before relevant meetings.
-          </p>
-          <Button onClick={connect}>
-            <CalendarClock size={16} strokeWidth={1.75} />
-            Connect calendar
-          </Button>
-        </div>
-      ) : events.isLoading ? (
-        <Skeleton rows={3} />
-      ) : shownEvents.length > 0 ? (
+      {upcomingSynced.length > 0 ? (
         <ul className="border-t border-border">
-          {shownEvents.map((e, i) => (
+          {upcomingSynced.map((e) => (
             <li
-              key={`${e.title}-${e.start}-${i}`}
+              key={e.content_id}
               className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5"
             >
               <span className="truncate font-medium">{e.title}</span>
               <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
                 {e.allDay ? fmtDate(e.start) : fmtDateTime(e.start)}
               </span>
-              <span className="col-span-2 text-[13px] text-muted">
-                {[e.calendarTitle, e.location].filter(Boolean).join(" · ")}
-              </span>
+              {e.location && (
+                <span className="col-span-2 text-[13px] text-muted">{e.location}</span>
+              )}
             </li>
           ))}
         </ul>
+      ) : syncedEvents.isLoading ? (
+        <Skeleton rows={3} />
       ) : (
-        <EmptyState
-          title="No meetings ahead"
-          hint="Nothing scheduled in the next 7 days for the selected calendars."
-        />
+        <div className="rounded-lg border border-border bg-surface px-5 py-6">
+          <p className="mb-3 max-w-[54ch] text-[13.5px] text-muted">
+            Connect your calendar (an iCloud / Google / CalDAV feed or a published
+            ICS URL) so its events appear here and feed your briefings.
+          </p>
+          <Link
+            to="/connectors"
+            className="inline-flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
+          >
+            <CalendarClock size={16} strokeWidth={1.75} />
+            Connect a calendar
+          </Link>
+        </div>
       )}
 
-      {/* --- Synced online calendar events (CalDAV / iCal) --- */}
-      {((syncedEvents.data?.items.length ?? 0) > 0 || upcomingSynced.length > 0) && (
+      {/* --- Native EventKit meetings — only when the desktop app exposes the
+           native bridge (window.HygurNative). Dormant on the current Tauri build. --- */}
+      {isNative && (
         <>
-          <SectionLabel>Synced calendar events</SectionLabel>
-          {upcomingSynced.length > 0 ? (
+          <SectionLabel>Meetings (native)</SectionLabel>
+          {!enabled ? (
+            <div className="rounded-lg border border-border bg-surface px-5 py-6">
+              <p className="mb-3 max-w-[48ch] text-[13.5px] text-muted">
+                Connect your macOS calendars so Hygur can prepare a short briefing
+                30 minutes before relevant meetings.
+              </p>
+              <Button onClick={connect}>
+                <CalendarClock size={16} strokeWidth={1.75} />
+                Connect calendar
+              </Button>
+            </div>
+          ) : events.isLoading ? (
+            <Skeleton rows={3} />
+          ) : shownEvents.length > 0 ? (
             <ul className="border-t border-border">
-              {upcomingSynced.map((e) => (
+              {shownEvents.map((e, i) => (
                 <li
-                  key={e.content_id}
+                  key={`${e.title}-${e.start}-${i}`}
                   className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5"
                 >
                   <span className="truncate font-medium">{e.title}</span>
                   <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
                     {e.allDay ? fmtDate(e.start) : fmtDateTime(e.start)}
                   </span>
-                  {e.location && (
-                    <span className="col-span-2 text-[13px] text-muted">{e.location}</span>
-                  )}
+                  <span className="col-span-2 text-[13px] text-muted">
+                    {[e.calendarTitle, e.location].filter(Boolean).join(" · ")}
+                  </span>
                 </li>
               ))}
             </ul>
           ) : (
             <EmptyState
-              title="No upcoming synced events"
-              hint="Events from your CalDAV / iCal connectors will appear here."
+              title="No meetings ahead"
+              hint="Nothing scheduled in the next 7 days for the selected calendars."
             />
           )}
         </>

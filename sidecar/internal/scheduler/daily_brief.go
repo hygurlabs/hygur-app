@@ -331,8 +331,8 @@ func (d *DailyBrief) gatherItems(ctx context.Context, opts RunOptions) ([]*store
 		ctx, since,
 		// "mail" is the edge/Proton source type (the bulk of the KB); without it
 		// the brief saw none of the user's mail. "email" stays for the direct-IMAP
-		// path.
-		[]string{"mail", "email", "note", "file", "pdf", "markdown", "md", "txt"},
+		// path. "event" folds in CalDAV/iCal calendar items (W3).
+		[]string{"mail", "email", "note", "file", "pdf", "markdown", "md", "txt", "event"},
 		rawLimit,
 	)
 	if err != nil {
