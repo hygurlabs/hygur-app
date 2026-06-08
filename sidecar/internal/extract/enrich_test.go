@@ -66,6 +66,28 @@ func TestEnrichMetadataWithTier1_AmountsFormattedAsValueCurrency(t *testing.T) {
 	}
 }
 
+func TestMergeTier1IntoMetadata_PurgesStaleKeysOnReextract(t *testing.T) {
+	// A re-extract that no longer finds an entity must DELETE the stale value
+	// (the regression behind the "365138779 EUR" false amount lingering after
+	// the regex fix). Here a prior amount disappears while the IBAN persists.
+	metadata := map[string]any{
+		"extracted_amounts": []string{"365138779 EUR"},
+		"extracted_iban":    []string{"BE68539007547034"},
+		"some_other_key":    "keep me",
+	}
+	MergeTier1IntoMetadata(metadata, Tier1Entities{IBANs: []string{"BE68539007547034"}})
+
+	if _, ok := metadata["extracted_amounts"]; ok {
+		t.Errorf("stale extracted_amounts should be deleted, got %v", metadata["extracted_amounts"])
+	}
+	if _, ok := metadata["extracted_iban"]; !ok {
+		t.Error("extracted_iban should still be set")
+	}
+	if metadata["some_other_key"] != "keep me" {
+		t.Error("non-extracted keys must be preserved")
+	}
+}
+
 func TestMergeTier1IntoMetadata_SkipsEmptyFields(t *testing.T) {
 	tier1 := Tier1Entities{
 		IBANs: []string{"BE68539007547034"},

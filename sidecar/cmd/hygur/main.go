@@ -863,6 +863,33 @@ func main() {
 		}
 	}()
 
+	// One-shot Tier-1 re-extraction (regex only, no LLM) gated by env: refreshes
+	// the extracted_* metadata from the current rules — e.g. to purge
+	// reference-number false-positive amounts ("365138779 EUR") after the
+	// extractor fix. Authoritative merge deletes values the extractor no longer
+	// produces. Idempotent (a stable re-extract just re-confirms and skips), so
+	// it's safe to leave enabled; unset HYGUR_REINDEX_TIER1 to skip.
+	if os.Getenv("HYGUR_REINDEX_TIER1") == "1" {
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
+			rctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			if stats, err := mail.ReindexEntitiesTier1(rctx, db, logger, 200); err != nil {
+				logger.Warn().Err(err).Msg("tier1 reindex failed")
+			} else {
+				logger.Info().
+					Int("total", stats.Total).
+					Int("updated", stats.Updated).
+					Int("skipped", stats.Skipped).
+					Msg("tier1 reindex complete")
+			}
+		}()
+	}
+
 	// Meeting briefings — short RAG briefings ahead of events/deadlines.
 	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
 	//    each event (it owns EventKit); the briefer generates + emits the SSE.
