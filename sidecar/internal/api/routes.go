@@ -26,6 +26,13 @@ func (s *Server) setupRoutes() {
 	// shell; served from the embedded build with long-lived immutable caching.
 	s.router.Handle("/assets/*", webUIAssets())
 
+	// Root static assets (favicon, home-screen icons, PWA manifest). Public;
+	// requested at the site root by browsers and "Add to Home Screen".
+	pub := webUIPublic()
+	for _, p := range webUIPublicFiles {
+		s.router.Handle(p, pub)
+	}
+
 	// Streaming routes (auth, no timeout) — SSE can take minutes for chat
 	// with multiple LLM round-trips (tool calls + synthesis). Declared as a
 	// separate group BEFORE the timeout-bearing group because chi's Group

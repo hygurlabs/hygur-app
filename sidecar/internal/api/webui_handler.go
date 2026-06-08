@@ -65,3 +65,39 @@ func webUIAssets() http.Handler {
 		fileServer.ServeHTTP(w, r)
 	})
 }
+
+// webUIPublic serves the static files Vite copies from webui/public to the dist
+// root at build time: the favicon, the iOS/Android home-screen icons, and the
+// PWA manifest. These are requested from the site root (e.g. /favicon.ico,
+// /apple-touch-icon.png) by browsers and "Add to Home Screen", so they're routed
+// individually in setupRoutes rather than under /assets/. Unlike the hashed
+// bundle these filenames are stable, so they get a day-long cache, not immutable.
+func webUIPublic() http.Handler {
+	sub, err := fs.Sub(webui.DistFS, "dist")
+	if err != nil {
+		return http.NotFoundHandler()
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		// Go's mime table doesn't know .webmanifest; set it so browsers treat
+		// the file as a real web app manifest rather than sniffed text.
+		if strings.HasSuffix(r.URL.Path, ".webmanifest") {
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+}
+
+// webUIPublicFiles are the public/ root assets served by webUIPublic. Listed
+// explicitly so a request to one of these paths returns the file rather than
+// falling through to a 404 (there is no catch-all; SPA routing is hash-based).
+var webUIPublicFiles = []string{
+	"/favicon.ico",
+	"/favicon-16.png",
+	"/favicon-32.png",
+	"/apple-touch-icon.png",
+	"/icon-192.png",
+	"/icon-512.png",
+	"/manifest.webmanifest",
+}
