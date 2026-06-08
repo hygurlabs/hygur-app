@@ -89,6 +89,16 @@ export function Calendar() {
     queryFn: () => api.knowledgeItems(200, "event"),
   });
 
+  // Whether any calendar connector is configured — drives whether we show the
+  // "connect a calendar" help block or a plain "nothing coming up" state.
+  const calConnectors = useQuery({
+    queryKey: ["connector-instances"],
+    queryFn: () => api.connectorInstances(),
+  });
+  const hasCalendarConnector = (calConnectors.data ?? []).some(
+    (i) => i.type_id === "caldav",
+  );
+
   // Capture "now" once per render — keeps the derivation below free of impure calls.
   const [now] = useState(() => Date.now());
   const allSynced = (syncedEvents.data?.items ?? [])
@@ -117,7 +127,7 @@ export function Calendar() {
   const recentSynced = allSynced
     .filter((e) => e.ts < now - 12 * 3600_000)
     .sort((a, b) => b.ts - a.ts)
-    .slice(0, 30);
+    .slice(0, 10);
   const renderEventList = (list: typeof allSynced) => (
     <ul className="border-t border-border">
       {list.map((e) => (
@@ -182,16 +192,21 @@ export function Calendar() {
 
       {upcomingSynced.length > 0 ? (
         renderEventList(upcomingSynced)
-      ) : syncedEvents.isLoading ? (
+      ) : syncedEvents.isLoading || calConnectors.isLoading ? (
         <Skeleton rows={3} />
       ) : recentSynced.length > 0 ? (
         <>
-          <p className="mb-2 text-[12.5px] text-muted">
-            No upcoming events in your connected calendar — showing your most recent.{" "}
-            {syncedCount} event{syncedCount === 1 ? "" : "s"} synced.
+          <p className="mb-2 text-[13.5px] text-muted">
+            Nothing coming up on your calendar. {syncedCount} event
+            {syncedCount === 1 ? "" : "s"} synced — the last 10 are below; the rest
+            live in your Library.
           </p>
           {renderEventList(recentSynced)}
         </>
+      ) : hasCalendarConnector ? (
+        <p className="rounded-lg border border-border bg-surface px-4 py-3 text-[13.5px] text-muted">
+          Nothing coming up on your calendar.
+        </p>
       ) : (
         <div className="rounded-lg border border-border bg-surface px-5 py-6">
           <p className="mb-3 max-w-[58ch] text-[13.5px] text-muted">
