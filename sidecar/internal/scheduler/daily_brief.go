@@ -583,6 +583,7 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 	sb.WriteString("- Priorise : ce qui est urgent ou actionnable d'abord ; le bruit, jamais.\n")
 	sb.WriteString("- N'invente rien. Chaque puce doit pouvoir s'appuyer sur un élément du contexte ci-dessous.\n")
 	sb.WriteString("- Ignore newsletters, accusés de réception, notifications automatiques et vieille correspondance.\n")
+	sb.WriteString("- Ne présente JAMAIS comme une action les sollicitations non sollicitées : « alerte de sécurité », « vérification obligatoire » / « confirmez votre compte », « compte suspendu », essais/abonnements qui « expirent », promotions. C'est du démarchage ou de l'hameçonnage — à ignorer, jamais une tâche.\n")
 	sb.WriteString("- Omets entièrement une section qui n'a aucun contenu pertinent : pas de section vide, pas de remplissage.\n")
 	sb.WriteString("- N'ajoute PAS de section « Sources » : elle est générée automatiquement et ajoutée après ta réponse.\n")
 	sb.WriteString("- Output : Markdown brut, sans préambule, sans bloc de code.\n\n")

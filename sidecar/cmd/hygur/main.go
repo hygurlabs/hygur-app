@@ -901,54 +901,6 @@ func main() {
 		}
 	}
 
-	// TEMP diagnostic: log the date provenance of mail items mentioning a term
-	// (HYGUR_DEBUG_GREP) — to tell a genuinely-recent mail from one mis-stamped
-	// to ingest time. Remove once the Follow-up date issue is settled.
-	if needle := strings.ToLower(os.Getenv("HYGUR_DEBUG_GREP")); needle != "" {
-		go func() {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(8 * time.Second):
-			}
-			dctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			scanned := 0
-			for _, src := range store.MailSourceTypes {
-				for off := 0; ; off += 500 {
-					page, err := db.ListKnowledgeItemsBySourceType(dctx, src, 500, off)
-					if err != nil {
-						logger.Warn().Err(err).Msg("debug-grep list failed")
-						break
-					}
-					scanned += len(page)
-					for _, it := range page {
-						if !strings.Contains(strings.ToLower(it.Title+" "+it.NormalizedText), needle) {
-							continue
-						}
-						_, hasCanon := it.Metadata["canonical_date"]
-						_, hasMailDate := it.Metadata["mail_date"]
-						_, hasDate := it.Metadata["date"]
-						logger.Info().
-							Str("content_id", it.ContentID).
-							Str("source_type", it.SourceType).
-							Str("title", it.Title).
-							Time("created_at", it.CreatedAt.UTC()).
-							Str("canonical_date", store.GetCanonicalDate(it).Format(time.RFC3339)).
-							Bool("k_canonical_date", hasCanon).
-							Bool("k_mail_date", hasMailDate).
-							Bool("k_date", hasDate).
-							Msg("DEBUG-GREP match")
-					}
-					if len(page) < 500 {
-						break
-					}
-				}
-			}
-			logger.Info().Int("scanned", scanned).Str("needle", needle).Msg("DEBUG-GREP done")
-		}()
-	}
-
 	// Meeting briefings — short RAG briefings ahead of events/deadlines.
 	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
 	//    each event (it owns EventKit); the briefer generates + emits the SSE.

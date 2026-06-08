@@ -72,6 +72,7 @@ Règles STRICTES :
 - "contradictions" : UNIQUEMENT quand au moins DEUX messages se contredisent réellement sur la MÊME chose (un montant, une date, une décision, un engagement). "refs" doit citer au moins deux numéros DIFFÉRENTS. Si aucune contradiction réelle n'existe, renvoie "contradictions": [].
 - N'invente JAMAIS un montant, une date, un nom ni un fait absent des messages. N'utilise que ce qui est écrit.
 - Deux factures mensuelles différentes, ou deux événements distincts, NE SONT PAS des contradictions. Ne les signale pas.
+- IGNORE le démarchage et l'hameçonnage : promotions, newsletters, « alertes de sécurité » / « vérification obligatoire » / « confirmez votre compte » non sollicitées, essais qui « expirent ». N'en fais pas un sujet et n'en fais surtout pas une action à mener.
 - Français. Raisonnement interne minimal.`
 
 // FollowUp returns a grounded, LLM-written digest of recent mail + notes:
@@ -337,6 +338,7 @@ const followupReportSystemPrompt = `Tu es l'assistant personnel d'un indépendan
 Règles STRICTES :
 - N'utilise QUE les faits présents dans les messages. N'invente JAMAIS un montant, une date, un nom, une décision ni un événement absent.
 - Si une information n'est pas dans les messages, ne la devine pas et ne la mentionne pas.
+- IGNORE le bruit et ne le présente JAMAIS comme une action à faire : promotions, newsletters, confirmations automatiques, et surtout les sollicitations non sollicitées de type « alerte de sécurité », « vérification obligatoire » / « confirmez votre compte », « votre compte va être suspendu », essais/abonnements qui « expirent ». Ces messages sont presque toujours du démarchage ou de l'hameçonnage : ne demande pas à l'utilisateur d'y donner suite. Au plus, signale brièvement « quelques messages ressemblent à du phishing/démarchage — à ignorer », sans détailler ni inciter à cliquer.
 - Trois paragraphes de prose séparés par une ligne vide. Pas de titres, pas de puces, pas de formule de politesse, pas de préambule du type « Voici ».
 - Concis : 2 à 4 phrases par paragraphe.
 - Raisonnement interne minimal.`
