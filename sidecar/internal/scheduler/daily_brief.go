@@ -184,7 +184,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			// guidance they burn the entire token budget in `reasoning`
 			// and return `content: null` — the empty-brief regression. The
 			// system prompt asks the model to keep reasoning short.
-			{Role: "system", Content: "Tu es l'assistant d'un indépendant. Tu produis un brief court et hiérarchisé qui met d'abord en avant ce qui compte vraiment : actions à mener, décisions à prendre, échéances proches. Tu ignores le bruit. Garde tout raisonnement interne très bref et réponds en Markdown dans la langue de l'utilisateur."},
+			{Role: "system", Content: "You are a personal assistant. You produce a short, prioritised brief that puts what truly matters first: actions to take, decisions to make, upcoming deadlines. You ignore noise. Keep internal reasoning very brief and reply in Markdown, in English."},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -425,20 +425,20 @@ func customBriefTitle(dateLabel string, opts RunOptions) string {
 		if len(r) > 50 {
 			s = strings.TrimSpace(string(r[:50])) + "…"
 		}
-		return "Briefing : " + s
+		return "Briefing: " + s
 	}
-	return "Briefing personnalisé — " + dateLabel
+	return "Custom briefing — " + dateLabel
 }
 
 func emptyPlaceholder(opts RunOptions, projectName string) string {
 	if projectName != "" {
-		return "Pas d'activité enregistrée sur le projet « " + projectName + " »."
+		return "No activity recorded on project \"" + projectName + "\"."
 	}
 	hours := opts.LookbackHours
 	if hours == 0 {
 		hours = 24
 	}
-	return "Pas d'activité dans les dernières " + strconv.Itoa(hours) + "h."
+	return "No activity in the last " + strconv.Itoa(hours) + "h."
 }
 
 // persistBrief stores the brief as a knowledge_item with source_type="brief".
@@ -534,62 +534,62 @@ func (d *DailyBrief) enrichItems(ctx context.Context, items []*store.KnowledgeIt
 func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) string {
 	var sb strings.Builder
 	if opts.Instructions != "" {
-		sb.WriteString("Focus demandé par l'utilisateur : ")
+		sb.WriteString("User-requested focus: ")
 		sb.WriteString(opts.Instructions)
-		sb.WriteString("\nPriorise ce focus dans le brief ci-dessous.\n\n")
+		sb.WriteString("\nPrioritise this focus in the brief below.\n\n")
 	}
 	if projectName != "" {
-		sb.WriteString("Voici les éléments liés au projet « ")
+		sb.WriteString("Here are the items related to the project \"")
 		sb.WriteString(projectName)
-		sb.WriteString(" » dans la base personnelle de l'utilisateur. ")
-		sb.WriteString("Génère un brief opérationnel et exécutif en français, structuré exactement ainsi :\n\n")
-		sb.WriteString("## Synthèse exécutive\n")
-		sb.WriteString("3-5 puces : où en est le projet, décisions prises / en attente, risques bloquants, échéances proches.\n\n")
-		sb.WriteString("## Plan d'action\n")
-		sb.WriteString("- **À faire ce matin :** tâches concrètes, courtes, livrables clairs.\n")
-		sb.WriteString("- **À faire cet après-midi :** suite logique, suivis, validations.\n")
-		sb.WriteString("- **Cette semaine :** échéances et travaux de fond.\n\n")
-		sb.WriteString("## Emails à traiter\n")
-		sb.WriteString("Liste les emails du contexte qui attendent une réponse, sous la forme « De [expéditeur] — [sujet] → [action recommandée] ».\n\n")
-		sb.WriteString("## À ajouter dans la task list\n")
-		sb.WriteString("Tâches à créer (verbe d'action en début), avec échéance et montant si présents.\n\n")
+		sb.WriteString("\" in the user's personal knowledge base. ")
+		sb.WriteString("Generate an operational and executive brief in English, structured exactly as follows:\n\n")
+		sb.WriteString("## Executive summary\n")
+		sb.WriteString("3-5 bullets: where the project stands, decisions made / pending, blocking risks, upcoming deadlines.\n\n")
+		sb.WriteString("## Action plan\n")
+		sb.WriteString("- **This morning:** concrete, short tasks with clear deliverables.\n")
+		sb.WriteString("- **This afternoon:** logical follow-ups, validations.\n")
+		sb.WriteString("- **This week:** deadlines and deeper work.\n\n")
+		sb.WriteString("## Emails to handle\n")
+		sb.WriteString("List the emails in the context awaiting a reply, as \"From [sender] — [subject] → [recommended action]\".\n\n")
+		sb.WriteString("## To add to the task list\n")
+		sb.WriteString("Tasks to create (action verb first), with deadline and amount if present.\n\n")
 	} else {
 		hours := opts.LookbackHours
 		if hours == 0 {
 			hours = 48
 		}
 		if hours <= 72 {
-			sb.WriteString("Voici ce qui a bougé dans les dernières ")
+			sb.WriteString("Here is what moved in the last ")
 			sb.WriteString(strconv.Itoa(hours))
 			sb.WriteString(" h ")
 		} else {
-			sb.WriteString("Voici ce qui a bougé dans les ")
+			sb.WriteString("Here is what moved in the last ")
 			sb.WriteString(strconv.Itoa(hours / 24))
-			sb.WriteString(" derniers jours ")
+			sb.WriteString(" days ")
 		}
-		sb.WriteString("dans la base personnelle de l'utilisateur (emails, notes, documents). ")
-		sb.WriteString("C'est un point quotidien : concentre-toi sur le DELTA — ce qui est nouveau ou qui demande un suivi — pas sur un résumé exhaustif. Structure :\n\n")
-		sb.WriteString("## Points importants\n")
-		sb.WriteString("Les 3 à 6 éléments qui comptent vraiment sur la période : ce qui demande une action, une décision, ou approche d'une échéance. Une puce par élément, avec l'enjeu et l'action recommandée si pertinent. Si vraiment rien de notable, écris une seule puce : « RAS — rien de critique sur la période. »\n\n")
-		sb.WriteString("## Boucles ouvertes\n")
-		sb.WriteString("Échanges encore en suspens, visibles dans le contexte : un email resté sans réponse, une demande à laquelle l'utilisateur n'a pas encore répondu, un engagement pris non confirmé. Format « [date] — [interlocuteur / sujet] → en attente de [quoi] ». Uniquement ce qui ressort réellement des éléments ; si rien n'est en attente, omets entièrement la section.\n\n")
-		sb.WriteString("## À traiter maintenant\n")
-		sb.WriteString("- Paiements / factures : montant, échéance, à qui.\n")
-		sb.WriteString("- Échéances administratives, fiscales ou juridiques proches.\n\n")
-		sb.WriteString("## Tâches à créer\n")
-		sb.WriteString("Actions à ajouter à la todo (verbe d'action en tête), avec échéance et montant quand ils sont présents.\n\n")
+		sb.WriteString("in the user's personal knowledge base (emails, notes, documents). ")
+		sb.WriteString("This is a daily check-in: focus on the DELTA — what is new or needs follow-up — not an exhaustive summary. Structure:\n\n")
+		sb.WriteString("## Key points\n")
+		sb.WriteString("The 3 to 6 items that truly matter over the period: what needs an action, a decision, or is approaching a deadline. One bullet per item, with the stake and the recommended action when relevant. If there is genuinely nothing notable, write a single bullet: \"Nothing critical over the period.\"\n\n")
+		sb.WriteString("## Open loops\n")
+		sb.WriteString("Exchanges still pending, visible in the context: an email left unanswered, a request the user hasn't replied to yet, a commitment made but not confirmed. Format \"[date] — [contact / subject] → awaiting [what]\". Only what genuinely shows up in the items; if nothing is pending, omit the section entirely.\n\n")
+		sb.WriteString("## To handle now\n")
+		sb.WriteString("- Payments / invoices: amount, deadline, to whom.\n")
+		sb.WriteString("- Upcoming administrative, tax or legal deadlines.\n\n")
+		sb.WriteString("## Tasks to create\n")
+		sb.WriteString("Actions to add to the todo (action verb first), with deadline and amount when present.\n\n")
 	}
-	sb.WriteString("\nRègles :\n")
-	sb.WriteString("- Priorise : ce qui est urgent ou actionnable d'abord ; le bruit, jamais.\n")
-	sb.WriteString("- N'invente rien. Chaque puce doit pouvoir s'appuyer sur un élément du contexte ci-dessous.\n")
-	sb.WriteString("- Ignore newsletters, accusés de réception, notifications automatiques et vieille correspondance.\n")
-	sb.WriteString("- Ne présente JAMAIS comme une action les sollicitations non sollicitées : « alerte de sécurité », « vérification obligatoire » / « confirmez votre compte », « compte suspendu », essais/abonnements qui « expirent », promotions. C'est du démarchage ou de l'hameçonnage — à ignorer, jamais une tâche.\n")
-	sb.WriteString("- Omets entièrement une section qui n'a aucun contenu pertinent : pas de section vide, pas de remplissage.\n")
-	sb.WriteString("- N'ajoute PAS de section « Sources » : elle est générée automatiquement et ajoutée après ta réponse.\n")
-	sb.WriteString("- Output : Markdown brut, sans préambule, sans bloc de code.\n\n")
-	sb.WriteString("Contexte (")
+	sb.WriteString("\nRules:\n")
+	sb.WriteString("- Prioritise: what is urgent or actionable first; never the noise.\n")
+	sb.WriteString("- Invent nothing. Every bullet must be backed by an item in the context below. Keep names, job titles and terms exactly as they appear — do not paraphrase or guess a role.\n")
+	sb.WriteString("- Ignore newsletters, read receipts, automatic notifications and old correspondence.\n")
+	sb.WriteString("- NEVER present unsolicited solicitations as an action: \"security alert\", \"mandatory verification\" / \"confirm your account\", \"account suspended\", trials/subscriptions that \"expire\", promotions. These are marketing or phishing — ignore them, never a task.\n")
+	sb.WriteString("- Omit entirely any section with no relevant content: no empty section, no filler.\n")
+	sb.WriteString("- Do NOT add a \"Sources\" section: it is generated automatically and appended after your reply.\n")
+	sb.WriteString("- Output: raw Markdown, no preamble, no code block.\n\n")
+	sb.WriteString("Context (")
 	sb.WriteString(strconv.Itoa(len(items)))
-	sb.WriteString(" items) :\n")
+	sb.WriteString(" items):\n")
 
 	for i, it := range items {
 		sb.WriteString(fmt.Sprintf("- [%s] %s", it.SourceType, it.Title))
@@ -609,15 +609,15 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 			sb.WriteString(from)
 		}
 		if amount := firstStringFromMetadata(it.Metadata, "extracted_amounts"); amount != "" {
-			sb.WriteString(" · montant=")
+			sb.WriteString(" · amount=")
 			sb.WriteString(amount)
 		}
 		if due := firstStringFromMetadata(it.Metadata, "extracted_due_dates"); due != "" {
-			sb.WriteString(" · échéance=")
+			sb.WriteString(" · due=")
 			sb.WriteString(due)
 		}
 		if it.projectName != "" {
-			sb.WriteString(" · projet=")
+			sb.WriteString(" · project=")
 			sb.WriteString(it.projectName)
 		}
 		if len(it.tags) > 0 {
@@ -661,12 +661,12 @@ func deterministicSources(items []briefItem) string {
 	var sb strings.Builder
 	sb.WriteString("## Sources\n")
 	if len(projSet) > 0 {
-		sb.WriteString("- Projets : ")
+		sb.WriteString("- Projects: ")
 		sb.WriteString(strings.Join(sortedSet(projSet), ", "))
 		sb.WriteByte('\n')
 	}
 	if len(tagSet) > 0 {
-		sb.WriteString("- Tags : ")
+		sb.WriteString("- Tags: ")
 		sb.WriteString(strings.Join(sortedSet(tagSet), ", "))
 		sb.WriteByte('\n')
 	}
@@ -722,10 +722,10 @@ func firstStringFromMetadata(meta map[string]any, key string) string {
 // fallbackBrief produces a deterministic placeholder when the LLM is down.
 func fallbackBrief(items []*store.KnowledgeItem) string {
 	var sb strings.Builder
-	sb.WriteString("**Brief indisponible — LLM hors ligne.**\n\nActivité brute :\n")
+	sb.WriteString("**Brief unavailable — LLM offline.**\n\nRaw activity:\n")
 	for i, it := range items {
 		if i >= 10 {
-			sb.WriteString(fmt.Sprintf("- … et %d autres\n", len(items)-10))
+			sb.WriteString(fmt.Sprintf("- … and %d more\n", len(items)-10))
 			break
 		}
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", it.SourceType, it.Title))

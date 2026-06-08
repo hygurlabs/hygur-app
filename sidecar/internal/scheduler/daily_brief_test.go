@@ -350,7 +350,7 @@ func TestDeterministicSources(t *testing.T) {
 		{KnowledgeItem: &store.KnowledgeItem{ContentID: "c"}, tags: []string{"family"}},
 	}
 	got := deterministicSources(items)
-	want := "## Sources\n- Projets : SRL\n- Tags : banking, family, invoicing\n"
+	want := "## Sources\n- Projects: SRL\n- Tags: banking, family, invoicing\n"
 	if got != want {
 		t.Errorf("deterministicSources:\n got %q\nwant %q", got, want)
 	}

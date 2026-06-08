@@ -98,14 +98,14 @@ func (s *MailSummarizer) SummarizeMailOneLiner(ctx context.Context, item *store.
 // accounting-keyword rule: the LLM flags any genuinely actionable/time-
 // sensitive mail and vetoes informational noise.
 const notificationJudgeSystemPrompt = `/no_think
-Tu décides si un email mérite une notification immédiate à un indépendant qui gère son activité, puis tu le résumes en une ligne.
+You decide whether an email warrants an immediate notification to the user, then summarize it in one line.
 
-NOTIFIE (notify=true) seulement si l'email demande une ACTION ou est temporel/important : facture ou paiement à régler, échéance (fiscale, administrative, juridique), demande directe nécessitant une réponse, rendez-vous, document officiel, problème urgent.
-NE NOTIFIE PAS (notify=false) : newsletters, promotions, notifications automatiques, accusés de réception, confirmations sans action, emails purement informatifs.
+NOTIFY (notify=true) only if the email requires an ACTION or is time-sensitive/important: invoice or payment due, deadline (tax, administrative, legal), a direct request needing a reply, an appointment, an official document, an urgent problem.
+DO NOT NOTIFY (notify=false): newsletters, promotions, automatic notifications, read receipts, confirmations with no action, purely informational emails.
 
-Réponds UNIQUEMENT en JSON, sans texte autour :
-{"notify": true|false, "line": "<emoji> <quoi> : <détail clé>"}
-La ligne fait au plus 110 caractères. N'invente rien.`
+Reply ONLY in JSON, no surrounding text:
+{"notify": true|false, "line": "<emoji> <what>: <key detail>"}
+The line is at most 110 characters. Invent nothing.`
 
 // SummarizeForNotification decides whether a freshly-indexed priority candidate
 // is worth a notification and returns its one-liner. The recency gate already

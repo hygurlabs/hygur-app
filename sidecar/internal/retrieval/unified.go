@@ -940,17 +940,20 @@ func expandQueryIfShort(ctx context.Context, client *llm.Client, query string) s
 	expandCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 
-	prompt := `Tu es un assistant qui reformule des requêtes de recherche courtes en une phrase descriptive pour améliorer la recherche sémantique dans des emails.
-Transforme la requête en une phrase courte et descriptive (max 15 mots). Ne donne que la requête reformulée, sans explication ni ponctuation finale.
+	// Instruction in English; the expansion examples stay bilingual on purpose —
+	// they seed synonyms that improve semantic recall over a French/EN mailbox,
+	// and this expanded query is internal (never shown to the user).
+	prompt := `You are an assistant that reformulates short search queries into a descriptive sentence to improve semantic search over emails.
+Turn the query into a short, descriptive sentence (max 15 words). Output only the reformulated query, with no explanation and no trailing punctuation.
 
-Exemples :
+Examples:
 - "TVA" → "TVA taxe valeur ajoutée déclaration trimestrielle montant à payer"
 - "URSSAF" → "URSSAF cotisations sociales charges patronales paiement"
 - "VAT" → "VAT value added tax declaration quarterly payment invoice"
 - "facture" → "facture montant paiement prestation client"
 - "devis" → "devis estimation prix travaux prestation"
 
-Requête : ` + query
+Query: ` + query
 
 	resp, err := client.Chat(expandCtx, llm.ChatRequest{
 		Messages:    []llm.Message{{Role: "user", Content: prompt}},

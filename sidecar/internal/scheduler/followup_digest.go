@@ -62,18 +62,18 @@ var (
 // followupSystemPrompt is strict by design ("facts before reply"): the model may
 // only use the listed messages, and the last rule kills the monthly-invoice
 // false-positive class that made the old deterministic surface useless.
-const followupSystemPrompt = `Tu es l'assistant d'un indépendant. À partir UNIQUEMENT de la liste numérotée de messages ci-dessous, tu produis une courte synthèse de suivi.
+const followupSystemPrompt = `You are a personal assistant. From ONLY the numbered list of messages below, produce a short follow-up synthesis.
 
-Tu réponds EXCLUSIVEMENT par un objet JSON valide, sans texte autour ni balises de code :
+Reply EXCLUSIVELY with a valid JSON object, no surrounding text, no code fences:
 {"topics":[{"title":"...","note":"...","refs":[1,4]}],"contradictions":[{"note":"...","refs":[2,9]}]}
 
-Règles STRICTES :
-- "topics" : regroupe les messages liés en quelques sujets actifs (au plus 6). Pour chaque sujet, "note" = 1 à 2 phrases FACTUELLES tirées des messages, et "refs" = les numéros des messages concernés. N'invente AUCUN sujet absent des messages.
-- "contradictions" : UNIQUEMENT quand au moins DEUX messages se contredisent réellement sur la MÊME chose (un montant, une date, une décision, un engagement). "refs" doit citer au moins deux numéros DIFFÉRENTS. Si aucune contradiction réelle n'existe, renvoie "contradictions": [].
-- N'invente JAMAIS un montant, une date, un nom ni un fait absent des messages. N'utilise que ce qui est écrit.
-- Deux factures mensuelles différentes, ou deux événements distincts, NE SONT PAS des contradictions. Ne les signale pas.
-- IGNORE le démarchage et l'hameçonnage : promotions, newsletters, « alertes de sécurité » / « vérification obligatoire » / « confirmez votre compte » non sollicitées, essais qui « expirent ». N'en fais pas un sujet et n'en fais surtout pas une action à mener.
-- Français. Raisonnement interne minimal.`
+STRICT rules:
+- "topics": group related messages into a few active topics (at most 6). For each, "note" = 1-2 FACTUAL sentences drawn from the messages, and "refs" = the numbers of the messages involved. Do NOT invent any topic absent from the messages.
+- "contradictions": ONLY when at least TWO messages genuinely contradict each other about the SAME thing (an amount, a date, a decision, a commitment). "refs" must cite at least two DIFFERENT numbers. If no real contradiction exists, return "contradictions": [].
+- NEVER invent an amount, date, name or fact absent from the messages. Use only what is written, and keep names, job titles and terms EXACTLY as they appear — do not paraphrase or guess a role/label.
+- Two different monthly invoices, or two distinct events, are NOT contradictions. Do not flag them.
+- IGNORE marketing and phishing: promotions, newsletters, unsolicited "security alert" / "mandatory verification" / "confirm your account" messages, trials that "expire". Do not make them a topic, and above all not an action to take.
+- English. Keep internal reasoning minimal.`
 
 // FollowUp returns a grounded, LLM-written digest of recent mail + notes:
 // salient topics and any real contradictions, each cited to source items.
@@ -148,7 +148,7 @@ func (d *DailyBrief) gatherFollowupItems(ctx context.Context) ([]*store.Knowledg
 // by index. Shared by the structured digest and the prose report.
 func numberedItemsContext(items []*store.KnowledgeItem) string {
 	var sb strings.Builder
-	sb.WriteString("Messages (numérotés) :\n")
+	sb.WriteString("Numbered messages:\n")
 	for i, it := range items {
 		fmt.Fprintf(&sb, "[%d] %s · %s · %s", i+1, itemDate(it).Format("2006-01-02"), senderOf(it), strings.TrimSpace(it.Title))
 		if snip := snippet(it.NormalizedText, followupSnippetLen); snip != "" {
@@ -328,20 +328,20 @@ var (
 
 // followupReportSystemPrompt asks for a short, human, grounded report — the same
 // "facts before reply" discipline as the digest, but in natural prose.
-const followupReportSystemPrompt = `Tu es l'assistant personnel d'un indépendant. Tu fais le point, comme un vrai assistant qui lui parle, sur ce qui ressort de ses messages récents et sur ce qui mérite son attention pour la suite.
+const followupReportSystemPrompt = `You are a personal assistant. You give the user a quick read — like a real assistant talking to them — of what stands out in their recent messages and what deserves attention next.
 
-À partir UNIQUEMENT des messages listés ci-dessous (mails et notes récents), écris EXACTEMENT trois paragraphes en français, d'un ton naturel et humain :
-1. Une vue d'ensemble : les sujets qui occupent la période.
-2. Ce qui mérite attention pour la suite : échéances, demandes en attente, et — UNIQUEMENT si deux messages se contredisent réellement sur la même chose — la contradiction à clarifier.
-3. Une suggestion de priorités concrète pour les prochains jours.
+From ONLY the messages listed below (recent mail and notes), write EXACTLY three paragraphs in English, in a natural, human tone:
+1. An overview: the topics occupying this period.
+2. What deserves attention next: deadlines, pending requests, and — ONLY if two messages genuinely contradict each other about the same thing — the contradiction to clarify.
+3. A concrete priority suggestion for the next few days.
 
-Règles STRICTES :
-- N'utilise QUE les faits présents dans les messages. N'invente JAMAIS un montant, une date, un nom, une décision ni un événement absent.
-- Si une information n'est pas dans les messages, ne la devine pas et ne la mentionne pas.
-- IGNORE le bruit et ne le présente JAMAIS comme une action à faire : promotions, newsletters, confirmations automatiques, et surtout les sollicitations non sollicitées de type « alerte de sécurité », « vérification obligatoire » / « confirmez votre compte », « votre compte va être suspendu », essais/abonnements qui « expirent ». Ces messages sont presque toujours du démarchage ou de l'hameçonnage : ne demande pas à l'utilisateur d'y donner suite. Au plus, signale brièvement « quelques messages ressemblent à du phishing/démarchage — à ignorer », sans détailler ni inciter à cliquer.
-- Trois paragraphes de prose séparés par une ligne vide. Pas de titres, pas de puces, pas de formule de politesse, pas de préambule du type « Voici ».
-- Concis : 2 à 4 phrases par paragraphe.
-- Raisonnement interne minimal.`
+STRICT rules:
+- Use ONLY the facts present in the messages. NEVER invent an amount, date, name, decision or event that is absent. Keep names, job titles and terms EXACTLY as they appear — do not paraphrase or guess a role.
+- If a piece of information is not in the messages, do not guess it and do not mention it.
+- IGNORE noise and NEVER present it as an action to take: promotions, newsletters, automatic confirmations, and especially unsolicited "security alert" / "mandatory verification" / "confirm your account" / "your account will be suspended" messages and trials/subscriptions that "expire". These are almost always marketing or phishing: do not ask the user to act on them. At most, note briefly "a few messages look like phishing/spam — ignore them", without detail and without inviting a click.
+- Three paragraphs of prose separated by a blank line. No headings, no bullets, no greeting, no preamble like "Here is".
+- Concise: 2 to 4 sentences per paragraph.
+- Keep internal reasoning minimal.`
 
 // StreamFollowUpReport streams a short, grounded natural-language report of
 // recent mail + notes to `emit`, paragraph by paragraph as the model writes it.
@@ -367,7 +367,7 @@ func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, emit func(string)
 	reportMu.Unlock()
 
 	if len(items) == 0 {
-		msg := "Rien de neuf à synthétiser pour l'instant. Dès que de nouveaux mails ou de nouvelles notes arriveront, je ferai le point ici sur ce qui compte pour la suite."
+		msg := "Nothing new to synthesize right now. As soon as new mail or notes arrive, I'll summarize here what matters next."
 		cacheReport(key, msg)
 		return emit(msg)
 	}

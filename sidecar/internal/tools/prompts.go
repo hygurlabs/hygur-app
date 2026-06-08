@@ -9,21 +9,21 @@ import (
 )
 
 // summarySystemPrompt is the system prompt for email thread summarization.
-const summarySystemPrompt = `Tu es un assistant qui analyse des conversations email professionnelles.
-Tu dois extraire les informations cles de maniere factuelle et concise.
+const summarySystemPrompt = `You are an assistant that analyzes email conversations.
+Extract the key information factually and concisely.
 
-Reponds UNIQUEMENT en JSON valide avec ce format exact :
+Reply ONLY in valid JSON with this exact format:
 {
-  "decisions": ["liste des decisions prises dans la conversation"],
-  "actions": ["liste des actions a entreprendre ou suivre"],
-  "open_questions": ["questions non resolues ou points a clarifier"]
+  "decisions": ["decisions made in the conversation"],
+  "actions": ["actions to take or follow up on"],
+  "open_questions": ["unresolved questions or points to clarify"]
 }
 
-Regles :
-- Sois factuel, ne specule pas
-- Chaque item doit etre une phrase courte et claire
-- Si aucun item dans une categorie, utilise un tableau vide []
-- Maximum 5 items par categorie`
+Rules:
+- Be factual, do not speculate
+- Each item must be a short, clear sentence
+- If a category has no item, use an empty array []
+- At most 5 items per category`
 
 // maxPromptTextLength is the maximum length of thread content in the prompt.
 const maxPromptTextLength = 10000
@@ -39,25 +39,25 @@ func buildSummaryPrompt(thread *mail.Thread, normalizedText string) string {
 	// Format participants
 	participants := strings.Join(thread.Participants, ", ")
 	if participants == "" {
-		participants = "(aucun participant)"
+		participants = "(no participant)"
 	}
 
 	// Format date range
 	dateStart := thread.DateRange[0].Format("2006-01-02")
 	dateEnd := thread.DateRange[1].Format("2006-01-02")
 
-	return fmt.Sprintf(`Analyse cette conversation email :
+	return fmt.Sprintf(`Analyze this email conversation:
 
-Sujet : %s
-Participants : %s
-Periode : %s a %s
-Nombre de messages : %d
+Subject: %s
+Participants: %s
+Period: %s to %s
+Message count: %d
 
---- CONTENU ---
+--- CONTENT ---
 %s
---- FIN ---
+--- END ---
 
-Extrais les decisions, actions et questions ouvertes en JSON.`,
+Extract the decisions, actions and open questions as JSON.`,
 		thread.Subject,
 		participants,
 		dateStart,

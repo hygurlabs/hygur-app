@@ -234,12 +234,12 @@ func (e *Extractor) extractViaLLM(ctx context.Context, items []store.KnowledgeIt
 	}
 
 	systemPrompt := `/no_think
-Tu es un assistant d'extraction d'agenda. Réponds UNIQUEMENT en JSON valide, sans texte additionnel.
-Extrait les actions avec deadline depuis les documents. Format:
-[{"what":"description courte","deadline_iso":"YYYY-MM-DD","priority":"high|medium|low","confidence":0.0-1.0}]
-Si aucune deadline n'est trouvée, retourne [].`
+You are an agenda-extraction assistant. Reply ONLY in valid JSON, no additional text.
+Extract actions with a deadline from the documents. Format:
+[{"what":"short description","deadline_iso":"YYYY-MM-DD","priority":"high|medium|low","confidence":0.0-1.0}]
+If no deadline is found, return [].`
 
-	userPrompt := fmt.Sprintf("Documents:\n%s\n\nExtrait les actions avec deadline (max 80 tokens).", sb.String())
+	userPrompt := fmt.Sprintf("Documents:\n%s\n\nExtract the actions with a deadline (max 80 tokens).", sb.String())
 
 	resp, err := e.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{

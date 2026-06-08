@@ -109,33 +109,33 @@ button.ghost{background:transparent;color:#2e6a57;border:1px solid #2e6a57}
 @media(prefers-color-scheme:dark){#status{background:#24251b}}
 .ok{color:#2e6a57}.err{color:#9b3d2e}
 </style></head><body>
-<h1>Hygur — connecteurs locaux</h1>
-<p class="sub">Pousse tes sources locales (Fichiers, Proton) vers ton instance cloud. Tout reste sur cette machine sauf le texte poussé.</p>
+<h1>Hygur — local connectors</h1>
+<p class="sub">Push your local sources (Files, Proton) to your cloud instance. Everything stays on this machine except the pushed text.</p>
 <form id="f">
   <fieldset><legend>Cloud</legend>
     <label>Endpoint</label><input id="server" placeholder="https://cloud.hygur.ai">
-    <label>Device token</label><input id="token" type="password" placeholder="(collé une fois)">
+    <label>Device token</label><input id="token" type="password" placeholder="(pasted once)">
     <p class="hint" id="token-hint"></p>
   </fieldset>
-  <fieldset><legend>Fichiers</legend>
-    <label>Dossier à synchroniser</label><input id="folder" placeholder="/Users/moi/Documents (vide = désactivé)">
-    <p class="hint">.txt .md .docx .pdf (couche texte)</p>
+  <fieldset><legend>Files</legend>
+    <label>Folder to sync</label><input id="folder" placeholder="/Users/me/Documents (empty = disabled)">
+    <p class="hint">.txt .md .docx .pdf (text layer)</p>
   </fieldset>
   <fieldset><legend>Proton Mail (via Proton Bridge)</legend>
-    <label>Utilisateur</label><input id="proton_user" placeholder="moi@proton.me (vide = désactivé)">
-    <label>Mot de passe Bridge</label><input id="proton_password" type="password" placeholder="(mot de passe d'app Bridge)">
+    <label>User</label><input id="proton_user" placeholder="me@proton.me (empty = disabled)">
+    <label>Bridge password</label><input id="proton_password" type="password" placeholder="(Bridge app password)">
     <p class="hint" id="pp-hint"></p>
-    <label>Boîte(s)</label><input id="proton_mailbox" placeholder="All Mail">
+    <label>Mailbox(es)</label><input id="proton_mailbox" placeholder="All Mail">
   </fieldset>
-  <fieldset><legend>Planification</legend>
-    <label>Intervalle (secondes, 0 = manuel)</label><input id="interval_secs" type="number" value="0">
+  <fieldset><legend>Schedule</legend>
+    <label>Interval (seconds, 0 = manual)</label><input id="interval_secs" type="number" value="0">
   </fieldset>
   <div class="row">
-    <button type="submit">Enregistrer</button>
-    <button type="button" class="ghost" id="sync">Synchroniser maintenant</button>
+    <button type="submit">Save</button>
+    <button type="button" class="ghost" id="sync">Sync now</button>
   </div>
 </form>
-<div id="status">Chargement…</div>
+<div id="status">Loading…</div>
 <script>
 const $=id=>document.getElementById(id);
 async function load(){
@@ -143,14 +143,14 @@ async function load(){
   $('server').value=c.server||''; $('folder').value=c.folder||'';
   $('proton_user').value=c.proton_user||''; $('proton_mailbox').value=c.proton_mailbox||'All Mail';
   $('interval_secs').value=c.interval_secs||0;
-  $('token-hint').textContent=c.token_set?'✓ token enregistré (laisse vide pour garder)':'';
-  $('pp-hint').textContent=c.proton_password_set?'✓ mot de passe enregistré (laisse vide pour garder)':'';
+  $('token-hint').textContent=c.token_set?'✓ token saved (leave blank to keep)':'';
+  $('pp-hint').textContent=c.proton_password_set?'✓ password saved (leave blank to keep)':'';
   refresh();
 }
 async function refresh(){
   const s=await (await fetch('/api/status')).json();
-  let t=s.last_sync_at?('Dernière synchro : '+new Date(s.last_sync_at).toLocaleString()):'Pas encore synchronisé.';
-  t+='\n'+(s.running?'⏳ en cours…':('Fichiers poussés : '+(s.files_pushed||0)+' · Mails : '+(s.mail_pushed||0)+' · erreurs : '+(s.errors||0)));
+  let t=s.last_sync_at?('Last sync: '+new Date(s.last_sync_at).toLocaleString()):'Not synced yet.';
+  t+='\n'+(s.running?'⏳ running…':('Files pushed: '+(s.files_pushed||0)+' · Mail: '+(s.mail_pushed||0)+' · errors: '+(s.errors||0)));
   const st=$('status'); st.textContent=t; st.className=s.last_error?'err':(s.errors?'':'ok');
   if(s.last_error) st.textContent+='\n⚠ '+s.last_error;
 }
@@ -161,11 +161,11 @@ $('f').addEventListener('submit',async e=>{
     ProtonMailbox:$('proton_mailbox').value.trim(),IntervalSecs:parseInt($('interval_secs').value||'0',10)};
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('token').value='';$('proton_password').value='';
-  $('status').textContent=r.ok?'✓ Enregistré.':'Erreur à l’enregistrement.';
+  $('status').textContent=r.ok?'✓ Saved.':'Save error.';
   load();
 });
 $('sync').addEventListener('click',async()=>{
-  $('status').textContent='⏳ Synchronisation…';
+  $('status').textContent='⏳ Syncing…';
   const s=await (await fetch('/api/sync',{method:'POST'})).json();
   refresh();
 });

@@ -33,14 +33,14 @@ var (
 
 // calSummarySystemPrompt is deliberately strict (anti-hallucination, "facts
 // before reply"): the model may only use the events it's handed.
-const calSummarySystemPrompt = `Tu es l'assistant d'un indépendant. Tu écris une synthèse TRÈS courte (2 à 4 phrases) de l'agenda à venir, du plus urgent au plus lointain.
+const calSummarySystemPrompt = `You are a personal assistant. You write a VERY short summary (2 to 4 sentences) of the upcoming agenda, from the most urgent to the most distant.
 
-Règles STRICTES :
-- Utilise UNIQUEMENT les événements listés ci-dessous. N'invente AUCUN événement, date, heure, lieu ni personne.
-- Ne cite un lieu ou une heure que s'il figure dans la liste ; si un détail manque, ne l'invente pas et ne le devine pas.
-- Si la section « Ce week-end » contient un anniversaire ou une soirée, ajoute à la fin un court rappel week-end. Sinon, n'en parle pas.
-- Pas de préambule, pas de puces : un seul petit paragraphe fluide.
-- Réponds en français. Garde tout raisonnement interne minimal.`
+STRICT rules:
+- Use ONLY the events listed below. Invent NO event, date, time, place or person.
+- Only mention a place or time if it appears in the list; if a detail is missing, do not invent or guess it.
+- If the "This weekend" section contains a birthday or a party, add a short weekend reminder at the end. Otherwise, do not mention it.
+- No preamble, no bullets: a single flowing short paragraph.
+- Reply in English. Keep internal reasoning minimal.`
 
 var partyKeywordRe = regexp.MustCompile(`(?i)anniversaire|annif|birthday|soir[ée]e|soiree|party|f[êe]te|ap[ée]ro|apero|barbecue|\bbbq\b`)
 
@@ -114,14 +114,14 @@ func (d *DailyBrief) CalendarSummary(ctx context.Context) (CalendarSummaryResult
 
 func (d *DailyBrief) generateCalendarSummary(ctx context.Context, now time.Time, windowed, weekend []*store.KnowledgeItem, label string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Aujourd'hui : %s\nFenêtre : %s\n\nÉvénements à venir (du plus proche au plus loin) :\n", now.Format("2006-01-02 (Mon)"), label)
+	fmt.Fprintf(&sb, "Today: %s\nWindow: %s\n\nUpcoming events (nearest to furthest):\n", now.Format("2006-01-02 (Mon)"), label)
 	for _, e := range windowed {
 		sb.WriteString("- ")
 		sb.WriteString(eventLine(e))
 		sb.WriteByte('\n')
 	}
 	if len(weekend) > 0 {
-		sb.WriteString("\nCe week-end :\n")
+		sb.WriteString("\nThis weekend:\n")
 		for _, e := range weekend {
 			sb.WriteString("- ")
 			sb.WriteString(eventLine(e))
@@ -154,7 +154,7 @@ func (d *DailyBrief) generateCalendarSummary(ctx context.Context, now time.Time,
 			}
 			parts = append(parts, eventLine(e))
 		}
-		return "À venir (" + label + ") : " + strings.Join(parts, " ; ")
+		return "Upcoming (" + label + "): " + strings.Join(parts, " ; ")
 	}
 	return strings.TrimSpace(text)
 }
@@ -173,7 +173,7 @@ func eventLine(e *store.KnowledgeItem) string {
 	allDay, _ := e.Metadata["all_day"].(bool)
 	when := st.Format("2006-01-02 15:04")
 	if allDay {
-		when = st.Format("2006-01-02") + " (toute la journée)"
+		when = st.Format("2006-01-02") + " (all day)"
 	}
 	line := when + " — " + strings.TrimSpace(e.Title)
 	if loc, _ := e.Metadata["location"].(string); strings.TrimSpace(loc) != "" {

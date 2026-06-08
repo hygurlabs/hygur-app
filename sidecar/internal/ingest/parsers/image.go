@@ -164,7 +164,7 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
-	prompt := "Transcris tout le texte visible dans cette image, fidèlement. Aucun commentaire, aucune explication."
+	prompt := "Transcribe all visible text in this image, faithfully. No commentary, no explanation."
 
 	payload := map[string]any{
 		"model":      p.visionModel,

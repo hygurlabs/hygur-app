@@ -250,7 +250,7 @@ func (c *Connector) fetch(ctx context.Context, url, username, password string) (
 func (c *Connector) ingest(ctx context.Context, contentID string, ev Event) error {
 	title := strings.TrimSpace(ev.Summary)
 	if title == "" {
-		title = "(événement sans titre)"
+		title = "(untitled event)"
 	}
 
 	var sb strings.Builder

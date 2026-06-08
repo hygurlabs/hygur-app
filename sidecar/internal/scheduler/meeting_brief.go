@@ -86,7 +86,7 @@ func (m *MeetingBriefer) Generate(ctx context.Context, in MeetingInput) (Meeting
 	prompt := buildMeetingPrompt(in, res.Results)
 	resp, err := m.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: "system", Content: "Tu prépares un briefing court avant un rendez-vous ou une échéance. Appuie-toi UNIQUEMENT sur le contexte fourni, n'invente rien. Garde tout raisonnement interne bref. Réponds en Markdown, en français, en 3 à 6 puces maximum."},
+			{Role: "system", Content: "You prepare a short briefing ahead of a meeting or deadline. Rely ONLY on the provided context, invent nothing. Keep internal reasoning brief. Reply in Markdown, in English, in 3 to 6 bullets maximum."},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -171,12 +171,12 @@ func buildMeetingQuery(in MeetingInput) string {
 func buildMeetingPrompt(in MeetingInput, results []retrieval.UnifiedResult) string {
 	var sb strings.Builder
 	if in.Kind == "mail" {
-		sb.WriteString("Échéance à préparer : « ")
+		sb.WriteString("Deadline to prepare: \"")
 	} else {
-		sb.WriteString("Rendez-vous à préparer : « ")
+		sb.WriteString("Meeting to prepare: \"")
 	}
 	sb.WriteString(in.Title)
-	sb.WriteString(" »")
+	sb.WriteString("\"")
 	if !in.When.IsZero() {
 		sb.WriteString(" (")
 		sb.WriteString(in.When.Format("02/01 15:04"))
@@ -184,22 +184,22 @@ func buildMeetingPrompt(in MeetingInput, results []retrieval.UnifiedResult) stri
 	}
 	sb.WriteString(".\n")
 	if len(in.Attendees) > 0 {
-		sb.WriteString("Participants : ")
+		sb.WriteString("Attendees: ")
 		sb.WriteString(strings.Join(in.Attendees, ", "))
 		sb.WriteString(".\n")
 	}
 	if in.Location != "" {
-		sb.WriteString("Lieu : ")
+		sb.WriteString("Location: ")
 		sb.WriteString(in.Location)
 		sb.WriteString(".\n")
 	}
 	if in.Notes != "" {
-		sb.WriteString("Notes : ")
+		sb.WriteString("Notes: ")
 		sb.WriteString(in.Notes)
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\nGénère un briefing court (3-6 puces) : ce qu'il faut savoir/rappeler, décisions ou points en attente, et l'action à mener. Termine par une puce « Contexte : » listant les éléments utilisés.\n\n")
-	sb.WriteString("Contexte issu de la base personnelle :\n")
+	sb.WriteString("\nGenerate a short briefing (3-6 bullets): what to know/recall, decisions or pending points, and the action to take. End with a \"Context:\" bullet listing the items used.\n\n")
+	sb.WriteString("Context from the personal knowledge base:\n")
 	for i, r := range results {
 		sb.WriteString(fmt.Sprintf("- [%s] %s", r.SourceType, r.Title))
 		if r.MailFrom != "" {

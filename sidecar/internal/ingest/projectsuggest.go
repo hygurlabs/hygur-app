@@ -34,24 +34,24 @@ func suggestProjectID(ctx context.Context, client *llm.Client, item *store.Knowl
 
 	var names []string
 	var sb strings.Builder
-	sb.WriteString("Projets :\n")
+	sb.WriteString("Projects:\n")
 	for _, p := range projects {
 		names = append(names, p.Name)
 		sb.WriteString("- ")
 		sb.WriteString(p.Name)
 		if p.Description != nil && strings.TrimSpace(*p.Description) != "" {
-			sb.WriteString(" : ")
+			sb.WriteString(": ")
 			sb.WriteString(strings.TrimSpace(*p.Description))
 		}
 		sb.WriteByte('\n')
 	}
-	sb.WriteString("\nDocument :\n")
+	sb.WriteString("\nDocument:\n")
 	sb.WriteString(body)
 
-	system := "Tu ranges un document dans l'UN des projets de l'utilisateur, ou NONE si aucun " +
-		"ne convient clairement.\nProjets autorisés : " + strings.Join(names, ", ") + ".\n" +
-		"Règles STRICTES : réponds UNIQUEMENT par le nom EXACT d'un projet de la liste, ou NONE. " +
-		"Aucun autre texte. En cas de doute, réponds NONE. N'invente jamais de projet."
+	system := "You file a document under ONE of the user's projects, or NONE if none " +
+		"clearly fits.\nAllowed projects: " + strings.Join(names, ", ") + ".\n" +
+		"STRICT rules: reply ONLY with the EXACT name of a project from the list, or NONE. " +
+		"No other text. When in doubt, reply NONE. Never invent a project."
 
 	resp, err := client.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{

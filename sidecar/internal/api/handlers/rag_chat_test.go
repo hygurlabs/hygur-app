@@ -846,8 +846,8 @@ func TestBuildMessagesWithContext(t *testing.T) {
 				}
 
 				// Should contain context header
-				if !strings.Contains(result[0].Content, "## Contexte pertinent") {
-					t.Error("expected system message to contain '## Contexte pertinent'")
+				if !strings.Contains(result[0].Content, "## Relevant context") {
+					t.Error("expected system message to contain '## Relevant context'")
 				}
 
 				// Should contain citation instruction
