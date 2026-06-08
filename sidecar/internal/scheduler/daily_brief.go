@@ -329,7 +329,10 @@ func (d *DailyBrief) gatherItems(ctx context.Context, opts RunOptions) ([]*store
 	}
 	items, err := d.store.ListKnowledgeItemsSince(
 		ctx, since,
-		[]string{"email", "note", "file", "pdf", "markdown", "md", "txt"},
+		// "mail" is the edge/Proton source type (the bulk of the KB); without it
+		// the brief saw none of the user's mail. "email" stays for the direct-IMAP
+		// path.
+		[]string{"mail", "email", "note", "file", "pdf", "markdown", "md", "txt"},
 		rawLimit,
 	)
 	if err != nil {
@@ -575,7 +578,12 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 			sb.WriteString(cd.Format("2006-01-02"))
 			sb.WriteByte(')')
 		}
-		if from, ok := it.Metadata["mail_from"].(string); ok && from != "" {
+		// Sender: direct-IMAP uses "mail_from"; edge/Proton uses "from".
+		from, _ := it.Metadata["mail_from"].(string)
+		if from == "" {
+			from, _ = it.Metadata["from"].(string)
+		}
+		if from != "" {
 			sb.WriteString(" — from ")
 			sb.WriteString(from)
 		}
