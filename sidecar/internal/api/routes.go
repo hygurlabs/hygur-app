@@ -99,6 +99,7 @@ func (s *Server) setupRoutes() {
 			r.Delete("/{content_id}/project-suggestion", s.handleDismissProjectSuggestion)
 			// On-demand grounded reply draft for a mail item (W7).
 			r.Post("/{content_id}/draft-reply", s.handleDraftReply)
+			r.Get("/{content_id}/claims", s.handleItemClaims)
 		})
 
 		// Tag endpoints

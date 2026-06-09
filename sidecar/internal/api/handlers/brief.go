@@ -373,6 +373,29 @@ func (h *BriefHandler) DraftReply(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"draft": draft})
 }
 
+// Claims handles GET /knowledge/{content_id}/claims — W6 stage-1 preview: runs
+// LLM claim extraction (verbatim-quote gated) on the item and returns the claims,
+// so claim quality can be eyeballed on real data before the cached backfill.
+func (h *BriefHandler) Claims(w http.ResponseWriter, r *http.Request) {
+	if h.brief == nil || h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	item, err := h.store.GetKnowledgeItem(r.Context(), contentIDParam(r))
+	if err != nil || item == nil {
+		writeBriefError(w, http.StatusNotFound, "NOT_FOUND", "item not found")
+		return
+	}
+	claims, err := h.brief.ExtractClaims(r.Context(), item)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("claim extraction failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to extract claims")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"claims": claims, "count": len(claims)})
+}
+
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

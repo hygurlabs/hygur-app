@@ -585,6 +585,15 @@ func (s *Server) handleDraftReply(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
+// handleItemClaims handles GET /knowledge/{content_id}/claims (W6 stage-1 preview).
+func (s *Server) handleItemClaims(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.Claims(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
 // handleKnowledgeFollowupReport handles GET /knowledge/followup/report — the
 // streamed natural-language report (SSE). Delegates to the BriefHandler.
 func (s *Server) handleKnowledgeFollowupReport(w http.ResponseWriter, r *http.Request) {
