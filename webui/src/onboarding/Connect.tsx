@@ -116,7 +116,8 @@ export function Connect() {
       }
       const r = await fetch(ep + "/version");
       if (!r.ok) throw new Error(`Couldn't reach ${ep} — HTTP ${r.status}`);
-      setConnection(ep, key);
+      // Manual self-host key has no refresh → persist it so it survives a reload.
+      setConnection(ep, key, true);
       window.location.reload();
     });
 

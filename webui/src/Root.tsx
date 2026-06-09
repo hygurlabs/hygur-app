@@ -4,7 +4,13 @@ import { Onboarding } from "./onboarding/Onboarding";
 import { Connect } from "./onboarding/Connect";
 import { ModePicker } from "./onboarding/ModePicker";
 import { isOnboardingComplete } from "./lib/onboarding";
-import { needsConnection, SIGNED_OUT_EVENT } from "./lib/connection";
+import {
+  apiKey,
+  isRemote,
+  needsConnection,
+  refreshAccessToken,
+  SIGNED_OUT_EVENT,
+} from "./lib/connection";
 import { isDesktop, getDesktopConfig } from "./lib/desktop";
 
 /** Gates the app behind first-run mode selection + onboarding. `done`/`modeChosen
@@ -22,12 +28,29 @@ export function Root() {
   // (refresh failed → clearTokens cleared the endpoint) reactively routes to
   // Connect instead of stranding the user on a 401-ing app shell.
   const [, setSignedOutTick] = useState(0);
+  // Cloud shell: the access token lives in memory (Phase B), so on a fresh load
+  // we restore it from the refresh cookie before showing the app. Only when we're
+  // remote with no key yet (a persisted/manual key or the desktop META token make
+  // this false → no bootstrap needed).
+  const [booting, setBooting] = useState<boolean>(() => isRemote() && !apiKey());
 
   useEffect(() => {
     const onSignedOut = () => setSignedOutTick((n) => n + 1);
     window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
     return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
   }, []);
+
+  useEffect(() => {
+    if (!booting) return;
+    let cancelled = false;
+    // Failure (dead cookie) calls clearTokens → SIGNED_OUT → re-render to Connect.
+    void refreshAccessToken().finally(() => {
+      if (!cancelled) setBooting(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [booting]);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +73,8 @@ export function Root() {
 
   // No server reachable yet (packaged client / bare browser) → connect first.
   if (needsConnection()) return <Connect />;
+  // Cloud shell restoring its in-memory access token from the refresh cookie.
+  if (booting) return null;
   // Desktop first run: choose the engine mode before anything else.
   if (modeChosen === null) return null;
   if (!modeChosen) return <ModePicker onDone={() => setModeChosen(true)} />;

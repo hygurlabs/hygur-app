@@ -34,10 +34,17 @@ export function apiBase(): string {
   return ep ? ep.replace(/\/+$/, "") : "";
 }
 
-/** Key sent as X-Hygur-Token. A configured remote key wins; otherwise the
- *  same-origin token injected by the local sidecar. */
+// The cloud-shell access token is held IN MEMORY (not localStorage) so an XSS
+// can't read it; it's restored from the refresh cookie on page load. Fallbacks:
+// a *persisted* key (manual self-host connect, refresh-less) and the loopback
+// META token (desktop / local sidecar). Lost on reload by design for the cloud
+// shell — Root refreshes it at startup.
+let memAccess = "";
+
+/** Key sent as X-Hygur-Token: the in-memory cloud access token, else a persisted
+ *  manual key, else the same-origin token injected by the local sidecar. */
 export function apiKey(): string {
-  return ls(API_KEY_KEY) || META_TOKEN;
+  return memAccess || ls(API_KEY_KEY) || META_TOKEN;
 }
 
 /** The token injected by the LOCAL sidecar that served this page (empty on a
@@ -52,9 +59,10 @@ export function isRemote(): boolean {
   return !!ls(ENDPOINT_KEY);
 }
 
-/** True when the client can authenticate: local same-origin, or a remote key set. */
+/** True when the client can authenticate: local same-origin, or a key available
+ *  (in memory, persisted, or injected). */
 export function isConfigured(): boolean {
-  return !isRemote() || !!ls(API_KEY_KEY);
+  return !isRemote() || !!apiKey();
 }
 
 /** True when there is no way to reach the API yet: no remote endpoint configured
@@ -67,26 +75,37 @@ export function needsConnection(): boolean {
 
 /** Current remote connection (empty strings in local mode). */
 export function getConnection(): { endpoint: string; key: string } {
-  return { endpoint: ls(ENDPOINT_KEY) ?? "", key: ls(API_KEY_KEY) ?? "" };
+  return { endpoint: ls(ENDPOINT_KEY) ?? "", key: memAccess || ls(API_KEY_KEY) || "" };
 }
 
-/** Persists a remote endpoint + key. Empty endpoint reverts to local mode. */
-export function setConnection(endpoint: string, key: string): void {
+/** Sets a remote endpoint + key. By default the key is held IN MEMORY (the cloud
+ *  shell, whose access token is restored from the refresh cookie on load).
+ *  `persist=true` stores it in localStorage — for a manual, refresh-less self-host
+ *  key that must survive a reload. Empty endpoint reverts to local mode. */
+export function setConnection(endpoint: string, key: string, persist = false): void {
   const ep = endpoint.trim().replace(/\/+$/, "");
+  if (!ep) {
+    clearConnection();
+    return;
+  }
   try {
-    if (ep) {
-      localStorage.setItem(ENDPOINT_KEY, ep);
+    localStorage.setItem(ENDPOINT_KEY, ep);
+    if (persist) {
       localStorage.setItem(API_KEY_KEY, key.trim());
+      memAccess = "";
     } else {
-      clearConnection();
+      memAccess = key.trim();
+      localStorage.removeItem(API_KEY_KEY); // don't let a stale persisted key shadow
     }
   } catch {
-    /* localStorage unavailable — stays in local mode */
+    // localStorage unavailable — keep the in-memory access at least usable.
+    if (!persist) memAccess = key.trim();
   }
 }
 
 /** Clears the remote connection (back to same-origin/local). */
 export function clearConnection(): void {
+  memAccess = "";
   try {
     localStorage.removeItem(ENDPOINT_KEY);
     localStorage.removeItem(API_KEY_KEY);
