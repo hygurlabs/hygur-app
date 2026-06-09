@@ -392,6 +392,28 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(href);
   },
+  /** Streams a passphrase-encrypted export (notes + briefs) and saves it via the
+   *  browser. The passphrase encrypts the archive server-side and is never stored;
+   *  decrypt with `openssl enc -d -aes-256-cbc -pbkdf2`. */
+  exportData: async (passphrase: string): Promise<void> => {
+    const r = await fetchAuthed(
+      "/admin/export",
+      { method: "POST", body: JSON.stringify({ passphrase }) },
+      { "Content-Type": "application/json" },
+    );
+    if (!r.ok) throw httpError(r);
+    const blob = await r.blob();
+    const cd = r.headers.get("Content-Disposition") ?? "";
+    const name = /filename="?([^"]+)"?/.exec(cd)?.[1] ?? "hygur-export.zip.enc";
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(href);
+  },
   restoreBackup: async (
     file: File,
   ): Promise<{ status: string; restart_required: boolean }> => {

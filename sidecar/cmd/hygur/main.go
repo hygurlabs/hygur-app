@@ -760,6 +760,7 @@ func main() {
 	server.SetConfigHandler(configHandler)
 	server.SetUsageHandler(handlers.NewUsageHandler(db, logger))
 	server.SetBackupHandler(handlers.NewBackupHandler(db, cfg.Store.Path, dbKey, logger))
+	server.SetExportHandler(handlers.NewExportHandler(db, logger))
 	server.SetEncryptionHandler(handlers.NewEncryptionHandler(keyStore, dbKeyEnvManaged, logger))
 
 	// Phase 1 (pair mode) — interaction logging + learning gauge.

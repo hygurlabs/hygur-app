@@ -47,6 +47,8 @@ func (s *Server) setupRoutes() {
 		r.Get("/admin/db/backup", s.handleBackupDownload)
 		r.Post("/admin/db/backup/save", s.handleBackupSave)
 		r.Post("/admin/db/restore", s.handleBackupRestore)
+		// Encrypted data export (GDPR portability) — user-passphrase-encrypted zip.
+		r.Post("/admin/export", s.handleExport)
 		// Local at-rest encryption (opt-in; key in the OS keychain).
 		r.Get("/admin/db/encryption", s.handleEncryptionStatus)
 		r.Post("/admin/db/encrypt", s.handleEncryptionEnable)

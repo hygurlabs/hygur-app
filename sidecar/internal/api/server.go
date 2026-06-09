@@ -52,6 +52,7 @@ type Server struct {
 	insightsHandler  *handlers.InsightsHandler
 	usageHandler     *handlers.UsageHandler
 	backupHandler    *handlers.BackupHandler
+	exportHandler    *handlers.ExportHandler
 	encryptionHandler *handlers.EncryptionHandler
 	token            string             // Static token (local mode) + WebUI bootstrap
 	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
@@ -649,6 +650,19 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+// SetExportHandler attaches the encrypted data-export handler.
+func (s *Server) SetExportHandler(handler *handlers.ExportHandler) {
+	s.exportHandler = handler
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if s.exportHandler != nil {
+		s.exportHandler.Export(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "export handler not configured")
 }
 
 // SetEncryptionHandler attaches the local at-rest encryption handler.
