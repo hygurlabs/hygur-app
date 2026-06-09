@@ -169,6 +169,36 @@ func TestBilling_SuspendResume(t *testing.T) {
 	}
 }
 
+// A reaped ('gone') tenant becomes purgeable only once its retention window has
+// elapsed; a still-live or just-reaped tenant is never returned.
+func TestStore_Purgeable(t *testing.T) {
+	store := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	b := NewBilling(store, whSecret)
+	b.now = func() time.Time { return now }
+
+	if rec := postWebhook(t, b, paidEvent("sub_1", "a@b.com"), now); rec.Code != http.StatusOK {
+		t.Fatalf("paid: %d", rec.Code)
+	}
+	// Not reaped yet → never purgeable.
+	if rows, _ := store.ListPurgeable(time.Now(), 0); len(rows) != 0 {
+		t.Fatalf("pending tenant purgeable = %d, want 0", len(rows))
+	}
+	// Reap it (stamps reaped_at ≈ now-real).
+	if err := store.SetProvisionState("sub_1", "gone"); err != nil {
+		t.Fatalf("mark gone: %v", err)
+	}
+	real := time.Now()
+	// 30-day window not elapsed → not purgeable.
+	if rows, _ := store.ListPurgeable(real, 30*24*time.Hour); len(rows) != 0 {
+		t.Errorf("just-reaped tenant purgeable at 30d = %d, want 0", len(rows))
+	}
+	// Looking from far enough ahead with a short window → purgeable.
+	if rows, _ := store.ListPurgeable(real.Add(time.Hour), 30*time.Minute); len(rows) != 1 {
+		t.Errorf("reaped tenant past window = %d, want 1", len(rows))
+	}
+}
+
 // A bad signature is rejected before any side effect.
 func TestBilling_RejectsBadSignature(t *testing.T) {
 	store := testStore(t)

@@ -157,6 +157,13 @@ CREATE TABLE IF NOT EXISTS webauthn_sessions (
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_stripe_sub_state ON stripe_subscriptions(provision_state)`); err != nil {
 		return fmt.Errorf("controlplane: migrate index: %w", err)
 	}
+	// When a canceled tenant is reaped ('gone'), reaped_at stamps the moment — the
+	// retention clock for the disk-reclaim reaper (the PV is Retain, so the host
+	// dir outlives the namespace). Idempotent add for pre-existing DBs.
+	if _, err := s.db.Exec(`ALTER TABLE stripe_subscriptions ADD COLUMN reaped_at TEXT`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("controlplane: migrate reaped_at: %w", err)
+	}
 	return nil
 }
 

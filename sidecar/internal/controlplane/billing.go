@@ -310,11 +310,17 @@ func (s *Store) SetSubscriptionBySub(subID, status string, validUntil *time.Time
 	return s.SetSubscription(accNum, status, validUntil)
 }
 
-// SetProvisionState moves a subscription through pending→ready / →deprovision /
-// →gone. Setting 'ready' also stamps provisioned_at. Used by the poller.
+// SetProvisionState moves a subscription through pending→ready / →suspend→suspended /
+// →resume / →deprovision→gone→purged. Setting 'ready' stamps provisioned_at; 'gone'
+// stamps reaped_at (the retention clock). Used by the poller.
 func (s *Store) SetProvisionState(subID, state string) error {
-	if state == "ready" {
+	switch state {
+	case "ready":
 		_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provision_state=?, provisioned_at=? WHERE stripe_sub_id=?`,
+			state, time.Now().UTC().Format(rfc), subID)
+		return err
+	case "gone":
+		_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provision_state=?, reaped_at=? WHERE stripe_sub_id=?`,
 			state, time.Now().UTC().Format(rfc), subID)
 		return err
 	}
@@ -359,6 +365,26 @@ func (s *Store) ListProvisions(state string) ([]ProvisionRow, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanProvisionRows(rows)
+}
+
+// ListPurgeable returns reaped ('gone') tenants whose retention window has elapsed
+// (reaped_at older than `retention` before now) — the disk-reclaim work queue. The
+// PV is Retain and the tenant DEK was destroyed with its namespace, so the data is
+// already crypto-shredded; this only reclaims the orphaned host directory.
+func (s *Store) ListPurgeable(now time.Time, retention time.Duration) ([]ProvisionRow, error) {
+	cutoff := now.Add(-retention).UTC().Format(rfc)
+	rows, err := s.db.Query(`
+		SELECT ss.stripe_sub_id, ss.account_number, a.tenant_id, ss.checkout_session_id, ss.provision_state
+		FROM stripe_subscriptions ss JOIN accounts a ON a.account_number = ss.account_number
+		WHERE ss.provision_state='gone' AND ss.reaped_at IS NOT NULL AND ss.reaped_at < ?`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	return scanProvisionRows(rows)
+}
+
+func scanProvisionRows(rows *sql.Rows) ([]ProvisionRow, error) {
 	defer rows.Close()
 	var out []ProvisionRow
 	for rows.Next() {
