@@ -85,6 +85,15 @@ func Detect(items []*store.KnowledgeItem) []Conflict {
 }
 
 // detectInCluster runs each attribute check over one thread cluster.
+//
+// Identifier attributes only (IBAN / VAT / structured communication): a thread is
+// expected to carry ONE canonical value, so ≥2 distinct values is a genuine signal.
+// Amounts and due dates are deliberately NOT surfaced here — a thread legitimately
+// holds many unrelated amounts/dates (a breakdown, several invoices, a financial
+// plan), which made thread-level grouping noisy (mostly false positives). Value
+// conflicts tied to a specific subject are handled by the W6 claim layer
+// (DetectClaimConflicts + Reconcile), where every value carries its own entity.
+// (amountKey/dateKey are kept for that layer and their unit tests.)
 func detectInCluster(cluster string, group []*store.KnowledgeItem) []Conflict {
 	var out []Conflict
 
@@ -108,41 +117,6 @@ func detectInCluster(cluster string, group []*store.KnowledgeItem) []Conflict {
 		if c, ok := buildConflict(a.typ, a.sev, cluster, byKey); ok {
 			out = append(out, c)
 		}
-	}
-
-	// Amounts: divergence within a currency (cents differ).
-	amountKeys := map[string][]occ{}
-	for _, it := range group {
-		for _, v := range metaStrings(it.Metadata, "extracted_amounts") {
-			if ck, ok := amountKey(v); ok {
-				amountKeys[ck] = append(amountKeys[ck], occ{it, v})
-			}
-		}
-	}
-	if c, ok := buildConflict("amount", "high", cluster, amountKeys); ok {
-		out = append(out, c)
-	}
-
-	// Due dates: compare only within the same shape (with-year vs day/month
-	// only) so "4 mai" never falsely conflicts with "2026-05-04".
-	withYear := map[string][]occ{}
-	dayMonth := map[string][]occ{}
-	for _, it := range group {
-		for _, v := range metaStrings(it.Metadata, "extracted_due_dates") {
-			if ck, hasYear, ok := dateKey(v); ok {
-				if hasYear {
-					withYear[ck] = append(withYear[ck], occ{it, v})
-				} else {
-					dayMonth[ck] = append(dayMonth[ck], occ{it, v})
-				}
-			}
-		}
-	}
-	if c, ok := buildConflict("due_date", "medium", cluster, withYear); ok {
-		out = append(out, c)
-	}
-	if c, ok := buildConflict("due_date", "medium", cluster, dayMonth); ok {
-		out = append(out, c)
 	}
 
 	return out

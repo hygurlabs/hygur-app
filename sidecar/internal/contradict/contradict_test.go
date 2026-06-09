@@ -92,46 +92,40 @@ func item(id, subject, from string, day int, meta map[string]any) *store.Knowled
 	}
 }
 
-func TestDetectAmountConflict(t *testing.T) {
+// Amounts and due dates are intentionally NOT surfaced by the deterministic
+// detector (a thread holds many legitimate values → noise); they're deferred to
+// the W6 claim layer, which scopes each value to its (entity, attribute).
+func TestDetectAmountsAndDatesNotSurfaced(t *testing.T) {
 	items := []*store.KnowledgeItem{
-		item("a", "Facture projet X", "alice@acme.com", 1, map[string]any{"extracted_amounts": []string{"1000.00 EUR"}}),
-		item("b", "Re: Facture projet X", "bob@acme.com", 2, map[string]any{"extracted_amounts": []string{"1200.00 EUR"}}),
+		item("a", "Facture projet X", "alice@acme.com", 1, map[string]any{
+			"extracted_amounts":   []string{"1000.00 EUR"},
+			"extracted_due_dates": []string{"4 mai"},
+		}),
+		item("b", "Re: Facture projet X", "bob@acme.com", 2, map[string]any{
+			"extracted_amounts":   []string{"1200.00 EUR"},
+			"extracted_due_dates": []string{"10 mai"},
+		}),
 	}
-	got := Detect(items)
-	if len(got) != 1 {
-		t.Fatalf("want 1 conflict, got %d: %+v", len(got), got)
-	}
-	c := got[0]
-	if c.Type != "amount" || c.Severity != "high" || c.Cluster != "facture projet x" {
-		t.Errorf("unexpected conflict header: %+v", c)
-	}
-	if len(c.Members) != 2 {
-		t.Fatalf("want 2 members, got %d", len(c.Members))
-	}
-	if c.Members[0].ContentID != "a" || c.Members[1].ContentID != "b" {
-		t.Errorf("members not sorted by date: %+v", c.Members)
-	}
-	if c.Members[0].Value != "1000.00 EUR" || c.Members[0].From != "alice@acme.com" {
-		t.Errorf("member citation wrong: %+v", c.Members[0])
+	if got := Detect(items); len(got) != 0 {
+		t.Errorf("amounts/dates must not be surfaced deterministically, got %+v", got)
 	}
 }
 
 func TestDetectNoConflictSameValue(t *testing.T) {
 	items := []*store.KnowledgeItem{
-		item("a", "Facture", "alice@acme.com", 1, map[string]any{"extracted_amounts": []string{"1000.00 EUR"}}),
-		item("b", "Re: Facture", "bob@acme.com", 2, map[string]any{"extracted_amounts": []string{"1000.00 EUR"}}),
+		item("a", "Loyer", "x@y.com", 1, map[string]any{"extracted_iban": []string{"BE68 5390 0754 7034"}}),
+		item("b", "Re: Loyer", "z@y.com", 2, map[string]any{"extracted_iban": []string{"BE68539007547034"}}), // same, spacing differs
 	}
 	if got := Detect(items); len(got) != 0 {
-		t.Errorf("identical amounts must not conflict, got %+v", got)
+		t.Errorf("identical IBANs (spacing aside) must not conflict, got %+v", got)
 	}
 }
 
 func TestDetectNoConflictSingleSource(t *testing.T) {
-	// One email mentioning two amounts is an explanation, not a cross-source
-	// contradiction.
+	// One email mentioning two values is an explanation, not a cross-source conflict.
 	items := []*store.KnowledgeItem{
-		item("a", "Facture", "alice@acme.com", 1, map[string]any{"extracted_amounts": []string{"1000.00 EUR", "1200.00 EUR"}}),
-		item("b", "Re: Facture", "bob@acme.com", 2, map[string]any{}),
+		item("a", "Loyer", "x@y.com", 1, map[string]any{"extracted_iban": []string{"BE68 5390 0754 7034", "FR7630006000011234567890189"}}),
+		item("b", "Re: Loyer", "z@y.com", 2, map[string]any{}),
 	}
 	if got := Detect(items); len(got) != 0 {
 		t.Errorf("single-source divergence must not conflict, got %+v", got)
@@ -140,8 +134,8 @@ func TestDetectNoConflictSingleSource(t *testing.T) {
 
 func TestDetectDifferentSubjectsNotClustered(t *testing.T) {
 	items := []*store.KnowledgeItem{
-		item("a", "Facture A", "alice@acme.com", 1, map[string]any{"extracted_amounts": []string{"1000.00 EUR"}}),
-		item("b", "Facture B", "bob@acme.com", 2, map[string]any{"extracted_amounts": []string{"1200.00 EUR"}}),
+		item("a", "Loyer A", "x@y.com", 1, map[string]any{"extracted_iban": []string{"BE68 5390 0754 7034"}}),
+		item("b", "Loyer B", "z@y.com", 2, map[string]any{"extracted_iban": []string{"FR7630006000011234567890189"}}),
 	}
 	if got := Detect(items); len(got) != 0 {
 		t.Errorf("different subjects must not cluster, got %+v", got)
@@ -159,34 +153,11 @@ func TestDetectIBANConflict(t *testing.T) {
 	}
 }
 
-func TestDetectDueDateConflictYearless(t *testing.T) {
-	items := []*store.KnowledgeItem{
-		item("a", "Échéance devis", "x@y.com", 1, map[string]any{"extracted_due_dates": []string{"4 mai"}}),
-		item("b", "Re: Échéance devis", "z@y.com", 2, map[string]any{"extracted_due_dates": []string{"10 mai"}}),
-	}
-	got := Detect(items)
-	if len(got) != 1 || got[0].Type != "due_date" {
-		t.Fatalf("want 1 due_date conflict, got %+v", got)
-	}
-}
-
-func TestDetectDueDateNoCrossShapeFalsePositive(t *testing.T) {
-	// "4 mai" (no year) must NOT conflict with "04/05/2026" (with year): we
-	// cannot prove they differ, so high precision skips it.
-	items := []*store.KnowledgeItem{
-		item("a", "Échéance", "x@y.com", 1, map[string]any{"extracted_due_dates": []string{"4 mai"}}),
-		item("b", "Re: Échéance", "z@y.com", 2, map[string]any{"extracted_due_dates": []string{"04/05/2026"}}),
-	}
-	if got := Detect(items); len(got) != 0 {
-		t.Errorf("cross-shape dates must not conflict, got %+v", got)
-	}
-}
-
 func TestDetectMetaAnyForm(t *testing.T) {
 	// After a JSON round-trip through the store, []string becomes []any.
 	items := []*store.KnowledgeItem{
-		item("a", "Facture", "alice@acme.com", 1, map[string]any{"extracted_amounts": []any{"1000.00 EUR"}}),
-		item("b", "Re: Facture", "bob@acme.com", 2, map[string]any{"extracted_amounts": []any{"1200.00 EUR"}}),
+		item("a", "Loyer", "x@y.com", 1, map[string]any{"extracted_iban": []any{"BE68 5390 0754 7034"}}),
+		item("b", "Re: Loyer", "z@y.com", 2, map[string]any{"extracted_iban": []any{"FR7630006000011234567890189"}}),
 	}
 	if got := Detect(items); len(got) != 1 {
 		t.Errorf("want 1 conflict from []any metadata, got %+v", got)
