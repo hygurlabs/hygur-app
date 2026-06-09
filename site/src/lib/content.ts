@@ -12,7 +12,8 @@ import {
 /** App / Server CTAs point to the public repo. */
 export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
 
-/** Hygur Cloud subscription — Stripe payment link (Personal, 29 €/mo). */
+/** Hygur Cloud subscription — Stripe payment link (Personal, 35 €/mo standard;
+ *  launch offer 29.90 €/mo locked for life for the first 2,000 subscribers). */
 export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/14A9AMgW38NvbgU7MS2Fa01";
 
 /** Master gate for paid signups. Keep FALSE until the production LLM backend is
@@ -97,11 +98,11 @@ export const EDITIONS: Edition[] = [
     id: "cloud",
     name: "Hygur Cloud",
     kicker: "Managed",
-    tagline: "Hosted Hygur Server — 29 €/mo",
+    tagline: "Hosted Hygur Server — 29.90 €/mo launch price, then 35 €/mo",
     body: "A managed Hygur Server instance, one per account, running exclusively on EU servers. GPU inference runs at an EU provider that never trains on your data. We run and update it; you keep full control of your data and the model it talks to.",
     badges: CLOUD_OPEN
-      ? ["Hosted", "29 €/mo", "EU-only · no training"]
-      : ["29 €/mo", "EU-only · no training", "Coming soon"],
+      ? ["Hosted", "29.90 €/mo · launch", "EU-only · no training"]
+      : ["29.90 €/mo · launch", "EU-only · no training", "Coming soon"],
     icon: Cloud,
     cta: CLOUD_OPEN ? "Subscribe" : "Coming soon",
     // Closed: stay on the page (never open Stripe). Open: the Stripe payment link.
