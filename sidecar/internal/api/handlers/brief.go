@@ -351,6 +351,28 @@ func (h *BriefHandler) AgendaEvents(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"events": out})
 }
 
+// DraftReply handles POST /knowledge/{content_id}/draft-reply — an on-demand,
+// grounded reply draft for a mail item (not cached). Returns {"draft": "..."}.
+func (h *BriefHandler) DraftReply(w http.ResponseWriter, r *http.Request) {
+	if h.brief == nil || h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	item, err := h.store.GetKnowledgeItem(r.Context(), contentIDParam(r))
+	if err != nil || item == nil {
+		writeBriefError(w, http.StatusNotFound, "NOT_FOUND", "item not found")
+		return
+	}
+	draft, err := h.brief.DraftReply(r.Context(), item)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("draft reply failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to draft reply")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"draft": draft})
+}
+
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

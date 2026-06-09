@@ -223,6 +223,24 @@ CREATE TABLE IF NOT EXISTS chat_message_attachments (
 CREATE INDEX IF NOT EXISTS idx_chat_attachments_type ON chat_message_attachments(type, created_at);
 `,
 	},
+	{
+		Version: 13,
+		Name:    "tasks",
+		SQL: `
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    due_date TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT '',
+    source_content_id TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

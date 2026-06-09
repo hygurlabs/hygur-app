@@ -32,6 +32,7 @@ type Server struct {
 	modelsHandler    *handlers.ModelsHandler
 	knowledgeHandler *handlers.KnowledgeHandler
 	projectHandler   *handlers.ProjectHandler
+	taskHandler      *handlers.TaskHandler
 	mailHandler      *handlers.MailHandler
 	searchHandler    *handlers.SearchHandler
 	notesHandler     *handlers.NotesHandler
@@ -151,6 +152,43 @@ func (s *Server) SetKnowledgeHandler(handler *handlers.KnowledgeHandler) {
 // This allows dependency injection of the project handler.
 func (s *Server) SetProjectHandler(handler *handlers.ProjectHandler) {
 	s.projectHandler = handler
+}
+
+// SetTaskHandler sets the task handler for the server.
+func (s *Server) SetTaskHandler(handler *handlers.TaskHandler) {
+	s.taskHandler = handler
+}
+
+func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Create(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskPatch(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Patch(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Delete(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
 }
 
 // SetMailHandler sets the mail handler for the server.
@@ -535,6 +573,15 @@ func (s *Server) handleAgendaEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"events":[]}`))
+}
+
+// handleDraftReply handles POST /knowledge/{content_id}/draft-reply.
+func (s *Server) handleDraftReply(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.DraftReply(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
 // handleKnowledgeFollowupReport handles GET /knowledge/followup/report — the

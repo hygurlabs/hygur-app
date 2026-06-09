@@ -6,6 +6,7 @@ import {
   StickyNote,
   Tag,
   CalendarDays,
+  CheckSquare,
   FolderKanban,
   GitCompareArrows,
   Newspaper,
@@ -32,6 +33,7 @@ const NAV: NavItem[] = [
   { to: "/briefings", label: "Briefings", icon: Newspaper },
   { to: "/tags", label: "Tags", icon: Tag },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
 ];
 

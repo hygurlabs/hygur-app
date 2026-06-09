@@ -358,6 +358,7 @@ func main() {
 	// source_path stays valid after the request.
 	knowledgeHandler.SetUploadDir(filepath.Join(dataDir, "uploads"))
 	projectHandler := handlers.NewProjectHandler(db, logger)
+	taskHandler := handlers.NewTaskHandler(db, logger)
 
 	// Create mail components
 	embeddingService := llm.NewEmbeddingService(llmClient, db)
@@ -744,6 +745,7 @@ func main() {
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)
+	server.SetTaskHandler(taskHandler)
 	server.SetMailHandler(mailHandler)
 	server.SetNotesHandler(notesHandler)
 	server.SetSessionsHandler(handlers.NewSessionsHandler(db, logger))

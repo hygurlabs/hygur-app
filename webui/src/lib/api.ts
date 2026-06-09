@@ -25,6 +25,7 @@ import type {
   SidecarConfig,
   SidecarConfigPatch,
   Tag,
+  Task,
   TimelineItem,
   TokenPricing,
   TokenUsageResponse,
@@ -185,6 +186,30 @@ export const api = {
     getJSON<{ items: TimelineItem[] }>(
       `/knowledge/project-timeline?project_id=${encodeURIComponent(projectId)}`,
     ),
+  /** On-demand grounded reply draft for a mail item (W7). Not cached. */
+  draftReply: (contentId: string) =>
+    postJSON<{ draft: string }>(
+      `/knowledge/${cidPath(contentId)}/draft-reply`,
+      {},
+    ),
+
+  // Tasks — local to-do list (W7).
+  tasks: (projectId?: string, status?: string) => {
+    const qs = new URLSearchParams();
+    if (projectId) qs.set("project_id", projectId);
+    if (status) qs.set("status", status);
+    const q = qs.toString();
+    return getJSON<{ tasks: Task[] }>(`/tasks${q ? `?${q}` : ""}`);
+  },
+  createTask: (body: {
+    title: string;
+    due_date?: string;
+    project_id?: string;
+    source_content_id?: string;
+  }) => postJSON<Task>("/tasks", body),
+  updateTask: (id: string, patch: { title?: string; status?: string; due_date?: string }) =>
+    patchJSON(`/tasks/${id}`, patch),
+  deleteTask: (id: string) => del(`/tasks/${id}`),
 
   // Notes — full CRUD.
   notes: () => getJSON<{ notes: Note[] }>("/notes"),

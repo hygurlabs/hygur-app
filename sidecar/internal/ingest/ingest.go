@@ -556,8 +556,10 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 // persist them. Pure of DB writes (safe to run concurrently). Empty when there's
 // no indexing LLM client or no text.
 func (i *Ingestor) classifyItem(ctx context.Context, item *store.KnowledgeItem) (cats []string, fresh bool) {
-	if cached := categoriesFromMetadata(item.Metadata); len(cached) > 0 {
-		return cached, false
+	if cachedFresh(item.Metadata, "mail_categories", mailCategoryVersion) {
+		if cached := categoriesFromMetadata(item.Metadata); len(cached) > 0 {
+			return cached, false
+		}
 	}
 	c := i.tier2Client()
 	if c == nil || strings.TrimSpace(item.NormalizedText) == "" {
@@ -580,6 +582,7 @@ func (i *Ingestor) applyItemTags(ctx context.Context, item *store.KnowledgeItem,
 	}
 	if fresh && len(cats) > 0 {
 		item.Metadata["mail_categories"] = cats
+		item.Metadata["mail_categories_version"] = mailCategoryVersion
 		if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
 			log.Printf("[ingest] category metadata update failed for %s: %v", item.ContentID, uerr)
 		}

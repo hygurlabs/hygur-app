@@ -224,7 +224,22 @@ CREATE TABLE IF NOT EXISTS chat_message_attachments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_attachments_type ON chat_message_attachments(type, created_at);
+
+-- tasks is a lightweight local to-do list, optionally linked to a project and
+-- to the knowledge item a task was created from.
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',     -- open | done
+    due_date TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT '',
+    source_content_id TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 12
+const CurrentSchemaVersion = 13

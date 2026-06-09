@@ -70,6 +70,7 @@ export function Library() {
             openDetail({
               title: r.title,
               contentId: r.content_id,
+              sourceType: r.source_type,
               meta: [
                 srcLabel(r.source_type),
                 fmtDate(date),
@@ -92,6 +93,7 @@ export function Library() {
         openDetail({
           title: it.title,
           contentId: it.content_id,
+          sourceType: it.source_type,
           meta: [srcLabel(it.source_type), fmtDate(metaDate(it.metadata))].filter(
             Boolean,
           ),

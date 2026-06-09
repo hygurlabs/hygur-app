@@ -120,6 +120,18 @@ export interface DigestEntry {
   sources: DigestSource[];
 }
 
+/** A local to-do (GET/POST /tasks). */
+export interface Task {
+  id: string;
+  title: string;
+  status: string; // "open" | "done"
+  due_date?: string;
+  project_id?: string;
+  source_content_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /** One row of a project's exchange timeline (GET /knowledge/project-timeline). */
 export interface TimelineItem {
   content_id: string;

@@ -110,10 +110,8 @@ func (i *Ingestor) suggestProjectForItem(ctx context.Context, item *store.Knowle
 	if item == nil || len(projects) == 0 {
 		return
 	}
-	if item.Metadata != nil {
-		if _, done := item.Metadata["suggested_project_id"]; done {
-			return
-		}
+	if cachedFresh(item.Metadata, "suggested_project_id", projectSuggestVersion) {
+		return
 	}
 	if pid, _ := i.store.GetProjectIDForItem(ctx, item.ContentID); pid != nil && *pid != "" {
 		return
@@ -123,6 +121,7 @@ func (i *Ingestor) suggestProjectForItem(ctx context.Context, item *store.Knowle
 		item.Metadata = map[string]any{}
 	}
 	item.Metadata["suggested_project_id"] = pid // empty = "classified, no match"
+	item.Metadata["suggested_project_id_version"] = projectSuggestVersion
 	if err := i.store.UpdateKnowledgeItem(ctx, item); err != nil {
 		log.Printf("[ingest] project suggestion update failed for %s: %v", item.ContentID, err)
 	}
@@ -167,10 +166,8 @@ func (i *Ingestor) SuggestProjects(ctx context.Context) (int, error) {
 			break
 		}
 		// Cheap skips (sequential reads) before spending an LLM call.
-		if it.Metadata != nil {
-			if _, done := it.Metadata["suggested_project_id"]; done {
-				continue
-			}
+		if cachedFresh(it.Metadata, "suggested_project_id", projectSuggestVersion) {
+			continue
 		}
 		if pid, _ := i.store.GetProjectIDForItem(ctx, it.ContentID); pid != nil && *pid != "" {
 			continue
@@ -186,6 +183,7 @@ func (i *Ingestor) SuggestProjects(ctx context.Context) (int, error) {
 				it.Metadata = map[string]any{}
 			}
 			it.Metadata["suggested_project_id"] = pid
+			it.Metadata["suggested_project_id_version"] = projectSuggestVersion
 			if err := i.store.UpdateKnowledgeItem(ctx, it); err != nil {
 				log.Printf("[ingest] project suggestion update failed for %s: %v", it.ContentID, err)
 			}

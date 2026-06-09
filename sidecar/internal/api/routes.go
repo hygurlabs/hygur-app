@@ -95,6 +95,8 @@ func (s *Server) setupRoutes() {
 			r.Delete("/{content_id}/project", s.handleUnlinkProject)
 			// Dismiss the proactive project suggestion (W4).
 			r.Delete("/{content_id}/project-suggestion", s.handleDismissProjectSuggestion)
+			// On-demand grounded reply draft for a mail item (W7).
+			r.Post("/{content_id}/draft-reply", s.handleDraftReply)
 		})
 
 		// Tag endpoints
@@ -116,6 +118,14 @@ func (s *Server) setupRoutes() {
 			r.Put("/{id}", s.handleProjectUpdate)
 			r.Delete("/{id}", s.handleProjectDelete)
 			r.Get("/{id}/items", s.handleProjectListItems)
+		})
+
+		// Tasks — local to-do list (optionally linked to a project/item).
+		r.Route("/tasks", func(r chi.Router) {
+			r.Get("/", s.handleTaskList)
+			r.Post("/", s.handleTaskCreate)
+			r.Patch("/{id}", s.handleTaskPatch)
+			r.Delete("/{id}", s.handleTaskDelete)
 		})
 
 		// Mail endpoints

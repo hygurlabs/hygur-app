@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronRight, FolderKanban, Sparkles } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, streamFollowupReport } from "../lib/api";
 import { useDetail } from "../components/DetailPanel";
@@ -33,6 +33,7 @@ export function FollowUp() {
       openDetail({
         title: it.title || fallbackTitle,
         contentId,
+        sourceType: it.source_type,
         meta: [it.date ? fmtDateTime(it.date) : "", it.source_type].filter(
           Boolean,
         ) as string[],
@@ -50,24 +51,25 @@ export function FollowUp() {
       <PageHeader
         title="Follow-up"
         subtitle="A grounded read of what's going on and what to focus on next. Refreshes hourly; every fact comes from your own messages."
+        actions={
+          <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] focus-within:border-accent">
+            <FolderKanban size={14} strokeWidth={1.75} className="shrink-0 text-muted" />
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              aria-label="Scope"
+              className="min-w-0 max-w-[12rem] cursor-pointer truncate bg-transparent pr-1 outline-none"
+            >
+              <option value="">Recent mail &amp; notes</option>
+              {(projects.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
       />
-
-      {/* Scope: recent activity (default) or a specific project. */}
-      <div className="mb-6 flex items-center gap-2.5">
-        <span className="shrink-0 text-[12px] text-muted">Scope</span>
-        <select
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          className="min-w-0 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
-        >
-          <option value="">Recent mail &amp; notes</option>
-          {(projects.data ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </div>
 
       {/* Report — streamed like an assistant writing. Keyed by scope so it
           re-streams from a clean slate when the project changes. */}
