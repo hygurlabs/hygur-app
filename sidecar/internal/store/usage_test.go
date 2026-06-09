@@ -6,6 +6,36 @@ import (
 	"time"
 )
 
+func TestChatTokensThisMonth(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if got, _ := db.ChatTokensThisMonth(ctx); got != 0 {
+		t.Fatalf("empty = %d, want 0", got)
+	}
+	mustRec := func(cat string, in, out int) {
+		if err := db.RecordTokenUsage(ctx, cat, in, out); err != nil {
+			t.Fatalf("record %s: %v", cat, err)
+		}
+	}
+	mustRec(TokenCategoryChat, 1000, 200)
+	mustRec(TokenCategoryChat, 500, 100)
+	mustRec(TokenCategoryEmbedding, 9999, 0) // excluded from the LLM cap
+	mustRec(TokenCategoryIndexing, 8888, 0)  // excluded
+
+	got, err := db.ChatTokensThisMonth(ctx)
+	if err != nil {
+		t.Fatalf("ChatTokensThisMonth: %v", err)
+	}
+	if got != 1800 {
+		t.Fatalf("chat this month = %d, want 1800 (chat only, in+out)", got)
+	}
+}
+
 func TestRecordTokenUsageAccumulates(t *testing.T) {
 	db, err := NewDB(":memory:")
 	if err != nil {

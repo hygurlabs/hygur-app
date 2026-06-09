@@ -119,6 +119,7 @@ type RAGChatHandler struct {
 	agendaStore     *store.DB
 	chatStore       *store.DB
 	toolRegistry    *tools.Registry
+	chatTokenCap    int // monthly chat-token cap; 0 = unlimited (local default)
 	config          RAGConfig
 	logger          zerolog.Logger
 }
@@ -138,6 +139,16 @@ func NewRAGChatHandler(
 		sessionStore:    sessionStore,
 		config:          config.Validate(),
 		logger:          logger.With().Str("handler", "rag_chat").Logger(),
+	}
+}
+
+// SetChatTokenCap sets the monthly LLM-token budget (prompt + completion of the
+// 'chat' category). 0 disables enforcement (the local default). On a managed cloud
+// tenant it's set from HYGUR_CHAT_TOKEN_CAP_MONTHLY to protect margin under
+// per-token inference pricing; embeddings/indexing are a separate budget.
+func (h *RAGChatHandler) SetChatTokenCap(n int) {
+	if n > 0 {
+		h.chatTokenCap = n
 	}
 }
 
@@ -349,6 +360,20 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.llmClient == nil {
 		writeChatError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "LLM client not configured")
 		return
+	}
+
+	// Per-tenant monthly LLM budget — the cloud margin guard under per-token
+	// inference. Enforced only when a cap is set (HYGUR_CHAT_TOKEN_CAP_MONTHLY);
+	// local installs leave it 0. Checked here, before any LLM call, so we refuse
+	// cleanly (pre-SSE JSON) rather than mid-stream. A query error fails OPEN
+	// (never block a paying user because the usage read hiccuped).
+	if h.chatTokenCap > 0 && h.chatStore != nil {
+		if used, err := h.chatStore.ChatTokensThisMonth(r.Context()); err == nil && used >= h.chatTokenCap {
+			h.logger.Warn().Int("used", used).Int("cap", h.chatTokenCap).Msg("monthly chat-token cap reached")
+			writeChatError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED",
+				"You've reached this month's usage limit. It resets at the start of next month.")
+			return
+		}
 	}
 
 	// Determine if RAG is enabled for this request

@@ -74,6 +74,26 @@ GROUP BY category`, startDay)
 	return out, rows.Err()
 }
 
+// ChatTokensThisMonth returns total chat (LLM) tokens — prompt + completion —
+// recorded since the first day of the current calendar month. Embedding/indexing
+// (ingestion) tokens are excluded: they're a separate, much cheaper budget. This
+// drives the per-tenant monthly LLM cap that protects margin under per-token
+// inference pricing.
+func (d *DB) ChatTokensThisMonth(ctx context.Context) (int, error) {
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	cats, err := d.TokenUsageSince(ctx, start)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range cats {
+		if c.Category == TokenCategoryChat {
+			return c.TokensIn + c.TokensOut, nil
+		}
+	}
+	return 0, nil
+}
+
 // Pricing holds the per-1M-token prices used to estimate cost. Chat is billed
 // per direction; embeddings + indexing share a single ingest price.
 type Pricing struct {

@@ -663,6 +663,16 @@ func main() {
 	// assistant + cited sources) so conversations can be reopened later.
 	ragChatHandler.SetChatStore(db)
 
+	// Per-tenant monthly LLM-token cap (cloud margin guard). Unset/0 = unlimited,
+	// the local default; a managed tenant sets it in its StatefulSet env.
+	if v := strings.TrimSpace(os.Getenv("HYGUR_CHAT_TOKEN_CAP_MONTHLY")); v != "" {
+		if cap, err := strconv.Atoi(v); err == nil && cap > 0 {
+			ragChatHandler.SetChatTokenCap(cap)
+			logger.Info().Int("cap", cap).Msg("monthly chat-token cap enabled")
+		} else {
+			logger.Warn().Str("value", v).Msg("ignoring invalid HYGUR_CHAT_TOKEN_CAP_MONTHLY")
+		}
+	}
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)
