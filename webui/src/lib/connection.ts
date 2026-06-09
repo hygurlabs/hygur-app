@@ -143,7 +143,10 @@ export function refreshAccessToken(): Promise<boolean> {
         body: JSON.stringify({ refresh_token: rt }),
       });
       if (!r.ok) {
-        clearTokens();
+        // Only a definitive auth rejection means the refresh token is dead → sign
+        // out. Transient failures (5xx, network) keep the token for the next try,
+        // so a console hiccup doesn't log the user out.
+        if (r.status === 401 || r.status === 403) clearTokens();
         return false;
       }
       const b = (await r.json()) as { access_token: string; refresh_token: string; endpoint: string };

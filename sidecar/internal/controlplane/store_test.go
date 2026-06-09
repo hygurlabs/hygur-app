@@ -91,22 +91,24 @@ func TestEnrollAndRefresh(t *testing.T) {
 		t.Errorf("expired code: want ErrCodeInvalid, got %v", err)
 	}
 
-	// Refresh rotates the jti + the refresh token; the old refresh stops working.
+	// Refresh rotates the access jti but KEEPS the refresh token stable, so a
+	// lost/raced refresh response can't lock the client out.
 	dev2, refresh2, err := s.Refresh(now, refresh)
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
 	if dev2.JTI == dev.JTI {
-		t.Error("refresh should rotate the jti")
+		t.Error("refresh should rotate the access jti")
 	}
-	if refresh2 == refresh {
-		t.Error("refresh should rotate the refresh token")
+	if refresh2 != refresh {
+		t.Error("refresh token must stay stable (not rotate)")
 	}
-	if _, _, err := s.Refresh(now, refresh); !errors.Is(err, ErrRefreshInvalid) {
-		t.Errorf("old refresh after rotation: want ErrRefreshInvalid, got %v", err)
+	// The same refresh token keeps working on repeated calls (the whole point).
+	if _, again, err := s.Refresh(now, refresh); err != nil || again != refresh {
+		t.Errorf("stable refresh should keep working: token=%q err=%v", again, err)
 	}
 
-	// Revoke → the (rotated) refresh stops working too.
+	// Revoke → the refresh stops working.
 	if err := s.RevokeDevice(now, dev.DeviceID); err != nil {
 		t.Fatalf("RevokeDevice: %v", err)
 	}

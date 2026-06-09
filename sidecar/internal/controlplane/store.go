@@ -399,19 +399,20 @@ func (s *Store) Refresh(now time.Time, refreshToken string) (Device, string, err
 		return Device{}, "", ErrRefreshInvalid
 	}
 
+	// Rotate ONLY the short-lived access jti; the refresh token stays STABLE.
+	// Rotating it made the refresh token single-use, so any lost or raced refresh
+	// response (dropped network reply, a second tab, a failed localStorage write)
+	// left the client holding a now-dead token → forced sign-out, unable to renew.
+	// Theft is handled by device revocation (revoked_at), not rotation — there was
+	// no reuse-detection, so rotation bought fragility with no real security gain.
 	dev.JTI = newID()
-	newRefresh, err := randomToken()
-	if err != nil {
-		return Device{}, "", err
-	}
-	if _, err := tx.Exec(`UPDATE devices SET jti=?, refresh_hash=? WHERE device_id=?`,
-		dev.JTI, hashToken(newRefresh), dev.DeviceID); err != nil {
+	if _, err := tx.Exec(`UPDATE devices SET jti=? WHERE device_id=?`, dev.JTI, dev.DeviceID); err != nil {
 		return Device{}, "", err
 	}
 	if err := tx.Commit(); err != nil {
 		return Device{}, "", err
 	}
-	return dev, newRefresh, nil
+	return dev, refreshToken, nil
 }
 
 // RevokeDevice marks a device revoked (its refresh token stops working; the
