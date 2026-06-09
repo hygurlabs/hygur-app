@@ -32,11 +32,11 @@ type ReconciledConflict struct {
 }
 
 const reconcileSystemPrompt = `You judge whether claims about the same subject genuinely contradict each other, for a contradiction checker. You are given an entity, an attribute, and several values asserted by different sources at different dates. Decide exactly one:
-- "conflict": the sources assert genuinely incompatible values and nothing indicates one replaces another.
+- "conflict": the values are MUTUALLY EXCLUSIVE — both cannot be true of the same subject at the same time — and nothing indicates one replaces the other.
 - "supersedes": the values differ because a later source updates an earlier one — a normal evolution over time, not a contradiction.
-- "none": not a real contradiction — different units or scope, rounding, or values that are not truly comparable.
+- "none": the values are NOT genuinely incompatible. This includes the same fact expressed at a different level of detail, paraphrased, abbreviated, partial vs complete, or where one simply refines or is contained in the other; different units or scope; or values that are not truly comparable.
 
-Be strict: answer "none" unless the values are clearly comparable AND incompatible. Judge ONLY from the values and dates given; never invent context.
+Be strict: answer "conflict" ONLY when the values cannot both be true. If the values could both hold (one is merely more detailed, reworded, or a subset of the other), answer "none". Judge ONLY from the values and dates given; never invent context.
 
 Return ONLY a JSON object: {"kind":"conflict|supersedes|none","reason":"<one short sentence>"}. No other text.`
 
