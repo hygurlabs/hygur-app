@@ -38,6 +38,7 @@ async function consolePost(path: string, body?: unknown, token?: string): Promis
   if (token) headers.Authorization = `Bearer ${token}`;
   return fetch(`${CONSOLE_URL}${path}`, {
     method: "POST",
+    credentials: "include", // store/send the HttpOnly refresh cookie set by the console
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -62,11 +63,16 @@ export async function passkeyLoginFinish(challenge: PasskeyChallenge): Promise<v
   const assertion = await startAuthentication({ optionsJSON: challenge.publicKey as never });
   const finish = await fetch(
     `${CONSOLE_URL}/passkey/login/finish?s=${encodeURIComponent(challenge.session_id)}`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(assertion) },
+    {
+      method: "POST",
+      credentials: "include", // store the HttpOnly refresh cookie
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(assertion),
+    },
   );
   if (!finish.ok) throw new Error("Passkey authentication failed.");
   const b = (await finish.json()) as TokenBundle;
-  setTokens(b.endpoint, b.access_token, b.refresh_token);
+  setTokens(b.endpoint, b.access_token);
 }
 
 /** Redeem a one-time enrollment code → device token bundle (connects the app).
@@ -75,7 +81,7 @@ export async function enrollWithCode(code: string): Promise<string> {
   const r = await consolePost("/enroll", { code: code.trim() });
   if (!r.ok) throw new Error("Invalid or expired enrollment code.");
   const b = (await r.json()) as TokenBundle;
-  setTokens(b.endpoint, b.access_token, b.refresh_token);
+  setTokens(b.endpoint, b.access_token);
   return b.access_token;
 }
 

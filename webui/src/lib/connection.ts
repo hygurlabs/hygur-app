@@ -106,10 +106,12 @@ export const CONSOLE_URL: string = (ls("hygur.console") || "https://console.hygu
 /** Persists the token bundle from a passkey login / enrollment / refresh: the
  *  tenant endpoint + access key (sent to the tenant) + the refresh token (held
  *  for renewing the short-lived access token against the control plane). */
-export function setTokens(endpoint: string, accessToken: string, refreshToken?: string): void {
+export function setTokens(endpoint: string, accessToken: string): void {
   setConnection(endpoint, accessToken);
+  // The refresh token now lives in an HttpOnly cookie set by the console — never
+  // store it in JS-readable localStorage. Clear any legacy value (migration).
   try {
-    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+    localStorage.removeItem(REFRESH_KEY);
   } catch {
     /* ignore */
   }
@@ -124,6 +126,12 @@ export function clearTokens(): void {
   clearConnection();
   try {
     localStorage.removeItem(REFRESH_KEY);
+  } catch {
+    /* ignore */
+  }
+  // Clear the HttpOnly refresh cookie server-side (fire-and-forget).
+  try {
+    void fetch(`${CONSOLE_URL}/token/logout`, { method: "POST", credentials: "include" });
   } catch {
     /* ignore */
   }
@@ -143,23 +151,26 @@ let refreshing: Promise<boolean> | null = null;
 export function refreshAccessToken(): Promise<boolean> {
   if (refreshing) return refreshing;
   refreshing = (async (): Promise<boolean> => {
-    const rt = ls(REFRESH_KEY);
-    if (!rt) return false;
+    // The refresh token rides in an HttpOnly cookie (credentials:"include" sends
+    // it). A legacy localStorage token, if present, is sent once to bootstrap the
+    // cookie, then dropped by setTokens — migrating older sessions without re-login.
+    const legacy = ls(REFRESH_KEY);
     try {
       const r = await fetch(`${CONSOLE_URL}/token/refresh`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: rt }),
+        body: JSON.stringify(legacy ? { refresh_token: legacy } : {}),
       });
       if (!r.ok) {
-        // Only a definitive auth rejection means the refresh token is dead → sign
-        // out. Transient failures (5xx, network) keep the token for the next try,
-        // so a console hiccup doesn't log the user out.
+        // Only a definitive auth rejection means the session is dead → sign out.
+        // Transient failures (5xx, network) keep state for the next try, so a
+        // console hiccup doesn't log the user out.
         if (r.status === 401 || r.status === 403) clearTokens();
         return false;
       }
-      const b = (await r.json()) as { access_token: string; refresh_token: string; endpoint: string };
-      setTokens(b.endpoint, b.access_token, b.refresh_token);
+      const b = (await r.json()) as { access_token: string; endpoint: string };
+      setTokens(b.endpoint, b.access_token); // refresh stays in the cookie
       return true;
     } catch {
       return false;

@@ -62,6 +62,7 @@ func (s *Service) Routes() http.Handler {
 func (s *Service) Register(r chi.Router) {
 	r.Post("/enroll", s.handleEnroll)
 	r.Post("/token/refresh", s.handleRefresh)
+	r.Post("/token/logout", s.handleLogout)
 	r.Get("/billing/status", s.handleBillingStatus)
 }
 
@@ -143,13 +144,24 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 // handleRefresh: refresh token → fresh access token (rotates both).
 func (s *Service) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	var in refreshReq
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.RefreshToken == "" {
+	// Prefer the HttpOnly cookie; fall back to the JSON body so legacy clients (and
+	// the one-time migration bootstrap) keep working until everyone's on the cookie.
+	rt := ""
+	if c, cerr := r.Cookie(refreshCookieName); cerr == nil {
+		rt = c.Value
+	}
+	if rt == "" {
+		var in refreshReq
+		if err := json.NewDecoder(r.Body).Decode(&in); err == nil {
+			rt = in.RefreshToken
+		}
+	}
+	if rt == "" {
 		writeErr(w, http.StatusBadRequest, "refresh_token required")
 		return
 	}
 	now := s.clock()
-	dev, newRefresh, err := s.store.Refresh(now, in.RefreshToken)
+	dev, newRefresh, err := s.store.Refresh(now, rt)
 	if errors.Is(err, ErrRefreshInvalid) {
 		writeErr(w, http.StatusUnauthorized, "invalid refresh token")
 		return
@@ -178,6 +190,10 @@ func (s *Service) issueAndRespond(w http.ResponseWriter, now time.Time, dev Devi
 		writeErr(w, http.StatusInternalServerError, "could not mint token")
 		return
 	}
+	// Refresh token → HttpOnly cookie (out of JS/XSS reach). Still echoed in the
+	// body this release for backward compatibility; the new web client ignores the
+	// body value and relies on the cookie.
+	s.setRefreshCookie(w, refresh)
 	writeJSON(w, http.StatusOK, tokenResp{
 		AccessToken:  access,
 		RefreshToken: refresh,
@@ -185,6 +201,29 @@ func (s *Service) issueAndRespond(w http.ResponseWriter, now time.Time, dev Devi
 		TenantID:     acc.TenantID,
 		ExpiresIn:    int(s.accessTTL.Seconds()),
 	})
+}
+
+const refreshCookieName = "hygur_rt"
+
+// setRefreshCookie stores the refresh token in an HttpOnly, Secure, SameSite=Lax
+// cookie scoped to the registrable domain + the /token path — sent only to the
+// refresh/logout endpoints and never readable by JavaScript, so an XSS on the web
+// shell can't steal the long-lived credential. Lax (not Strict) so the cookie
+// survives a top-level navigation arriving from an external link.
+func (s *Service) setRefreshCookie(w http.ResponseWriter, refresh string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: refreshCookieName, Value: refresh, Path: "/token", Domain: s.domain,
+		MaxAge: 90 * 24 * 3600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// handleLogout clears the refresh cookie (full web sign-out).
+func (s *Service) handleLogout(w http.ResponseWriter, _ *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: refreshCookieName, Value: "", Path: "/token", Domain: s.domain,
+		MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Service) mintAccess(now time.Time, acc Account, dev Device) (string, error) {
