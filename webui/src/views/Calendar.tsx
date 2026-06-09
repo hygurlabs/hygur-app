@@ -86,7 +86,20 @@ export function Calendar() {
   // in both the web and native shells, unlike the native EventKit meetings.
   const syncedEvents = useQuery({
     queryKey: ["synced-events"],
-    queryFn: () => api.knowledgeItems(200, "event"),
+    queryFn: () => {
+      const t = Date.now();
+      const yr = 365 * 24 * 3600_000;
+      return api.agendaEvents(
+        new Date(t - yr).toISOString(),
+        new Date(t + yr).toISOString(),
+      );
+    },
+  });
+  // True total event count for the "N synced" line (the windowed fetch above
+  // only returns events within ±1 year).
+  const eventCount = useQuery({
+    queryKey: ["event-count"],
+    queryFn: () => api.knowledgeCount("event"),
   });
 
   // Whether any calendar connector is configured — drives whether we show the
@@ -109,7 +122,7 @@ export function Calendar() {
 
   // Capture "now" once per render — keeps the derivation below free of impure calls.
   const [now] = useState(() => Date.now());
-  const allSynced = (syncedEvents.data?.items ?? [])
+  const allSynced = (syncedEvents.data?.events ?? [])
     .map((it) => {
       const md = (it.metadata ?? {}) as Record<string, unknown>;
       const start = (md.start as string) || it.date || "";
@@ -124,7 +137,7 @@ export function Calendar() {
       };
     })
     .filter((e) => !Number.isNaN(e.ts));
-  const syncedCount = syncedEvents.data?.items.length ?? 0;
+  const syncedCount = eventCount.data?.total ?? allSynced.length;
   // Upcoming first; if the connected calendar has no future events (e.g. a
   // historical feed), fall back to showing the most recent ones so a synced
   // calendar never looks empty.
@@ -194,8 +207,13 @@ export function Calendar() {
         }
       />
 
-      {/* --- LLM synthesis of what's coming up (only when there's something) --- */}
-      {calSummary.data?.summary ? (
+      {/* --- LLM synthesis of what's coming up --- */}
+      {calSummary.isLoading ? (
+        <div className="mb-7 flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13px] text-accent">
+          <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
+          Hygur is summarizing what's coming up…
+        </div>
+      ) : calSummary.data?.summary ? (
         <div className="mb-7 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-accent">
             <Sparkles size={13} strokeWidth={2} /> What's coming up

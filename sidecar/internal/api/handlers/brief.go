@@ -295,6 +295,62 @@ func (h *BriefHandler) FollowUpReport(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
+// AgendaEvents returns calendar events whose date falls in [from,to], ordered
+// by date — so the Calendar view shows the actual upcoming events rather than
+// the most-recently-synced batch (the generic item list is ordered by
+// updated_at, which buries upcoming events behind a recent backfill of old
+// ones). GET /agenda/events?from=&to=&limit= (RFC3339; defaults ±1 year).
+func (h *BriefHandler) AgendaEvents(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	now := time.Now()
+	from, to := now.AddDate(-1, 0, 0), now.AddDate(1, 0, 0)
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			from = t
+		}
+	}
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			to = t
+		}
+	}
+	limit := 500
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+
+	items, err := h.store.ListEventsInWindow(r.Context(), from, to, limit)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("agenda events query failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list events")
+		return
+	}
+
+	type evt struct {
+		ContentID      string         `json:"content_id"`
+		SourceType     string         `json:"source_type"`
+		Title          string         `json:"title"`
+		NormalizedText string         `json:"normalized_text"`
+		Metadata       map[string]any `json:"metadata,omitempty"`
+		Date           string         `json:"date,omitempty"`
+	}
+	out := make([]evt, 0, len(items))
+	for _, it := range items {
+		date := ""
+		if cd := store.GetCanonicalDate(it); !cd.IsZero() {
+			date = cd.UTC().Format(time.RFC3339)
+		}
+		out = append(out, evt{it.ContentID, it.SourceType, it.Title, it.NormalizedText, it.Metadata, date})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"events": out})
+}
+
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

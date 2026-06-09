@@ -192,6 +192,8 @@ func (s *Server) setupRoutes() {
 		r.Get("/agenda/context", s.handleAgendaContext)
 		// Calendar summary — short LLM synthesis of upcoming events (header card).
 		r.Get("/agenda/calendar-summary", s.handleCalendarSummary)
+		// Calendar events by date window (ordered by date, not ingestion time).
+		r.Get("/agenda/events", s.handleAgendaEvents)
 
 		// On-demand brief — POST /brief/run with optional JSON body
 		// {"project_id": "...", "lookback_hours": 24}. The brief runs

@@ -226,6 +226,11 @@ export const api = {
     getJSON<{ summary: string; window: string; count: number }>(
       `/agenda/calendar-summary`,
     ),
+  /** Calendar events by date window, ordered by date (not ingestion time). */
+  agendaEvents: (fromISO: string, toISO: string) =>
+    getJSON<{ events: KnowledgeItem[] }>(
+      `/agenda/events?from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`,
+    ),
 
   // Persistent chat sessions.
   sessions: () => getJSON<{ sessions: SessionSummary[] }>("/sessions"),

@@ -527,6 +527,16 @@ func (s *Server) handleKnowledgeFollowup(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write([]byte(`{"topics":[],"contradictions":[],"scanned":0,"window":""}`))
 }
 
+// handleAgendaEvents handles GET /agenda/events — calendar events by date window.
+func (s *Server) handleAgendaEvents(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.AgendaEvents(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"events":[]}`))
+}
+
 // handleKnowledgeFollowupReport handles GET /knowledge/followup/report — the
 // streamed natural-language report (SSE). Delegates to the BriefHandler.
 func (s *Server) handleKnowledgeFollowupReport(w http.ResponseWriter, r *http.Request) {
