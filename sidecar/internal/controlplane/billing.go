@@ -133,12 +133,18 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "suspend")
 			return
 		}
+		// Queue the live pod for scale-to-0 so its scheduler stops calling the LLM
+		// (per-token cost) during Stripe's dunning window. No-op if not yet 'ready'.
+		_ = b.store.SuspendIfReady(obj.Subscription)
 
 	case "invoice.paid":
 		if err := b.store.SetSubscriptionBySub(obj.Subscription, "active", nil); err != nil {
 			writeErr(w, http.StatusInternalServerError, "reactivate")
 			return
 		}
+		// Bring a suspended tenant back online (scale-to-1). No-op on first/normal
+		// payments, so it never disturbs a pending→ready provisioning.
+		_ = b.store.ResumeIfSuspended(obj.Subscription)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -316,8 +322,35 @@ func (s *Store) SetProvisionState(subID, state string) error {
 	return err
 }
 
+// SuspendIfReady queues a tenant for scale-to-0 after a failed payment, but only
+// if its pod is currently live ('ready'). A miss (pending / already-suspended /
+// gone) is a no-op, so dunning on a not-yet-provisioned tenant is safe.
+func (s *Store) SuspendIfReady(subID string) error {
+	if subID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(
+		`UPDATE stripe_subscriptions SET provision_state='suspend' WHERE stripe_sub_id=? AND provision_state='ready'`,
+		subID)
+	return err
+}
+
+// ResumeIfSuspended queues a recovered tenant for scale-to-1 on a successful
+// payment, but only if it was suspended (or mid-suspend) — so a first/normal
+// invoice.paid never disturbs a pending→ready provisioning.
+func (s *Store) ResumeIfSuspended(subID string) error {
+	if subID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(
+		`UPDATE stripe_subscriptions SET provision_state='resume' WHERE stripe_sub_id=? AND provision_state IN ('suspend','suspended')`,
+		subID)
+	return err
+}
+
 // ListProvisions returns subscriptions in the given provision_state (e.g.
-// 'pending' to create, 'deprovision' to reap) — the poller's work queue.
+// 'pending' to create, 'suspend'/'resume' to scale, 'deprovision' to reap) —
+// the poller's work queue.
 func (s *Store) ListProvisions(state string) ([]ProvisionRow, error) {
 	rows, err := s.db.Query(`
 		SELECT ss.stripe_sub_id, ss.account_number, a.tenant_id, ss.checkout_session_id, ss.provision_state

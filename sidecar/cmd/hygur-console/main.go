@@ -112,20 +112,23 @@ func runServe(args []string) {
 // runProvisions is the poller's interface to the admin DB (runs on-box, with the
 // DB key). The internet-facing `serve` never provisions; the poller drives state.
 //
-//	hygur-console provisions pending       # \t-sep: <sub_id> <tenant_id> <account>
-//	hygur-console provisions deprovision   # tenants to reap (canceled)
-//	hygur-console provisions count         # live tenants (pending+ready) for the cap
-//	hygur-console provisions ready  <sub>  # pod created → mark ready
-//	hygur-console provisions failed <sub>  # provisioning failed (will retry next pass)
-//	hygur-console provisions gone   <sub>  # pod reaped → mark gone
+//	hygur-console provisions pending        # \t-sep: <sub_id> <tenant_id> <account>
+//	hygur-console provisions deprovision    # tenants to reap (canceled)
+//	hygur-console provisions suspend        # tenants to scale-to-0 (payment past_due)
+//	hygur-console provisions resume         # tenants to scale-to-1 (payment recovered)
+//	hygur-console provisions count          # live tenants (pending+ready) for the cap
+//	hygur-console provisions ready     <sub># pod created / resumed → mark ready
+//	hygur-console provisions suspended <sub># pod scaled to 0 → mark suspended
+//	hygur-console provisions failed    <sub># provisioning failed (will retry next pass)
+//	hygur-console provisions gone      <sub># pod reaped → mark gone
 func runProvisions(args []string) {
 	if len(args) == 0 {
-		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|count|ready|failed|gone> [sub_id]"))
+		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|count|ready|suspended|failed|gone> [sub_id]"))
 	}
 	store := openStore()
 	defer store.Close()
 	switch args[0] {
-	case "pending", "deprovision":
+	case "pending", "deprovision", "suspend", "resume":
 		rows, err := store.ListProvisions(args[0])
 		die(err)
 		for _, r := range rows {
@@ -135,7 +138,7 @@ func runProvisions(args []string) {
 		n, err := store.CountActiveTenants()
 		die(err)
 		fmt.Println(n)
-	case "ready", "failed", "gone":
+	case "ready", "suspended", "failed", "gone":
 		if len(args) < 2 {
 			die(fmt.Errorf("usage: hygur-console provisions %s <sub_id>", args[0]))
 		}

@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS stripe_subscriptions (
   account_number      TEXT NOT NULL REFERENCES accounts(account_number),
   customer_id         TEXT NOT NULL DEFAULT '',
   checkout_session_id TEXT NOT NULL DEFAULT '',
-  provision_state     TEXT NOT NULL DEFAULT 'pending', -- pending|ready|deprovision|gone
+  provision_state     TEXT NOT NULL DEFAULT 'pending', -- pending|ready|suspend|suspended|resume|deprovision|gone
   provisioned_at      TEXT,
   created_at          TEXT NOT NULL
 );

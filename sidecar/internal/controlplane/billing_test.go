@@ -116,6 +116,59 @@ func TestBilling_LifecycleSuspends(t *testing.T) {
 	}
 }
 
+// Dunning lifecycle: once a pod is live ('ready'), a failed payment queues it for
+// scale-to-0 ('suspend'); a recovered payment queues it back ('resume'). Neither
+// touches a not-yet-provisioned ('pending') tenant.
+func TestBilling_SuspendResume(t *testing.T) {
+	store := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	b := NewBilling(store, whSecret)
+	b.now = func() time.Time { return now }
+
+	if rec := postWebhook(t, b, paidEvent("sub_1", "a@b.com"), now); rec.Code != http.StatusOK {
+		t.Fatalf("paid: %d", rec.Code)
+	}
+	state := func() string {
+		_, st, err := store.SubscriptionBySession("cs_test_1")
+		if err != nil {
+			t.Fatalf("state lookup: %v", err)
+		}
+		return st
+	}
+
+	// payment_failed before provisioning ('pending') must NOT queue a suspend.
+	failed := `{"type":"invoice.payment_failed","data":{"object":{"subscription":"sub_1"}}}`
+	if rec := postWebhook(t, b, failed, now); rec.Code != http.StatusOK {
+		t.Fatalf("payment_failed(pending): %d", rec.Code)
+	}
+	if got := state(); got != "pending" {
+		t.Fatalf("after failed-while-pending: state=%q, want pending", got)
+	}
+
+	// Poller provisions the pod → 'ready'. Now a failed payment queues 'suspend'.
+	if err := store.SetProvisionState("sub_1", "ready"); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	if rec := postWebhook(t, b, failed, now); rec.Code != http.StatusOK {
+		t.Fatalf("payment_failed(ready): %d", rec.Code)
+	}
+	if got := state(); got != "suspend" {
+		t.Fatalf("after failed-while-ready: state=%q, want suspend", got)
+	}
+
+	// Poller scaled it to 0 → 'suspended'. A successful payment queues 'resume'.
+	if err := store.SetProvisionState("sub_1", "suspended"); err != nil {
+		t.Fatalf("mark suspended: %v", err)
+	}
+	paid := `{"type":"invoice.paid","data":{"object":{"subscription":"sub_1"}}}`
+	if rec := postWebhook(t, b, paid, now); rec.Code != http.StatusOK {
+		t.Fatalf("invoice.paid: %d", rec.Code)
+	}
+	if got := state(); got != "resume" {
+		t.Fatalf("after paid-while-suspended: state=%q, want resume", got)
+	}
+}
+
 // A bad signature is rejected before any side effect.
 func TestBilling_RejectsBadSignature(t *testing.T) {
 	store := testStore(t)
