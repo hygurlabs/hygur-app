@@ -1,0 +1,180 @@
+package ingest
+
+import (
+	"context"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/store"
+)
+
+// W6 stage 2 — semantic claim extraction wired into ingestion. Claims feed the
+// contradiction reconciliation (and project tracking). To bound token cost and
+// noise we skip junk: automated senders (no-reply &co.) and the
+// "Notifications & Accounts" category never get claims extracted. Quality matters
+// here (claims drive conflict detection), so extraction uses the MAIN generation
+// client (i.llmClient) — the same model the preview was validated on — not the
+// small indexing model used for classification.
+
+const claimsSkipCategory = "Notifications & Accounts"
+
+// claimsEligible reports whether an item should have claims extracted: mail or
+// notes only, never an automated/no-reply sender, never the Notifications &
+// Accounts category. Cheap (no LLM) — re-evaluated each pass.
+func claimsEligible(item *store.KnowledgeItem, cats []string) bool {
+	if item == nil {
+		return false
+	}
+	if item.SourceType != store.SourceTypeNote && !store.IsMailSourceType(item.SourceType) {
+		return false
+	}
+	for _, c := range cats {
+		if c == claimsSkipCategory {
+			return false
+		}
+	}
+	return !isAutomatedSender(senderAddr(item.Metadata))
+}
+
+// senderAddr returns the item's sender (mail_from, falling back to from).
+func senderAddr(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	for _, k := range []string{"mail_from", "from"} {
+		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// automatedLocalParts are no-reply-style local-part markers (separators stripped),
+// matched as substrings — more reliable than the noisy auto-categories for
+// excluding machine senders (LinkedIn/GitHub/Google/Amazon noreply, FR variants).
+var automatedLocalParts = []string{"noreply", "donotreply", "nepasrepondre", "pasdereponse", "mailerdaemon"}
+
+// isAutomatedSender reports whether a From header is a no-reply / automated
+// address. It reads the address local-part (inside <...> if present) and matches
+// separator-insensitively, so no-reply / no_reply / noreply / notifications-noreply
+// all hit.
+func isAutomatedSender(from string) bool {
+	addr := from
+	if i := strings.LastIndex(addr, "<"); i >= 0 {
+		if j := strings.Index(addr[i:], ">"); j > 0 {
+			addr = addr[i+1 : i+j]
+		}
+	}
+	local := addr
+	if i := strings.IndexByte(local, '@'); i >= 0 {
+		local = local[:i]
+	}
+	stripped := strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(strings.ToLower(local))
+	for _, p := range automatedLocalParts {
+		if strings.Contains(stripped, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractClaimsForItem returns the item's claims (cached or freshly extracted).
+// fresh=true means the caller should persist them. No DB writes (safe to run
+// concurrently). Skips ineligible items and already-fresh caches without an LLM
+// call. An empty result on an eligible item is still fresh=true, so "no claims"
+// is cached and not recomputed.
+func (i *Ingestor) extractClaimsForItem(ctx context.Context, item *store.KnowledgeItem, cats []string) (claims []contradict.Claim, fresh bool) {
+	if item == nil {
+		return nil, false
+	}
+	if cachedFresh(item.Metadata, "extracted_claims", extractedClaimsVersion) {
+		return nil, false
+	}
+	if !claimsEligible(item, cats) {
+		return nil, false
+	}
+	if i.llmClient == nil || strings.TrimSpace(item.NormalizedText) == "" {
+		return nil, false
+	}
+	got, err := contradict.ExtractClaims(ctx, i.llmClient, item.NormalizedText)
+	if err != nil {
+		log.Printf("[ingest] claim extraction failed for %s: %v", item.ContentID, err)
+		return nil, false
+	}
+	at := item.CreatedAt.UTC().Format(time.RFC3339)
+	for j := range got {
+		got[j].SourceID = item.ContentID
+		got[j].AssertedAt = at
+	}
+	return got, true
+}
+
+// applyItemClaims caches claims (+ version) in the item metadata. DB write — in a
+// concurrent backfill the caller must serialize these (SQLite is single-writer).
+func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeItem, claims []contradict.Claim, fresh bool) {
+	if !fresh || item == nil {
+		return
+	}
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	item.Metadata["extracted_claims"] = claims
+	item.Metadata["extracted_claims_version"] = extractedClaimsVersion
+	if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
+		log.Printf("[ingest] claims metadata update failed for %s: %v", item.ContentID, uerr)
+	}
+}
+
+// BackfillClaims extracts + caches claims across all eligible mail + notes,
+// reusing already-cached categories (run RetagItems first so eligibility reads
+// cached cats without an extra LLM call). Extraction runs up to retagConcurrency
+// in parallel on the main model; metadata writes are serialized. Long-running —
+// callers should run it async. Returns items scanned.
+func (i *Ingestor) BackfillClaims(ctx context.Context) (int, error) {
+	if i.store == nil || i.llmClient == nil {
+		return 0, nil
+	}
+	var items []*store.KnowledgeItem
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote) {
+		const batch = 500
+		for offset := 0; ; offset += batch {
+			page, err := i.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)
+			if err != nil {
+				return 0, err
+			}
+			items = append(items, page...)
+			if len(page) < batch {
+				break
+			}
+		}
+	}
+
+	var (
+		mu        sync.Mutex
+		wg        sync.WaitGroup
+		sem       = make(chan struct{}, retagConcurrency)
+		processed int
+	)
+	for _, it := range items {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(it *store.KnowledgeItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			cats, _ := i.classifyItem(ctx, it) // cached → no LLM when retag ran first
+			claims, fresh := i.extractClaimsForItem(ctx, it, cats)
+			mu.Lock()
+			i.applyItemClaims(ctx, it, claims, fresh)
+			processed++
+			mu.Unlock()
+		}(it)
+	}
+	wg.Wait()
+	return processed, nil
+}

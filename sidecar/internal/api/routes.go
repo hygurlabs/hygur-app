@@ -85,6 +85,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/search", s.handleKnowledgeSearch)
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
 			r.Post("/retag", s.handleKnowledgeRetag)
+			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
 			r.Delete("/reset", s.handleKnowledgeReset)
 			r.Get("/{content_id}", s.handleKnowledgeGet)
 			r.Delete("/{content_id}", s.handleKnowledgeDelete)
@@ -408,6 +409,15 @@ func (s *Server) handleKnowledgeReembedMissing(w http.ResponseWriter, r *http.Re
 func (s *Server) handleKnowledgeRetag(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.Retag(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillClaims handles POST /knowledge/backfill-claims (W6).
+func (s *Server) handleKnowledgeBackfillClaims(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillClaims(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

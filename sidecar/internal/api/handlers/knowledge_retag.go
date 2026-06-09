@@ -35,3 +35,32 @@ func (h *KnowledgeHandler) Retag(w http.ResponseWriter, r *http.Request) {
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
+
+// claimsInFlight guards against overlapping claim-backfill runs (one main-model
+// LLM call per eligible mail/note that isn't already cached).
+var claimsInFlight atomic.Bool
+
+// BackfillClaims extracts + caches semantic claims (W6) across eligible mail +
+// notes. POST /knowledge/backfill-claims. Runs in the background (reported via
+// logs); returns immediately. Run /knowledge/retag first so categories are cached
+// (eligibility check) and the backfill only spends LLM on claim extraction.
+func (h *KnowledgeHandler) BackfillClaims(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if !claimsInFlight.CompareAndSwap(false, true) {
+		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer claimsInFlight.Store(false)
+		n, err := h.ingestor.BackfillClaims(context.Background())
+		if err != nil {
+			h.logger.Error().Err(err).Int("scanned", n).Msg("claim backfill failed")
+			return
+		}
+		h.logger.Info().Int("scanned", n).Msg("claim backfill complete")
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
