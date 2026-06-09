@@ -36,17 +36,17 @@ const (
 // claimsSystemPrompt is deliberately generic and bounded: it describes the claim
 // schema and the verbatim-quote requirement, with no domain enumerations or
 // profile assumptions, so it generalises across any document the model sees.
-const claimsSystemPrompt = `You extract the factual claims an author asserts in a document, so they can later be checked for contradictions. A claim is one explicit assertion about a single subject.
+const claimsSystemPrompt = `You extract the substantive claims an author makes in a document, so they can later be checked for contradictions across messages. A claim is a single assertion that could later be confirmed or contradicted: a decision, a commitment, a status, a deadline, or a key factual value about a real subject (a party, a project, an obligation, a transaction).
 
-Return ONLY a JSON array. Each element:
+Return ONLY a JSON array of the few most significant such claims. Each element:
 {"entity": "...", "attribute": "...", "value": "...", "polarity": "affirm|negate", "quote": "..."}
-- entity: what or whom the claim is about.
+- entity: the real-world subject the claim is about (a person, organisation, project, obligation, or transaction) — not a link, button, file name, or presentational element.
 - attribute: the property or matter being asserted.
 - value: the asserted state or value.
 - polarity: "affirm" if asserted, "negate" if denied or cancelled.
 - quote: the exact span of the document that states it, copied character-for-character.
 
-Extract only what is explicitly stated; never infer. Omit any claim you cannot quote verbatim. If there are no clear claims, return []. Output the JSON array and nothing else. The document may be in any language.`
+Extract only substantive, explicitly-stated assertions; never infer. Ignore presentational and boilerplate text — formatting, file metadata, footers, legal or copyright notices, and automated banners. Omit any claim you cannot quote verbatim. If there are no substantive claims, return []. Output the JSON array and nothing else. The document may be in any language.`
 
 // ExtractClaims asks the LLM for the claims asserted in text, then keeps only
 // those whose quote is a real substring of text (the anti-hallucination gate).
