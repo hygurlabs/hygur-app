@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"github.com/hygur/sidecar/internal/llm"
 )
@@ -83,20 +84,72 @@ func classifyMail(ctx context.Context, client *llm.Client, text string) ([]strin
 	return cats, nil
 }
 
-// matchCategories maps free-form model output to canonical taxonomy labels,
-// case-insensitively, preserving taxonomy order and dropping anything unknown.
-// It matches the full label or — for multi-word labels — the first word, so a
-// model that replies "Banque" still resolves to "Banque & Finance".
+// matchCategories maps a model reply to canonical taxonomy labels. The reply is
+// split into candidate items on list delimiters (comma, newline, …) and each item
+// is matched to a label by normalized equality or the label's first word. It does
+// NOT grep label words out of free text — so a prose reply, or a negation like
+// "not invoicing or banking", yields no spurious tags (the old behaviour, which
+// produced systematically wrong tags from chatty/negating models). Output
+// preserves taxonomy order and is de-duplicated.
 func matchCategories(raw string) []string {
-	low := strings.ToLower(raw)
+	items := splitCategoryItems(raw)
+	if len(items) == 0 {
+		return nil
+	}
 	var out []string
 	for _, cat := range MailCategories {
-		lc := strings.ToLower(cat)
-		if strings.Contains(low, lc) || containsWord(low, firstWord(lc)) {
-			out = append(out, cat)
+		lk := normCat(cat)
+		fw := firstWord(lk)
+		for _, it := range items {
+			if it == lk || it == fw {
+				out = append(out, cat)
+				break
+			}
 		}
 	}
 	return out
+}
+
+// splitCategoryItems splits a model reply on list delimiters into normalized
+// candidate labels. Free-form prose collapses into items that won't equal any
+// label, so nothing matches — the safe failure mode.
+func splitCategoryItems(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ';', '\n', '\r', '\t', '|', '/', '•', '·':
+			return true
+		}
+		return false
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if k := normCat(p); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// normCat lowercases and reduces a string to space-separated alphanumeric words,
+// dropping the connector "and" so "Banking & Finance" and "banking and finance"
+// both key to "banking finance".
+func normCat(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	fields := strings.Fields(b.String())
+	kept := fields[:0]
+	for _, f := range fields {
+		if f != "and" {
+			kept = append(kept, f)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // firstWord returns the first token of a label, splitting on spaces and '&'.
@@ -107,31 +160,6 @@ func firstWord(s string) string {
 		}
 	}
 	return s
-}
-
-// containsWord reports whether word appears in text as a whole token (bounded by
-// non-letter characters), so "achats" doesn't match inside "rachats".
-func containsWord(text, word string) bool {
-	if word == "" {
-		return false
-	}
-	for {
-		i := strings.Index(text, word)
-		if i < 0 {
-			return false
-		}
-		before := i == 0 || !isLetter(rune(text[i-1]))
-		afterIdx := i + len(word)
-		after := afterIdx >= len(text) || !isLetter(rune(text[afterIdx]))
-		if before && after {
-			return true
-		}
-		text = text[i+len(word):]
-	}
-}
-
-func isLetter(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
 // categoriesFromMetadata reads cached categories, tolerating the []string and

@@ -5,8 +5,9 @@ package ingest
 // runs) instead of serving a stale, pre-fix result. Each cache stores a
 // companion "<key>_version" in the item metadata.
 const (
-	projectSuggestVersion = "1"
-	mailCategoryVersion   = "1"
+	projectSuggestVersion  = "1"
+	mailCategoryVersion    = "2" // v2: strict delimited-item matcher (no prose-grep)
+	extractedClaimsVersion = "1"
 )
 
 // cachedFresh reports whether m holds key AND its companion "<key>_version"

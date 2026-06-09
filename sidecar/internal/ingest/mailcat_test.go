@@ -14,7 +14,11 @@ func TestMatchCategories(t *testing.T) {
 		{"exact comma list", "Invoicing, Banking & Finance", []string{"Invoicing", "Banking & Finance"}},
 		{"case-insensitive", "invoicing", []string{"Invoicing"}},
 		{"first word resolves multiword", "Banking", []string{"Banking & Finance"}},
-		{"prose wrapper", "Categories: Tax & VAT and Accounting.", []string{"Tax & VAT", "Accounting"}},
+		{"and-connector tolerated", "Banking and Finance", []string{"Banking & Finance"}},
+		{"newline-separated", "Tax & VAT\nAccounting", []string{"Tax & VAT", "Accounting"}},
+		// The regression that produced garbage tags: a chatty/negating reply must
+		// NOT grep label words out of prose.
+		{"negation yields nothing", "This is a notification, not invoicing or a banking matter.", nil},
 		{"unknown dropped", "Spaceships, Invoicing", []string{"Invoicing"}},
 		{"nothing", "no idea", nil},
 		{"taxonomy order preserved", "Subscriptions, Telecom", []string{"Telecom", "Subscriptions"}},
@@ -26,16 +30,6 @@ func TestMatchCategories(t *testing.T) {
 				t.Errorf("matchCategories(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
 		})
-	}
-}
-
-// "achats" must not match inside "rachats" — whole-word boundary check.
-func TestContainsWordBoundary(t *testing.T) {
-	if containsWord("les rachats anticipés", "achats") {
-		t.Error("containsWord matched inside a larger word")
-	}
-	if !containsWord("nos achats du mois", "achats") {
-		t.Error("containsWord missed a whole-word match")
 	}
 }
 
