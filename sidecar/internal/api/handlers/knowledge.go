@@ -735,6 +735,16 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	titleFilter := r.URL.Query().Get("q")
 	sourceTypeFilter := r.URL.Query().Get("source_type")
+	// Comma-separated source types to hide (e.g. "event" — the Library browse omits
+	// calendar events, which have their own view). Ignored when source_type is set.
+	var excludeSourceTypes []string
+	if ex := strings.TrimSpace(r.URL.Query().Get("exclude_source_type")); ex != "" && sourceTypeFilter == "" {
+		for _, s := range strings.Split(ex, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				excludeSourceTypes = append(excludeSourceTypes, s)
+			}
+		}
+	}
 
 	// Title-filter path: bypass pagination and return matching items directly.
 	if titleFilter != "" {
@@ -774,9 +784,17 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 		total int
 		err   error
 	)
-	if sourceTypeFilter != "" {
+	switch {
+	case sourceTypeFilter != "":
 		total, err = h.store.CountKnowledgeItemsBySourceTypes(r.Context(), []string{sourceTypeFilter})
-	} else {
+	case len(excludeSourceTypes) > 0:
+		// total(all) − total(excluded) reuses the existing counters.
+		var all, ex int
+		if all, err = h.store.CountKnowledgeItems(r.Context()); err == nil {
+			ex, err = h.store.CountKnowledgeItemsBySourceTypes(r.Context(), excludeSourceTypes)
+		}
+		total = all - ex
+	default:
 		total, err = h.store.CountKnowledgeItems(r.Context())
 	}
 	if err != nil {
@@ -785,11 +803,14 @@ func (h *KnowledgeHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retrieve knowledge items (optionally filtered by source_type, e.g. "event").
+	// Retrieve knowledge items (optionally filtered/excluded by source_type).
 	var items []*store.KnowledgeItem
-	if sourceTypeFilter != "" {
+	switch {
+	case sourceTypeFilter != "":
 		items, err = h.store.ListKnowledgeItemsBySourceType(r.Context(), sourceTypeFilter, limit, offset)
-	} else {
+	case len(excludeSourceTypes) > 0:
+		items, err = h.store.ListKnowledgeItemsExcluding(r.Context(), excludeSourceTypes, limit, offset)
+	default:
 		items, err = h.store.ListKnowledgeItems(r.Context(), limit, offset)
 	}
 	if err != nil {

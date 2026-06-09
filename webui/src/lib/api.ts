@@ -158,10 +158,14 @@ export const api = {
   health: () => fetch(u("/health")).then((r) => r.json()),
   search: (query: string, topK = 15) =>
     postJSON<SearchResponse>("/search", { query, top_k: topK }),
-  knowledgeItems: (limit = 200, sourceType?: string) =>
+  knowledgeItems: (limit = 200, sourceType?: string, exclude?: string[]) =>
     getJSON<{ items: KnowledgeItem[] }>(
       `/knowledge/items?limit=${limit}&offset=0${
         sourceType ? `&source_type=${encodeURIComponent(sourceType)}` : ""
+      }${
+        exclude && exclude.length
+          ? `&exclude_source_type=${encodeURIComponent(exclude.join(","))}`
+          : ""
       }`,
     ),
   /** Just the count for a source type (the list response carries `total`). */

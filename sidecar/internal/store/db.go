@@ -529,6 +529,54 @@ func (d *DB) ListKnowledgeItems(ctx context.Context, limit, offset int) ([]*Know
 	return items, nil
 }
 
+// ListKnowledgeItemsExcluding lists items whose source_type is NOT in `excluded`,
+// newest first. Used by the Library browse to hide calendar events (they have
+// their own view). Empty `excluded` falls back to listing everything.
+func (d *DB) ListKnowledgeItemsExcluding(ctx context.Context, excluded []string, limit, offset int) ([]*KnowledgeItem, error) {
+	if len(excluded) == 0 {
+		return d.ListKnowledgeItems(ctx, limit, offset)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(excluded)), ",")
+	args := make([]any, 0, len(excluded)+2)
+	for _, e := range excluded {
+		args = append(args, e)
+	}
+	args = append(args, limit, offset)
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		FROM knowledge_items
+		WHERE source_type NOT IN (`+placeholders+`)
+		ORDER BY created_at DESC
+		LIMIT ? OFFSET ?
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list knowledge items (excluding): %w", err)
+	}
+	defer rows.Close()
+
+	var items []*KnowledgeItem
+	for rows.Next() {
+		item := &KnowledgeItem{}
+		var metadataStr, sourcePath sql.NullString
+		if err := rows.Scan(
+			&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
+			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan knowledge item: %w", err)
+		}
+		if sourcePath.Valid {
+			item.SourcePath = &sourcePath.String
+		}
+		if metadataStr.Valid && metadataStr.String != "" {
+			if err := json.Unmarshal([]byte(metadataStr.String), &item.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 // ListKnowledgeItemsSince returns items created or updated on/after `since`,
 // optionally restricted to specific source_types. Ordered with the most
 // recently created first. limit caps the result size; 0 means default 100.

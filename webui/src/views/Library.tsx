@@ -39,8 +39,10 @@ export function Library() {
   const searching = query !== "";
 
   const browse = useQuery({
+    // Hide calendar events here — they have the Calendar view; this keeps mail &
+    // notes front and centre (search still spans everything).
     queryKey: ["knowledge-items"],
-    queryFn: () => api.knowledgeItems(200),
+    queryFn: () => api.knowledgeItems(200, undefined, ["event"]),
     enabled: !searching,
   });
 
