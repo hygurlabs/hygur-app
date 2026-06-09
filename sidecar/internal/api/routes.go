@@ -74,6 +74,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/diagnostic", s.handleKnowledgeDiagnostic)
 			r.Get("/contradictions", s.handleKnowledgeContradictions)
 			r.Get("/followup", s.handleKnowledgeFollowup)
+			r.Get("/project-timeline", s.handleKnowledgeProjectTimeline)
 			r.Get("/followup/report", s.handleKnowledgeFollowupReport)
 			r.Post("/ingest", s.handleKnowledgeIngest)
 			r.Post("/ingest-text", s.handleKnowledgeIngestText)
@@ -816,6 +817,16 @@ func (s *Server) handleDismissProjectSuggestion(w http.ResponseWriter, r *http.R
 func (s *Server) handleKnowledgeContradictions(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.Contradictions(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeProjectTimeline handles GET /knowledge/project-timeline.
+// It delegates to the KnowledgeHandler.
+func (s *Server) handleKnowledgeProjectTimeline(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.ProjectTimeline(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

@@ -245,7 +245,7 @@ func (h *BriefHandler) CalendarSummary(w http.ResponseWriter, r *http.Request) {
 func (h *BriefHandler) FollowUp(w http.ResponseWriter, r *http.Request) {
 	res := scheduler.FollowUpDigest{}
 	if h.brief != nil {
-		if got, err := h.brief.FollowUp(r.Context()); err != nil {
+		if got, err := h.brief.FollowUp(r.Context(), r.URL.Query().Get("project_id")); err != nil {
 			h.logger.Warn().Err(err).Msg("follow-up digest failed")
 		} else {
 			res = got
@@ -276,7 +276,7 @@ func (h *BriefHandler) FollowUpReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.brief != nil {
-		err := h.brief.StreamFollowUpReport(r.Context(), func(delta string) error {
+		err := h.brief.StreamFollowUpReport(r.Context(), r.URL.Query().Get("project_id"), func(delta string) error {
 			b, mErr := json.Marshal(map[string]string{"delta": delta})
 			if mErr != nil {
 				return mErr

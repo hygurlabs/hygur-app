@@ -120,6 +120,15 @@ export interface DigestEntry {
   sources: DigestSource[];
 }
 
+/** One row of a project's exchange timeline (GET /knowledge/project-timeline). */
+export interface TimelineItem {
+  content_id: string;
+  title: string;
+  source_type: string;
+  from: string;
+  date: string; // RFC3339
+}
+
 /** Grounded Follow-up synthesis (GET /knowledge/followup). */
 export interface FollowUpDigest {
   topics: DigestEntry[];

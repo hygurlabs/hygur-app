@@ -25,6 +25,7 @@ import type {
   SidecarConfig,
   SidecarConfigPatch,
   Tag,
+  TimelineItem,
   TokenPricing,
   TokenUsageResponse,
 } from "./types";
@@ -173,8 +174,17 @@ export const api = {
     getJSON<{ conflicts: Conflict[]; scanned: number }>(
       "/knowledge/contradictions",
     ),
-  /** Grounded LLM follow-up digest: topics + real contradictions, cited. */
-  followup: () => getJSON<FollowUpDigest>("/knowledge/followup"),
+  /** Grounded LLM follow-up digest: topics + real contradictions, cited.
+   *  Scoped to a project when projectId is given (W7). */
+  followup: (projectId?: string) =>
+    getJSON<FollowUpDigest>(
+      `/knowledge/followup${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
+  /** A project's items as a date-sorted exchange timeline (W7). */
+  projectTimeline: (projectId: string) =>
+    getJSON<{ items: TimelineItem[] }>(
+      `/knowledge/project-timeline?project_id=${encodeURIComponent(projectId)}`,
+    ),
 
   // Notes — full CRUD.
   notes: () => getJSON<{ notes: Note[] }>("/notes"),
@@ -415,8 +425,12 @@ export async function streamFollowupReport(
     onError?: (msg: string) => void;
   },
   signal: AbortSignal,
+  projectId?: string,
 ): Promise<void> {
-  await fetchEventSource(u("/knowledge/followup/report"), {
+  const path =
+    "/knowledge/followup/report" +
+    (projectId ? `?project_id=${encodeURIComponent(projectId)}` : "");
+  await fetchEventSource(u(path), {
     method: "GET",
     headers: authHeaders(),
     signal,

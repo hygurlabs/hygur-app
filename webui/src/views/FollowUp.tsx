@@ -1,68 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronRight, Sparkles } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { api, streamFollowupReport } from "../lib/api";
 import { useDetail } from "../components/DetailPanel";
 import { fmtDate, fmtDateTime } from "../lib/format";
 import { ErrorBanner, Page, PageHeader } from "../components/ui";
-import { useQuery } from "@tanstack/react-query";
 import type { DigestEntry } from "../lib/types";
 
 export function FollowUp() {
   const openDetail = useDetail();
+  // "" = global (recent mail & notes); otherwise a project id (W7 scope).
+  const [projectId, setProjectId] = useState("");
 
-  // --- Streamed natural-language report (hero) ---
-  const targetRef = useRef("");
-  const [target, setTarget] = useState("");
-  const [shown, setShown] = useState(0);
-  const [streaming, setStreaming] = useState(true);
-  const [reportErr, setReportErr] = useState<string | null>(null);
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
 
-  useEffect(() => {
-    const ctrl = new AbortController();
-    targetRef.current = "";
-    streamFollowupReport(
-      {
-        onDelta: (d) => {
-          targetRef.current += d;
-          setTarget(targetRef.current);
-        },
-        onDone: () => setStreaming(false),
-        onError: (m) => {
-          setReportErr(m);
-          setStreaming(false);
-        },
-      },
-      ctrl.signal,
-    ).catch(() => {});
-    return () => ctrl.abort();
-  }, []);
-
-  // Type-out animation: reveal ~180 chars/s toward whatever has streamed in.
-  useEffect(() => {
-    let raf = 0;
-    let last = 0;
-    const tick = (t: number) => {
-      if (!last) last = t;
-      const dt = t - last;
-      last = t;
-      setShown((s) => {
-        const len = targetRef.current.length;
-        return s >= len ? s : Math.min(len, s + Math.max(1, Math.round(dt * 0.18)));
-      });
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const visible = target.slice(0, shown);
-  const paragraphs = visible.split(/\n{2,}/).filter((p) => p.trim().length > 0);
-  const typing = streaming || shown < target.length;
-
-  // --- Structured digest (contradictions + collapsible topics) ---
-  const digest = useQuery({ queryKey: ["followup"], queryFn: () => api.followup() });
+  const digest = useQuery({
+    queryKey: ["followup", projectId],
+    queryFn: () => api.followup(projectId || undefined),
+  });
   const contradictions = digest.data?.contradictions ?? [];
   const topics = digest.data?.topics ?? [];
+
+  const timeline = useQuery({
+    queryKey: ["project-timeline", projectId],
+    queryFn: () => api.projectTimeline(projectId),
+    enabled: projectId !== "",
+  });
 
   const openItem = async (contentId: string, fallbackTitle: string) => {
     try {
@@ -80,37 +43,35 @@ export function FollowUp() {
     }
   };
 
+  const rows = timeline.data?.items ?? [];
+
   return (
     <Page>
       <PageHeader
         title="Follow-up"
-        subtitle="A grounded read of your recent mail & notes — what's going on and what to focus on next. Refreshes hourly; every fact comes from your own messages."
+        subtitle="A grounded read of what's going on and what to focus on next. Refreshes hourly; every fact comes from your own messages."
       />
 
-      {/* Report — streamed like an assistant writing. */}
-      <section className="mb-9">
-        {paragraphs.length === 0 && streaming && !reportErr ? (
-          <div className="flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13.5px] text-accent">
-            <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
-            Hygur is synthesizing your knowledge to focus on what matters next…
-          </div>
-        ) : reportErr && paragraphs.length === 0 ? (
-          <p className="text-[13.5px] text-muted">
-            The report is unavailable right now. The details below still work.
-          </p>
-        ) : (
-          <div className="prose-answer text-[14.5px] leading-relaxed text-text">
-            {paragraphs.map((p, i) => (
-              <p key={i} className="mb-3 last:mb-0">
-                {p}
-                {typing && i === paragraphs.length - 1 && (
-                  <span className="ml-0.5 inline-block h-[1.05em] w-[2px] -translate-y-[1px] animate-pulse bg-accent align-middle" />
-                )}
-              </p>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Scope: recent activity (default) or a specific project. */}
+      <div className="mb-6 flex items-center gap-2.5">
+        <span className="shrink-0 text-[12px] text-muted">Scope</span>
+        <select
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          className="min-w-0 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
+        >
+          <option value="">Recent mail &amp; notes</option>
+          {(projects.data ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Report — streamed like an assistant writing. Keyed by scope so it
+          re-streams from a clean slate when the project changes. */}
+      <ReportStream key={projectId || "all"} projectId={projectId || undefined} />
 
       {/* Contradictions — the verified, cited signal stays visible. */}
       {contradictions.length > 0 && (
@@ -121,6 +82,40 @@ export function FollowUp() {
               <EntryCard key={i} entry={c} warn onOpen={openItem} />
             ))}
           </ul>
+        </section>
+      )}
+
+      {/* Exchange timeline — project scope only: who, when, what, clickable. */}
+      {projectId !== "" && (
+        <section className="mb-8">
+          <Label>Exchange timeline</Label>
+          {rows.length > 0 ? (
+            <ul className="border-t border-border">
+              {rows.map((r) => (
+                <li
+                  key={r.content_id}
+                  onClick={() => openItem(r.content_id, r.title)}
+                  className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-2.5 transition-colors hover:bg-surface2"
+                >
+                  <span className="truncate text-[13.5px] text-text">
+                    {r.title || "(untitled)"}
+                  </span>
+                  <span className="tnum whitespace-nowrap text-[12px] text-muted">
+                    {fmtDate(r.date)}
+                  </span>
+                  {r.from && (
+                    <span className="col-span-2 truncate text-[12px] text-muted">
+                      {r.from}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : timeline.isLoading ? (
+            <p className="text-[13px] text-muted">Loading…</p>
+          ) : (
+            <p className="text-[13px] text-muted">No items linked to this project yet.</p>
+          )}
         </section>
       )}
 
@@ -150,6 +145,85 @@ export function FollowUp() {
         />
       )}
     </Page>
+  );
+}
+
+/** Streamed natural-language report. Owns its own stream + type-out animation;
+ *  the parent remounts it (via key) when the scope changes. */
+function ReportStream({ projectId }: { projectId?: string }) {
+  const targetRef = useRef("");
+  const [target, setTarget] = useState("");
+  const [shown, setShown] = useState(0);
+  const [streaming, setStreaming] = useState(true);
+  const [reportErr, setReportErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    targetRef.current = "";
+    streamFollowupReport(
+      {
+        onDelta: (d) => {
+          targetRef.current += d;
+          setTarget(targetRef.current);
+        },
+        onDone: () => setStreaming(false),
+        onError: (m) => {
+          setReportErr(m);
+          setStreaming(false);
+        },
+      },
+      ctrl.signal,
+      projectId,
+    ).catch(() => {});
+    return () => ctrl.abort();
+  }, [projectId]);
+
+  // Reveal ~180 chars/s toward whatever has streamed in.
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const tick = (t: number) => {
+      if (!last) last = t;
+      const dt = t - last;
+      last = t;
+      setShown((s) => {
+        const len = targetRef.current.length;
+        return s >= len ? s : Math.min(len, s + Math.max(1, Math.round(dt * 0.18)));
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const visible = target.slice(0, shown);
+  const paragraphs = visible.split(/\n{2,}/).filter((p) => p.trim().length > 0);
+  const typing = streaming || shown < target.length;
+
+  return (
+    <section className="mb-9">
+      {paragraphs.length === 0 && streaming && !reportErr ? (
+        <div className="flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13.5px] text-accent">
+          <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
+          Hygur is synthesizing your knowledge to focus on what matters next…
+        </div>
+      ) : reportErr && paragraphs.length === 0 ? (
+        <p className="text-[13.5px] text-muted">
+          The report is unavailable right now. The details below still work.
+        </p>
+      ) : (
+        <div className="prose-answer text-[14.5px] leading-relaxed text-text">
+          {paragraphs.map((p, i) => (
+            <p key={i} className="mb-3 last:mb-0">
+              {p}
+              {typing && i === paragraphs.length - 1 && (
+                <span className="ml-0.5 inline-block h-[1.05em] w-[2px] -translate-y-[1px] animate-pulse bg-accent align-middle" />
+              )}
+            </p>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

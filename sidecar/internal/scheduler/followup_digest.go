@@ -77,20 +77,23 @@ Rules:
 // salient topics and any real contradictions, each cited to source items.
 // Empty (no topics, no contradictions) when there's nothing factual to report.
 // Cached ~1h.
-func (d *DailyBrief) FollowUp(ctx context.Context) (FollowUpDigest, error) {
+func (d *DailyBrief) FollowUp(ctx context.Context, projectID string) (FollowUpDigest, error) {
 	if d == nil || d.store == nil || d.llm == nil {
 		return FollowUpDigest{}, nil
 	}
-	items, err := d.gatherFollowupItems(ctx)
+	items, err := d.gatherFollowupItems(ctx, projectID)
 	if err != nil {
 		return FollowUpDigest{}, err
 	}
 	window := fmt.Sprintf("last %d days", followupWindowDays)
+	if projectID != "" {
+		window = "project"
+	}
 	if len(items) == 0 {
 		return FollowUpDigest{Window: window}, nil
 	}
 
-	key := followupCacheKey(items)
+	key := followupCacheKey(items, projectID)
 	followupMu.Lock()
 	if followupKey == key && time.Now().Before(followupExpires) {
 		v := followupValue
@@ -109,9 +112,23 @@ func (d *DailyBrief) FollowUp(ctx context.Context) (FollowUpDigest, error) {
 	return digest, nil
 }
 
-// gatherFollowupItems pulls recent mail + notes within the window, newest first,
-// capped to keep the LLM prompt bounded.
-func (d *DailyBrief) gatherFollowupItems(ctx context.Context) ([]*store.KnowledgeItem, error) {
+// gatherFollowupItems pulls the items to summarize, newest first, capped to keep
+// the LLM prompt bounded. With a projectID it returns that project's own items
+// (its full state, any age); otherwise recent mail + notes within the window.
+func (d *DailyBrief) gatherFollowupItems(ctx context.Context, projectID string) ([]*store.KnowledgeItem, error) {
+	if projectID != "" {
+		items, err := d.store.GetItemsForProject(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(items, func(i, j int) bool {
+			return itemDate(items[i]).After(itemDate(items[j]))
+		})
+		if len(items) > followupMaxItems {
+			items = items[:followupMaxItems]
+		}
+		return items, nil
+	}
 	since := time.Now().Add(-followupWindowDays * 24 * time.Hour)
 	var all []*store.KnowledgeItem
 	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote) {
@@ -340,15 +357,15 @@ Rules:
 // Cached ~1h: a fresh cache replays in one emit; a miss streams live from the
 // inference model and caches the result. Returns nil (nothing emitted) when the
 // brief task or LLM isn't configured.
-func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, emit func(string) error) error {
+func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, projectID string, emit func(string) error) error {
 	if d == nil || d.store == nil || d.llm == nil {
 		return nil
 	}
-	items, err := d.gatherFollowupItems(ctx)
+	items, err := d.gatherFollowupItems(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	key := followupCacheKey(items)
+	key := followupCacheKey(items, projectID)
 
 	reportMu.Lock()
 	if reportKey == key && reportValue != "" && time.Now().Before(reportExpires) {
@@ -396,8 +413,9 @@ func cacheReport(key, text string) {
 	reportMu.Unlock()
 }
 
-func followupCacheKey(items []*store.KnowledgeItem) string {
+func followupCacheKey(items []*store.KnowledgeItem, projectID string) string {
 	h := sha256.New()
+	fmt.Fprintf(h, "proj=%s|", projectID)
 	for _, it := range items {
 		fmt.Fprintf(h, "|%s@%d", it.ContentID, itemDate(it).Unix())
 	}
