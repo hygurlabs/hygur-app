@@ -14,7 +14,7 @@ export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
 
 /** Hygur Cloud subscription — Stripe payment link (Personal, 35 €/mo standard;
  *  launch offer 29.90 €/mo locked for life for the first 2,000 subscribers). */
-export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/14A9AMgW38NvbgU7MS2Fa01";
+export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/cNiaEQcFN7JracQ3wC2Fa02";
 
 /** Master gate for paid signups. Keep FALSE until the production LLM backend is
  *  settled — closed = the Cloud card shows "coming soon" and never opens Stripe
