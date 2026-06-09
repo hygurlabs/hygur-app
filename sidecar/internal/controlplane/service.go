@@ -103,8 +103,10 @@ type refreshReq struct {
 }
 
 type tokenResp struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
+	AccessToken string `json:"access_token"`
+	// RefreshToken is no longer returned for web sessions (it's set as an HttpOnly
+	// cookie). Kept (omitempty) only for the desktop path, which has no cookie.
+	RefreshToken string `json:"refresh_token,omitempty"`
 	Endpoint     string `json:"endpoint"`
 	TenantID     string `json:"tenant_id"`
 	ExpiresIn    int    `json:"expires_in"`
@@ -195,11 +197,10 @@ func (s *Service) issueAndRespond(w http.ResponseWriter, now time.Time, dev Devi
 	// body value and relies on the cookie.
 	s.setRefreshCookie(w, refresh)
 	writeJSON(w, http.StatusOK, tokenResp{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		Endpoint:     fmt.Sprintf("https://%s.%s", acc.TenantID, s.domain),
-		TenantID:     acc.TenantID,
-		ExpiresIn:    int(s.accessTTL.Seconds()),
+		AccessToken: access,
+		Endpoint:    fmt.Sprintf("https://%s.%s", acc.TenantID, s.domain),
+		TenantID:    acc.TenantID,
+		ExpiresIn:   int(s.accessTTL.Seconds()),
 	})
 }
 

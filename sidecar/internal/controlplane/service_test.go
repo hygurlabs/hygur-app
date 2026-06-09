@@ -51,12 +51,27 @@ func TestService_EnrollRefresh(t *testing.T) {
 		t.Fatalf("enroll status = %d (%v)", resp.StatusCode, m)
 	}
 	access, _ := m["access_token"].(string)
-	refresh, _ := m["refresh_token"].(string)
-	if access == "" || refresh == "" {
-		t.Fatalf("missing tokens: %v", m)
+	if access == "" {
+		t.Fatalf("missing access token: %v", m)
+	}
+	// The refresh token must NOT be in the body — it lives in an HttpOnly cookie.
+	if _, present := m["refresh_token"]; present {
+		t.Error("refresh_token must not be returned in the response body")
 	}
 	if got := m["endpoint"]; got != "https://"+acc.TenantID+".hygur.ai" {
 		t.Errorf("endpoint = %v, want https://%s.hygur.ai", got, acc.TenantID)
+	}
+	var refreshCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == refreshCookieName {
+			refreshCookie = c
+		}
+	}
+	if refreshCookie == nil || refreshCookie.Value == "" {
+		t.Fatalf("enroll must set the %s refresh cookie", refreshCookieName)
+	}
+	if !refreshCookie.HttpOnly || !refreshCookie.Secure {
+		t.Errorf("refresh cookie must be HttpOnly+Secure, got %+v", refreshCookie)
 	}
 
 	// The access token is a valid tenant-scoped device JWT.
@@ -73,12 +88,21 @@ func TestService_EnrollRefresh(t *testing.T) {
 		t.Errorf("reused code status = %d, want 401", resp.StatusCode)
 	}
 
-	// Refresh → fresh access (rotated jti) + new refresh.
-	resp, m = post("/token/refresh", `{"refresh_token":"`+refresh+`"}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("refresh status = %d (%v)", resp.StatusCode, m)
+	// Refresh reads the cookie (no body token) → fresh access (rotated jti).
+	rreq, _ := http.NewRequest(http.MethodPost, srv.URL+"/token/refresh", strings.NewReader("{}"))
+	rreq.Header.Set("Content-Type", "application/json")
+	rreq.AddCookie(refreshCookie)
+	rresp, err := http.DefaultClient.Do(rreq)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
 	}
-	access2, _ := m["access_token"].(string)
+	var rm map[string]any
+	_ = json.NewDecoder(rresp.Body).Decode(&rm)
+	rresp.Body.Close()
+	if rresp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh status = %d (%v)", rresp.StatusCode, rm)
+	}
+	access2, _ := rm["access_token"].(string)
 	claims2, err := auth.VerifyDeviceToken(pub, access2, now)
 	if err != nil {
 		t.Fatalf("verify refreshed: %v", err)
