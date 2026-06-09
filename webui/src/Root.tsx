@@ -4,7 +4,7 @@ import { Onboarding } from "./onboarding/Onboarding";
 import { Connect } from "./onboarding/Connect";
 import { ModePicker } from "./onboarding/ModePicker";
 import { isOnboardingComplete } from "./lib/onboarding";
-import { needsConnection } from "./lib/connection";
+import { needsConnection, SIGNED_OUT_EVENT } from "./lib/connection";
 import { isDesktop, getDesktopConfig } from "./lib/desktop";
 
 /** Gates the app behind first-run mode selection + onboarding. `done`/`modeChosen
@@ -18,6 +18,16 @@ export function Root() {
   const [modeChosen, setModeChosen] = useState<boolean | null>(() =>
     isDesktop() ? null : true,
   );
+  // Bumped on sign-out so the connection gate below re-evaluates: a dead session
+  // (refresh failed → clearTokens cleared the endpoint) reactively routes to
+  // Connect instead of stranding the user on a 401-ing app shell.
+  const [, setSignedOutTick] = useState(0);
+
+  useEffect(() => {
+    const onSignedOut = () => setSignedOutTick((n) => n + 1);
+    window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
+    return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

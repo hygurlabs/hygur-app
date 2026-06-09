@@ -115,6 +115,10 @@ export function setTokens(endpoint: string, accessToken: string, refreshToken?: 
   }
 }
 
+/** Event fired on full sign-out so the app can reactively route back to Connect
+ *  (instead of stranding the user on a 401-ing app shell until a manual reload). */
+export const SIGNED_OUT_EVENT = "hygur:signed-out";
+
 /** Drops the connection AND the refresh token (full sign-out). */
 export function clearTokens(): void {
   clearConnection();
@@ -122,6 +126,11 @@ export function clearTokens(): void {
     localStorage.removeItem(REFRESH_KEY);
   } catch {
     /* ignore */
+  }
+  try {
+    window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+  } catch {
+    /* non-browser / SSR — ignore */
   }
 }
 
