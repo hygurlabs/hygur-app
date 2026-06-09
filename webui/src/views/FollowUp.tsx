@@ -27,6 +27,13 @@ export function FollowUp() {
     enabled: projectId !== "",
   });
 
+  // W6 REDUCE: cross-source claim conflicts, reconciled + cited.
+  const claimConflicts = useQuery({
+    queryKey: ["claim-contradictions", projectId],
+    queryFn: () => api.claimContradictions(projectId || undefined),
+  });
+  const reconciled = claimConflicts.data?.contradictions ?? [];
+
   const openItem = async (contentId: string, fallbackTitle: string) => {
     try {
       const it = await api.knowledgeItem(contentId);
@@ -74,6 +81,58 @@ export function FollowUp() {
       {/* Report — streamed like an assistant writing. Keyed by scope so it
           re-streams from a clean slate when the project changes. */}
       <ReportStream key={projectId || "all"} projectId={projectId || undefined} />
+
+      {/* Cited contradictions (W6) — cross-source divergences reconciled by the LLM
+          into a real conflict vs an evolution, each backed by a verbatim quote. */}
+      {reconciled.length > 0 && (
+        <section className="mb-8">
+          <Label tone="warn">Contradictions (cited)</Label>
+          <ul className="flex flex-col gap-3">
+            {reconciled.map((c, i) => (
+              <li key={i} className="rounded-xl border border-border bg-surface px-4 py-3">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide ${
+                      c.verdict.kind === "conflict"
+                        ? "bg-danger/10 text-danger"
+                        : "bg-accent-weak text-accent"
+                    }`}
+                  >
+                    {c.verdict.kind === "conflict" ? "Conflict" : "Evolution"}
+                  </span>
+                  <span className="text-[13.5px] font-medium text-text">
+                    {c.entity} · {c.attribute}
+                  </span>
+                </div>
+                {c.verdict.reason && (
+                  <p className="mb-2 text-[12.5px] text-muted">{c.verdict.reason}</p>
+                )}
+                <ul className="flex flex-col gap-1">
+                  {c.members.map((m, j) => (
+                    <li
+                      key={j}
+                      onClick={() => openItem(m.source_id, m.value)}
+                      className="cursor-pointer rounded-md px-2 py-1 transition-colors hover:bg-surface2"
+                    >
+                      <span className="text-[13px] font-medium text-text">{m.value}</span>
+                      {m.asserted_at && (
+                        <span className="tnum ml-2 text-[11px] text-faint">
+                          {fmtDate(m.asserted_at)}
+                        </span>
+                      )}
+                      {m.quote && (
+                        <span className="block truncate text-[12px] text-muted">
+                          «{m.quote}»
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Contradictions — the verified, cited signal stays visible. */}
       {contradictions.length > 0 && (

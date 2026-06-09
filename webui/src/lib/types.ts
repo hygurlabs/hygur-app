@@ -132,6 +132,25 @@ export interface Task {
   updated_at: string;
 }
 
+/** One cited side of a reconciled claim conflict (W6 REDUCE). */
+export interface ClaimRef {
+  source_id: string;
+  value: string;
+  quote: string;
+  asserted_at: string;
+}
+
+/** A reconciled semantic contradiction (GET /knowledge/claim-contradictions):
+ *  cross-source divergent claims the LLM classified as a real `conflict` or an
+ *  evolution (`supersedes`), each cited verbatim. */
+export interface ReconciledConflict {
+  cluster: string;
+  entity: string;
+  attribute: string;
+  members: ClaimRef[];
+  verdict: { kind: "conflict" | "supersedes" | string; reason: string };
+}
+
 /** One row of a project's exchange timeline (GET /knowledge/project-timeline). */
 export interface TimelineItem {
   content_id: string;

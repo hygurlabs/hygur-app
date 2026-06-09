@@ -1,0 +1,83 @@
+package scheduler
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/store"
+)
+
+// W6 stage 3c — the REDUCE surface. Ties the deterministic candidate detection
+// (DetectClaimConflicts) to the LLM reconciliation (Reconcile), scoped to a project
+// (else all mail + notes). The reconciliation is LLM-backed, so results are cached
+// ~1h per scope; claims change rarely (one-time backfill + incremental), so a stale
+// hour is fine.
+
+const semanticContradictionsTTL = time.Hour
+
+type semContraEntry struct {
+	conflicts []contradict.ReconciledConflict
+	scanned   int
+	expires   time.Time
+}
+
+var (
+	semContraMu    sync.Mutex
+	semContraCache = map[string]semContraEntry{}
+)
+
+// SemanticContradictions returns the W6 reconciled conflicts for a scope: cross-
+// source claim divergences classified by the LLM into conflict / supersedes (the
+// "none" verdicts are already dropped by Reconcile). projectID "" = all mail+notes.
+func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID string) ([]contradict.ReconciledConflict, int, error) {
+	if d == nil || d.store == nil {
+		return nil, 0, nil
+	}
+	key := "proj=" + projectID
+	semContraMu.Lock()
+	if e, ok := semContraCache[key]; ok && time.Now().Before(e.expires) {
+		semContraMu.Unlock()
+		return e.conflicts, e.scanned, nil
+	}
+	semContraMu.Unlock()
+
+	items, err := d.contradictionItems(ctx, projectID)
+	if err != nil {
+		return nil, 0, err
+	}
+	candidates := contradict.DetectClaimConflicts(items)
+	reconciled := contradict.Reconcile(ctx, d.llm, candidates)
+	if reconciled == nil {
+		reconciled = []contradict.ReconciledConflict{}
+	}
+
+	semContraMu.Lock()
+	semContraCache[key] = semContraEntry{conflicts: reconciled, scanned: len(items), expires: time.Now().Add(semanticContradictionsTTL)}
+	semContraMu.Unlock()
+	return reconciled, len(items), nil
+}
+
+// contradictionItems gathers the corpus for detection: a project's items (complete,
+// so threads aren't split), else all mail + notes.
+func (d *DailyBrief) contradictionItems(ctx context.Context, projectID string) ([]*store.KnowledgeItem, error) {
+	if projectID != "" {
+		return d.store.GetItemsForProject(ctx, projectID)
+	}
+	var items []*store.KnowledgeItem
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote) {
+		const batch = 500
+		for offset := 0; ; offset += batch {
+			page, err := d.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, page...)
+			if len(page) < batch {
+				break
+			}
+		}
+	}
+	return items, nil
+}

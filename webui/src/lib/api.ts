@@ -19,6 +19,7 @@ import type {
   Project,
   ProjectItem,
   RagSource,
+  ReconciledConflict,
   SearchResponse,
   SessionDetail,
   SessionSummary,
@@ -180,6 +181,12 @@ export const api = {
   followup: (projectId?: string) =>
     getJSON<FollowUpDigest>(
       `/knowledge/followup${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
+  /** W6 reconciled semantic contradictions (conflict/supersedes), cited. Scoped to
+   *  a project when given; cached ~1h server-side. */
+  claimContradictions: (projectId?: string) =>
+    getJSON<{ contradictions: ReconciledConflict[]; scanned: number }>(
+      `/knowledge/claim-contradictions${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
     ),
   /** A project's items as a date-sorted exchange timeline (W7). */
   projectTimeline: (projectId: string) =>

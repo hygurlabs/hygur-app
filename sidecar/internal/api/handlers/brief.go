@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/scheduler"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -394,6 +395,27 @@ func (h *BriefHandler) Claims(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"claims": claims, "count": len(claims)})
+}
+
+// ClaimContradictions handles GET /knowledge/claim-contradictions?project_id= —
+// the W6 REDUCE surface: cross-source claim divergences reconciled by the LLM into
+// conflict / supersedes, each cited. Cached ~1h per scope.
+func (h *BriefHandler) ClaimContradictions(w http.ResponseWriter, r *http.Request) {
+	if h.brief == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	conflicts, scanned, err := h.brief.SemanticContradictions(r.Context(), r.URL.Query().Get("project_id"))
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("semantic contradictions failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to reconcile contradictions")
+		return
+	}
+	if conflicts == nil {
+		conflicts = []contradict.ReconciledConflict{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"contradictions": conflicts, "scanned": scanned})
 }
 
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {

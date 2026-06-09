@@ -594,6 +594,15 @@ func (s *Server) handleItemClaims(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
+// handleClaimContradictions handles GET /knowledge/claim-contradictions (W6 3c).
+func (s *Server) handleClaimContradictions(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.ClaimContradictions(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
 // handleKnowledgeFollowupReport handles GET /knowledge/followup/report — the
 // streamed natural-language report (SSE). Delegates to the BriefHandler.
 func (s *Server) handleKnowledgeFollowupReport(w http.ResponseWriter, r *http.Request) {
