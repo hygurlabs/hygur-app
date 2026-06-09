@@ -169,9 +169,11 @@ func eventStart(e *store.KnowledgeItem) time.Time {
 func eventLine(e *store.KnowledgeItem) string {
 	st := eventStart(e)
 	allDay, _ := e.Metadata["all_day"].(bool)
-	when := st.Format("2006-01-02 15:04")
+	// Include the weekday (computed here, not by the model): small models
+	// reliably misderive the day-of-week from a date while writing prose.
+	when := st.Format("2006-01-02 Mon 15:04")
 	if allDay {
-		when = st.Format("2006-01-02") + " (all day)"
+		when = st.Format("2006-01-02 Mon") + " (all day)"
 	}
 	line := when + " — " + strings.TrimSpace(e.Title)
 	if loc, _ := e.Metadata["location"].(string); strings.TrimSpace(loc) != "" {

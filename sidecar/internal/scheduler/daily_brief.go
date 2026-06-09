@@ -590,9 +590,10 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 	for i, it := range items {
 		sb.WriteString(fmt.Sprintf("- [%s] %s", it.SourceType, it.Title))
 		// canonical date helps the model assess freshness and detect stale items.
+		// Weekday included so the model never has to derive it (small models err).
 		if cd := store.GetCanonicalDate(it.KnowledgeItem); !cd.IsZero() {
 			sb.WriteString(" (")
-			sb.WriteString(cd.Format("2006-01-02"))
+			sb.WriteString(cd.Format("2006-01-02 Mon"))
 			sb.WriteByte(')')
 		}
 		// Sender: direct-IMAP uses "mail_from"; edge/Proton uses "from".
