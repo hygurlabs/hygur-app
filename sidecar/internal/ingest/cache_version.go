@@ -6,7 +6,7 @@ package ingest
 // companion "<key>_version" in the item metadata.
 const (
 	projectSuggestVersion  = "1"
-	mailCategoryVersion    = "2" // v2: strict delimited-item matcher (no prose-grep)
+	mailCategoryVersion    = "3" // v3: classify on the main model (small model gave garbage)
 	extractedClaimsVersion = "1"
 )
 

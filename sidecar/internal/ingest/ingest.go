@@ -561,7 +561,11 @@ func (i *Ingestor) classifyItem(ctx context.Context, item *store.KnowledgeItem) 
 			return cached, false
 		}
 	}
-	c := i.tier2Client()
+	// Classify on the MAIN model, not the small indexing model: the latter
+	// follows the closed-taxonomy instruction poorly (it emitted the same garbage
+	// pair for unrelated mail), whereas the main model classifies cleanly. Tier-2
+	// NER stays on the small model (tier2Client) — only classification moved.
+	c := i.llmClient
 	if c == nil || strings.TrimSpace(item.NormalizedText) == "" {
 		return nil, false
 	}
