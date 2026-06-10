@@ -7,6 +7,9 @@ export type Route = "home" | "legal" | "privacy" | "terms";
  *  `/#/legal` resolve on first load. Routes use a `#/` prefix so in-page
  *  anchors (`#editions`, `#how`) are left untouched. */
 export function parseHash(): { route: Route; anchor?: string } {
+  // SSR / pre-render (no window): render the landing route. The client re-reads
+  // the hash on mount, so deep links still resolve.
+  if (typeof window === "undefined") return { route: "home" };
   const h = window.location.hash.replace(/^#/, "");
   if (h === "/legal") return { route: "legal" };
   if (h === "/privacy") return { route: "privacy" };

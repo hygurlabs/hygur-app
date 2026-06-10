@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:ssg": "tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir .ssr-dist && node prerender.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
