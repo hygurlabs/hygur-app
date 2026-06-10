@@ -26,6 +26,7 @@ import type {
   SidecarConfig,
   SidecarConfigPatch,
   Tag,
+  TagItem,
   Task,
   TimelineItem,
   TokenPricing,
@@ -262,6 +263,9 @@ export const api = {
   deleteNote: (id: string) => del(`/notes/${id}`),
 
   tags: () => getJSON<{ tags: Tag[] }>("/tags"),
+  /** Items carrying a tag — drives the tag → items drill-down. */
+  tagItems: (id: string) =>
+    getJSON<{ tag_id: string; items: TagItem[] }>(`/tags/${encodeURIComponent(id)}/items`),
   createTag: (name: string) => postJSON<Tag>("/tags", { name }),
   deleteTag: (id: string) => del(`/tags/${id}`),
   /** Maps tag NAMES to ids, creating any that don't exist yet. */

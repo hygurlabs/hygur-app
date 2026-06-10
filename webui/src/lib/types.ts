@@ -207,6 +207,16 @@ export interface Tag {
   usage_count?: number;
 }
 
+/** One item carrying a tag (GET /tags/{id}/items). */
+export interface TagItem {
+  id: string;
+  title: string;
+  source_type: string;
+  source_path?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AgendaAction {
   what: string;
   deadline_iso: string;

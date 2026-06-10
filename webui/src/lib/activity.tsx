@@ -17,11 +17,21 @@ const NOTIFY: Record<string, { key: string; title: string }> = {
   mail_digest: { key: "notify.priorityMail", title: "Important mail" },
   brief: { key: "notify.dailyBrief", title: "Daily brief" },
   agenda_alert: { key: "notify.agendaAlerts", title: "Deadline" },
+  // Pre-meeting / pre-deadline RAG brief — fires on cloud (server-side scheduler)
+  // and desktop. Shares the agenda toggle on native.
+  meeting_briefing: { key: "notify.agendaAlerts", title: "Meeting brief" },
 };
 
 function maybeNotify(e: HygurEvent): void {
   const n = NOTIFY[e.type];
   if (!n) return;
+  // Native shells gate on the per-category toggle (set in onboarding/settings).
+  // Web/Tauri have no such UI — there the browser's own notification permission
+  // IS the opt-in (native.notify requests it on first use), so fire directly.
+  if (!native.available) {
+    void native.notify(`Hygur — ${n.title}`, e.message ?? "");
+    return;
+  }
   void native.prefs.getBool(n.key).then((on) => {
     if (on) void native.notify(`Hygur — ${n.title}`, e.message ?? "");
   });
