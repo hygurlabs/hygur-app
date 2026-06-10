@@ -1,16 +1,31 @@
 # Hygur control plane (hygur-console): device enroll/refresh + Stripe billing
-# webhook. Serves no SPA, so no webui stage. Build context = repo root.
+# webhook + operator admin cost dashboard. Build context = repo root.
 #   nerdctl build -f Dockerfile.console -t hygur-console:dev --build-arg VERSION=cloud-dev .
+
+# ── Stage 1: operator admin SPA (Vite + React) ────────────────────────────────
+# Built first so the Go stage can go:embed cmd/hygur-console/adminui/dist.
+FROM node:22-bookworm-slim AS adminui
+WORKDIR /src/adminui
+COPY sidecar/cmd/hygur-console/adminui/package.json sidecar/cmd/hygur-console/adminui/package-lock.json ./
+RUN npm ci
+COPY sidecar/cmd/hygur-console/adminui ./
+RUN npm run build
+# → /src/adminui/dist
+
+# ── Stage 2: Go control plane (CGO + sqlite_fts5) ─────────────────────────────
 FROM golang:1.26-bookworm AS build
 WORKDIR /src/sidecar
 COPY sidecar/go.mod sidecar/go.sum ./
 RUN go mod download
 COPY sidecar ./
+# Bring in the freshly built admin SPA so go:embed has something to embed.
+COPY --from=adminui /src/adminui/dist ./cmd/hygur-console/adminui/dist
 ARG VERSION=cloud-dev
 RUN CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
     -ldflags "-X github.com/hygur/sidecar/internal/version.Version=${VERSION}" \
     -o /out/hygur-console ./cmd/hygur-console
 
+# ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
