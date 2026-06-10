@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hygur/sidecar/internal/controlplane"
+	"github.com/hygur/sidecar/internal/store"
 )
 
 func main() {
@@ -40,14 +42,37 @@ func main() {
 		runDevice(os.Args[2:])
 	case "provisions":
 		runProvisions(os.Args[2:])
+	case "backup-db":
+		runConsoleBackupDB(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hygur-console <serve|account|code|device|provisions> ...")
+	fmt.Fprintln(os.Stderr, "usage: hygur-console <serve|account|code|device|provisions|backup-db> ...")
 	os.Exit(2)
+}
+
+// runConsoleBackupDB writes a consistent snapshot of the control-plane admin DB
+// to --out, preserving its SQLCipher encryption (same key). Invoked by the
+// off-box backup job via `kubectl exec`; safe to run while `serve` holds the DB
+// open (its own read connection). Reuses store.SnapshotTo — the snapshot is
+// schema-agnostic.
+func runConsoleBackupDB(args []string) {
+	fs := flag.NewFlagSet("backup-db", flag.ExitOnError)
+	out := fs.String("out", "", "destination snapshot path (required; must not exist)")
+	_ = fs.Parse(args)
+	if *out == "" {
+		die(fmt.Errorf("backup-db: --out is required"))
+	}
+	path := os.Getenv("HYGUR_CONSOLE_DB")
+	if path == "" {
+		path = "hygur-console.db"
+	}
+	_ = os.Remove(*out) // sqlcipher_export requires a fresh target
+	die(store.SnapshotTo(context.Background(), path, *out, os.Getenv("HYGUR_CONSOLE_DB_KEY")))
+	fmt.Printf("snapshot written: %s\n", *out)
 }
 
 func die(err error) {

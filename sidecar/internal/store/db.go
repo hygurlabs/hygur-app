@@ -209,23 +209,60 @@ func Open(path, key string) (*DB, error) {
 // same key (sqlcipher_export), so the backup preserves the source's at-rest
 // protection. destPath must not already exist.
 func (d *DB) BackupTo(ctx context.Context, destPath, key string) error {
+	return backupConn(ctx, d.db, destPath, key)
+}
+
+// backupConn runs a consistent hot copy of the database reachable through conn
+// into destPath: VACUUM INTO for plaintext, or ATTACH + sqlcipher_export keyed
+// with the same key so the copy preserves the source's at-rest encryption.
+// ATTACH is connection-scoped, so callers must pin conn to a single underlying
+// connection (SetMaxOpenConns(1)) — otherwise the export can land on a
+// connection that never saw the ATTACH.
+func backupConn(ctx context.Context, conn *sql.DB, destPath, key string) error {
 	if key == "" {
-		if _, err := d.db.ExecContext(ctx, "VACUUM INTO ?", destPath); err != nil {
+		if _, err := conn.ExecContext(ctx, "VACUUM INTO ?", destPath); err != nil {
 			return fmt.Errorf("backup (vacuum into): %w", err)
 		}
 		return nil
 	}
-	if _, err := d.db.ExecContext(ctx, `ATTACH DATABASE ? AS bak KEY ?`, destPath, key); err != nil {
+	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS bak KEY ?`, destPath, key); err != nil {
 		return fmt.Errorf("backup attach: %w", err)
 	}
-	if _, err := d.db.ExecContext(ctx, `SELECT sqlcipher_export('bak')`); err != nil {
-		_, _ = d.db.ExecContext(ctx, `DETACH DATABASE bak`)
+	if _, err := conn.ExecContext(ctx, `SELECT sqlcipher_export('bak')`); err != nil {
+		_, _ = conn.ExecContext(ctx, `DETACH DATABASE bak`)
 		return fmt.Errorf("backup export: %w", err)
 	}
-	if _, err := d.db.ExecContext(ctx, `DETACH DATABASE bak`); err != nil {
+	if _, err := conn.ExecContext(ctx, `DETACH DATABASE bak`); err != nil {
 		return fmt.Errorf("backup detach: %w", err)
 	}
 	return nil
+}
+
+// SnapshotTo writes a consistent snapshot of the database file at srcPath to
+// destPath WITHOUT running migrations or mutating the source. It opens its own
+// dedicated connection (pinned to one, so the keyed ATTACH/export stays
+// coherent), so it is safe to run from a separate process while the server holds
+// the DB open — SQLite admits concurrent readers. With a non-empty key the
+// snapshot is SQLCipher-encrypted under that same key; an empty key yields a
+// plaintext copy. destPath must not already exist. This is the entry point for
+// the `backup-db` operator subcommand driving the off-box backup job. The DB
+// schema is irrelevant, so the same call snapshots both the tenant knowledge
+// store and the control-plane admin DB.
+func SnapshotTo(ctx context.Context, srcPath, destPath, key string) error {
+	dsn := "file:" + srcPath + "?_foreign_keys=off&_busy_timeout=30000"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return fmt.Errorf("snapshot open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1) // ATTACH/export must stay on a single connection
+	if err := conn.PingContext(ctx); err != nil {
+		return fmt.Errorf("snapshot open (wrong key?): %w", err)
+	}
+	return backupConn(ctx, conn, destPath, key)
 }
 
 // MigratePlaintextToEncrypted converts an existing plaintext database at path

@@ -78,6 +78,9 @@ func main() {
 		case "edge":
 			runEdge(os.Args[2:])
 			return
+		case "backup-db":
+			runBackupDB(os.Args[2:])
+			return
 		}
 	}
 
