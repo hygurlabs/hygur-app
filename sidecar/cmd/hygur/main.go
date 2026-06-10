@@ -781,6 +781,24 @@ func main() {
 			logger.Info().Msg("edge push loop started in-process")
 		}
 	}
+	// Desktop SPA Content-Security-Policy connect-src sources: the resolved cloud
+	// tenant upstream (so cloud mode tightens to the exact tenant host instead of
+	// the *.hygur.ai wildcard), the console origin (refresh / logout / passkey /
+	// billing — HYGUR_CONSOLE_ORIGIN, default https://console.hygur.ai) and any
+	// HYGUR_ALLOWED_ORIGINS (self-host manual-remote from the packaged desktop).
+	// 'self' + the Tauri IPC sources are added unconditionally in buildCSP; if none
+	// of these resolve it falls back to the wildcard.
+	var cspSources []string
+	if cloudUpstream != "" {
+		cspSources = append(cspSources, cloudUpstream)
+	}
+	consoleOrigin := strings.TrimSpace(os.Getenv("HYGUR_CONSOLE_ORIGIN"))
+	if consoleOrigin == "" {
+		consoleOrigin = "https://console.hygur.ai"
+	}
+	cspSources = append(cspSources, consoleOrigin)
+	cspSources = append(cspSources, allowedOrigins...)
+	server.SetCSPConnectSources(cspSources)
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)

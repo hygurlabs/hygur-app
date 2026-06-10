@@ -61,6 +61,7 @@ type Server struct {
 	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
 	cloudProxy       *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
 	extraOrigins     map[string]bool        // extra CORS-allowed origins (SetAllowedOrigins) — e.g. the cloud web shell
+	cspConnectSrc    []string               // resolved connect-src sources for the served SPA CSP (SetCSPConnectSources)
 	edgeRunner       *edge.Runner           // local edge push loop (cloud thin client) — backs the /edge/* routes
 }
 
@@ -90,6 +91,22 @@ func (s *Server) SetAllowedOrigins(origins []string) {
 	for _, o := range origins {
 		if o = strings.ToLower(strings.TrimSpace(o)); o != "" {
 			s.extraOrigins[o] = true
+		}
+	}
+}
+
+// SetCSPConnectSources sets the extra connect-src origins for the served SPA's
+// Content-Security-Policy (see buildCSP). main resolves these from the cloud
+// upstream host, HYGUR_CONSOLE_ORIGIN and HYGUR_ALLOWED_ORIGINS so the desktop
+// CSP tightens to the exact tenant/console host instead of the *.hygur.ai
+// wildcard. The unconditional fail-safe sources ('self', ipc:, http://ipc.localhost)
+// are added in buildCSP regardless of what is passed here. Mirrors
+// SetAllowedOrigins.
+func (s *Server) SetCSPConnectSources(origins []string) {
+	s.cspConnectSrc = nil
+	for _, o := range origins {
+		if o = strings.TrimSpace(o); o != "" {
+			s.cspConnectSrc = append(s.cspConnectSrc, o)
 		}
 	}
 }

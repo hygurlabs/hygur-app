@@ -4,6 +4,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/hygur/sidecar/internal/api/webui"
@@ -34,20 +35,78 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	// Lock the embedded SPA down: code + styles + images same-origin only, and
-	// network egress restricted to THIS sidecar (loopback), the Hygur cloud
-	// (*.hygur.ai tenant + console) and the Tauri IPC. An XSS-injected script then
-	// cannot exfiltrate to an arbitrary host, frame the app, or load remote code.
-	// (The Tauri init scripts are native-injected and bypass page CSP; on macOS
-	// invoke() is postMessage, not a fetch, so it isn't connect-src-gated — the
-	// ipc: sources keep Windows working too.)
-	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; font-src 'self'; "+
-			"connect-src 'self' https://*.hygur.ai ipc: http://ipc.localhost; "+
-			"object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+	// network egress restricted to THIS sidecar (loopback), the resolved cloud
+	// tenant + console origins and the Tauri IPC (see buildCSP). An XSS-injected
+	// script then cannot exfiltrate to an arbitrary host, frame the app, or load
+	// remote code. (The Tauri init scripts are native-injected and bypass page CSP;
+	// on macOS invoke() is postMessage, not a fetch, so it isn't connect-src-gated —
+	// the ipc: sources keep Windows working too.)
+	w.Header().Set("Content-Security-Policy", s.buildCSP())
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = io.WriteString(w, page)
+}
+
+// buildCSP assembles the Content-Security-Policy header for the served SPA from
+// the resolved connect-src sources (SetCSPConnectSources). The connect-src list
+// ALWAYS includes the unconditional fail-safe sources — 'self' (loopback),
+// ipc: and http://ipc.localhost (Tauri IPC) — so a webview with no devtools is
+// never bricked by a bad config. On top of those it adds each configured origin
+// (the cloud tenant upstream, the console origin, and any HYGUR_ALLOWED_ORIGINS),
+// normalised to a scheme://host origin and parsed defensively: a source that
+// won't parse is logged and skipped rather than panicking. If NOTHING resolves
+// beyond the fail-safe sources, the legacy https://*.hygur.ai wildcard is added
+// so cloud installs keep working; connect-src is therefore never empty.
+//
+// The rest of the policy mirrors the cloud web-shell CSP
+// (hygur-cloud/nginx/cloud-shell.vhost.conf): media-src 'self' data: blob:,
+// blob: in img-src, and form-action 'self'.
+func (s *Server) buildCSP() string {
+	// Unconditional fail-safe sources — order is stable for testability.
+	connect := []string{"'self'", "ipc:", "http://ipc.localhost"}
+
+	seen := map[string]bool{"'self'": true, "ipc:": true, "http://ipc.localhost": true}
+	added := false
+	for _, raw := range s.cspConnectSrc {
+		o := cspOrigin(raw)
+		if o == "" {
+			s.logger.Warn().Str("source", raw).Msg("CSP connect-src: skipping unparseable origin")
+			continue
+		}
+		if seen[o] {
+			continue
+		}
+		seen[o] = true
+		connect = append(connect, o)
+		added = true
+	}
+	// Nothing resolved beyond the fail-safe sources → keep cloud installs working
+	// with today's wildcard rather than emitting a connect-src that blocks the
+	// tenant/console (and never an empty one).
+	if !added {
+		connect = append(connect, "https://*.hygur.ai")
+	}
+
+	return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob:; font-src 'self'; media-src 'self' data: blob:; " +
+		"connect-src " + strings.Join(connect, " ") + "; " +
+		"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+}
+
+// cspOrigin normalises a configured source to a CSP-usable scheme://host[:port]
+// origin (no path/query). It returns "" when the input can't be parsed into an
+// absolute origin so buildCSP can skip it defensively. A bare origin without a
+// path (e.g. https://console.hygur.ai) round-trips unchanged.
+func cspOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // webUIAssets serves the content-hashed build assets under /assets/. The
