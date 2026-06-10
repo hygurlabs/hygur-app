@@ -171,15 +171,14 @@ export function refreshAccessToken(): Promise<boolean> {
   if (refreshing) return refreshing;
   refreshing = (async (): Promise<boolean> => {
     // The refresh token rides in an HttpOnly cookie (credentials:"include" sends
-    // it). A legacy localStorage token, if present, is sent once to bootstrap the
-    // cookie, then dropped by setTokens — migrating older sessions without re-login.
-    const legacy = ls(REFRESH_KEY);
+    // it); the web shell never holds it in JS. The legacy localStorage→body
+    // bootstrap was removed once all sessions were on the cookie.
     try {
       const r = await fetch(`${CONSOLE_URL}/token/refresh`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(legacy ? { refresh_token: legacy } : {}),
+        body: "{}",
       });
       if (!r.ok) {
         // Only a definitive auth rejection means the session is dead → sign out.

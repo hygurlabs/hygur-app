@@ -146,8 +146,10 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 // handleRefresh: refresh token → fresh access token (rotates both).
 func (s *Service) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	// Prefer the HttpOnly cookie; fall back to the JSON body so legacy clients (and
-	// the one-time migration bootstrap) keep working until everyone's on the cookie.
+	// Web sends the refresh token in the HttpOnly cookie. The JSON-body fallback now
+	// serves only the desktop app (loopback origin → no console cookie; it gets its
+	// refresh token via /desktop/claim). The web's legacy localStorage→body bootstrap
+	// has been removed.
 	rt := ""
 	if c, cerr := r.Cookie(refreshCookieName); cerr == nil {
 		rt = c.Value
@@ -192,9 +194,9 @@ func (s *Service) issueAndRespond(w http.ResponseWriter, now time.Time, dev Devi
 		writeErr(w, http.StatusInternalServerError, "could not mint token")
 		return
 	}
-	// Refresh token → HttpOnly cookie (out of JS/XSS reach). Still echoed in the
-	// body this release for backward compatibility; the new web client ignores the
-	// body value and relies on the cookie.
+	// Refresh token → HttpOnly cookie (out of JS/XSS reach) for the web shell. It is
+	// NOT echoed in the body here (tokenResp.RefreshToken stays empty); the desktop
+	// path receives its refresh token via /desktop/claim instead.
 	s.setRefreshCookie(w, refresh)
 	writeJSON(w, http.StatusOK, tokenResp{
 		AccessToken: access,
