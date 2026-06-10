@@ -31,6 +31,17 @@ export interface CostResponse {
   generated_at: string;
 }
 
+export interface ClientError {
+  id: number;
+  occurred_at: string;
+  message: string;
+  stack?: string;
+  url?: string;
+  app_version?: string;
+  user_agent?: string;
+  origin?: string;
+}
+
 export class AuthError extends Error {}
 
 export async function fetchCost(token: string): Promise<CostResponse> {
@@ -38,4 +49,11 @@ export async function fetchCost(token: string): Promise<CostResponse> {
   if (r.status === 401 || r.status === 403) throw new AuthError("unauthorized");
   if (!r.ok) throw new Error(`cost fetch failed (${r.status})`);
   return (await r.json()) as CostResponse;
+}
+
+export async function fetchErrors(token: string): Promise<ClientError[]> {
+  const r = await fetch("/admin/errors", { headers: { Authorization: `Bearer ${token}` } });
+  if (r.status === 401 || r.status === 403) throw new AuthError("unauthorized");
+  if (!r.ok) throw new Error(`errors fetch failed (${r.status})`);
+  return ((await r.json()) as { errors: ClientError[] }).errors;
 }

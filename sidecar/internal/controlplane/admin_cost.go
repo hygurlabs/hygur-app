@@ -30,7 +30,19 @@ func (a *AdminConsole) Register(r chi.Router) {
 	r.Group(func(g chi.Router) {
 		g.Use(a.operatorOnly)
 		g.Get("/admin/cost", a.handleCost)
+		g.Get("/admin/errors", a.handleErrors)
 	})
+}
+
+// handleErrors returns the most recent client error reports (first-party, no
+// third-party tracking) for the operator's "recent errors" panel.
+func (a *AdminConsole) handleErrors(w http.ResponseWriter, r *http.Request) {
+	errs, err := a.store.ListRecentErrors(200)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "errors query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"errors": errs})
 }
 
 // operatorOnly authorizes requests by a control-plane access token whose subject

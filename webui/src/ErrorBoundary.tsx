@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reportClientError } from "./lib/errorReport";
 
 interface State {
   error: Error | null;
@@ -19,6 +20,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     this.setState({ error, stack: info.componentStack ?? "" });
     console.error("Hygur crashed:", error, info);
+    reportClientError(error.message || "render crash", `${error.stack ?? ""}\n${info.componentStack ?? ""}`);
   }
 
   render() {

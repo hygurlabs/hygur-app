@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AuthError, fetchCost, type CostResponse } from "./api";
+import { AuthError, fetchCost, fetchErrors, type ClientError, type CostResponse } from "./api";
 import { signOut } from "./auth";
 import { CountUp, MetricTile, Skeleton, fmtInt, fmtMoney } from "./ui";
 
@@ -13,12 +13,14 @@ function ago(iso: string): string {
 
 export function Dashboard({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [data, setData] = useState<CostResponse | null>(null);
+  const [errors, setErrors] = useState<ClientError[]>([]);
   const [err, setErr] = useState("");
   const tok = useRef(token);
 
   const load = useCallback(async () => {
     try {
       setData(await fetchCost(tok.current));
+      setErrors(await fetchErrors(tok.current));
       setErr("");
     } catch (e) {
       if (e instanceof AuthError) {
@@ -111,6 +113,46 @@ export function Dashboard({ token, onSignOut }: { token: string; onSignOut: () =
                   <td className="num">{fmtInt(t.month.chat_out)}</td>
                   <td className="num">{fmtInt(t.month.ingest)}</td>
                   <td className="num cost">{fmtMoney(t.month.cost, cur)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="section-head">
+          <span className="idx">02</span>
+          <span className="label">Recent client errors</span>
+        </div>
+        {errors.length === 0 ? (
+          <div className="empty">
+            No client errors reported. Cloud sessions report crashes here automatically (first-party, no third-party tracking).
+          </div>
+        ) : (
+          <table className="data">
+            <thead>
+              <tr>
+                <th className="label">When</th>
+                <th className="label">Message</th>
+                <th className="label">Build</th>
+              </tr>
+            </thead>
+            <tbody>
+              {errors.map((e) => (
+                <tr key={e.id}>
+                  <td className="ten">{ago(e.occurred_at)}</td>
+                  <td>
+                    {e.message}
+                    {e.url ? <div className="ten">{e.url}</div> : null}
+                    {e.stack ? (
+                      <details>
+                        <summary style={{ cursor: "pointer", color: "#888", fontSize: 11 }}>stack</summary>
+                        <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, color: "#888", margin: "4px 0 0" }}>
+                          {e.stack}
+                        </pre>
+                      </details>
+                    ) : null}
+                  </td>
+                  <td className="ten">{e.app_version || "—"}</td>
                 </tr>
               ))}
             </tbody>

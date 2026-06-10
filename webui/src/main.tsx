@@ -5,6 +5,11 @@ import { HashRouter } from "react-router-dom";
 import "./index.css";
 import { Root } from "./Root";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { installErrorReporting } from "./lib/errorReport";
+
+// Capture uncaught errors + unhandled rejections (cloud sessions report them to
+// the operator console; local-first instances keep them on the machine).
+installErrorReporting();
 
 // HashRouter: the shell always loads at `/`, so client routes live in the hash
 // and need no server-side fallback — keeps the Go handler trivial.

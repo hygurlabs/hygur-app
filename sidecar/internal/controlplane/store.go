@@ -182,7 +182,18 @@ CREATE TABLE IF NOT EXISTS tenant_usage_snapshots (
 CREATE TABLE IF NOT EXISTS fleet_settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
-);`); err != nil {
+);
+CREATE TABLE IF NOT EXISTS client_errors (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  stack       TEXT NOT NULL DEFAULT '',
+  url         TEXT NOT NULL DEFAULT '',
+  app_version TEXT NOT NULL DEFAULT '',
+  user_agent  TEXT NOT NULL DEFAULT '',
+  origin      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_client_errors_id ON client_errors(id DESC);`); err != nil {
 		return fmt.Errorf("controlplane: migrate usage: %w", err)
 	}
 	return nil

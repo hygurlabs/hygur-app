@@ -118,6 +118,10 @@ func runServe(args []string) {
 	root.Use(controlplane.CORSMiddleware(rpOrigins))
 	svc.Register(root)
 
+	// First-party, cookieless client-error ingest (POST /errors) — the app reports
+	// crashes here; the operator reads them at /admin/errors. No third-party SDK.
+	controlplane.RegisterErrorIngest(root, store)
+
 	// Passkeys (WebAuthn): RP ID is the registrable parent domain so a passkey
 	// registered on console.hygur.ai authenticates on cloud.hygur.ai.
 	rpID := envOr("HYGUR_RP_ID", "hygur.ai")
