@@ -44,13 +44,15 @@ func main() {
 		runProvisions(os.Args[2:])
 	case "backup-db":
 		runConsoleBackupDB(os.Args[2:])
+	case "usage":
+		runConsoleUsage(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hygur-console <serve|account|code|device|provisions|backup-db> ...")
+	fmt.Fprintln(os.Stderr, "usage: hygur-console <serve|account|code|device|provisions|backup-db|usage> ...")
 	os.Exit(2)
 }
 
