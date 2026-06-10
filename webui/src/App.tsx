@@ -17,10 +17,15 @@ import { Calendar } from "./views/Calendar";
 import { FollowUp } from "./views/FollowUp";
 import { Contradictions } from "./views/Contradictions";
 import { Tasks } from "./views/Tasks";
+import { FirstRun } from "./views/FirstRun";
 
 export default function App({ revealOnMount = false }: { revealOnMount?: boolean }) {
   // Left nav is a static column on desktop and an off-canvas drawer on mobile.
   const [navOpen, setNavOpen] = useState(false);
+  // The rich first run shows once, right after onboarding (revealOnMount): index
+  // progress → first brief, or a connect CTA. Never re-shown / never for existing
+  // users (it rides the same in-memory transition as the reveal).
+  const [firstRun, setFirstRun] = useState(revealOnMount);
   // Gentle fade-in only when arriving from onboarding (the "reveal"); a normal
   // launch starts already-revealed so reloads don't fade every time.
   const [revealed, setRevealed] = useState(!revealOnMount);
@@ -38,6 +43,9 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
   return (
     <ActivityProvider>
       <DetailPanelProvider>
+        {firstRun ? (
+          <FirstRun onDone={() => setFirstRun(false)} />
+        ) : (
         <div
           className={`relative flex h-dvh transition-opacity duration-500 ease-out ${
             revealed ? "opacity-100" : "opacity-0"
@@ -86,6 +94,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             </div>
           </main>
         </div>
+        )}
       </DetailPanelProvider>
     </ActivityProvider>
   );

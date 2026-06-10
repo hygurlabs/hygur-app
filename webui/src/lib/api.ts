@@ -173,6 +173,9 @@ export const api = {
     getJSON<{ total: number }>(
       `/knowledge/items?limit=1&offset=0&source_type=${encodeURIComponent(sourceType)}`,
     ),
+  /** Total indexed items across all sources — drives the first-run state. */
+  knowledgeTotal: () =>
+    getJSON<{ total: number }>(`/knowledge/items?limit=1&offset=0`),
   knowledgeItem: (contentId: string) =>
     getJSON<KnowledgeItem>(`/knowledge/${cidPath(contentId)}`),
   /** Deterministic contradictions across mail threads (W5, low-level). */
