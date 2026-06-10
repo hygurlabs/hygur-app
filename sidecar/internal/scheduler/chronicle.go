@@ -121,7 +121,12 @@ func (w *ChronicleWriter) WriteLifeChapter(ctx context.Context, now time.Time, f
 	}
 
 	periodLabel := periodStart.Format("2 Jan") + " – " + now.Format("2 Jan 2006")
-	act, synopsis := w.generate(ctx, chap.Synopsis, buildChronicleTraces(items), periodLabel)
+	act, synopsis, gerr := w.generate(ctx, chap.Synopsis, buildChronicleTraces(items), periodLabel)
+	if gerr != nil {
+		// Surface the failure (the manual run shows it); don't advance the
+		// watermark so the next run retries the same period.
+		return "", fmt.Errorf("chronicle generation failed: %w", gerr)
+	}
 	// Advance the watermark to now → this period is never re-narrated.
 	chap.Watermark = now.UTC().Format(time.RFC3339)
 
@@ -161,15 +166,18 @@ func (w *ChronicleWriter) WriteLifeChapter(ctx context.Context, now time.Time, f
 	return act, nil
 }
 
-// generate runs the single bounded LLM call → (act, updatedSynopsis). An empty
-// updatedSynopsis means "keep the previous one" (parse miss / model didn't comply).
-func (w *ChronicleWriter) generate(ctx context.Context, synopsis, traces, dateLabel string) (string, string) {
+// generate runs the bounded LLM call → (act, updatedSynopsis, err). Streamed on
+// the no-timeout client: a long narrative on a slow backend must not be cut by the
+// 30s request timeout (the chronicle is a background task). An empty updatedSynopsis
+// means "keep the previous one" (parse miss / model didn't emit the marker).
+func (w *ChronicleWriter) generate(ctx context.Context, synopsis, traces, dateLabel string) (string, string, error) {
 	storySoFar := strings.TrimSpace(synopsis)
 	if storySoFar == "" {
 		storySoFar = "(this is the first entry — there is no prior story yet)"
 	}
 	user := fmt.Sprintf("STORY SO FAR:\n%s\n\nNEW TRACES (period %s):\n%s", storySoFar, dateLabel, traces)
-	resp, err := w.llm.Chat(ctx, llm.ChatRequest{
+	var sb strings.Builder
+	err := w.llm.StreamChat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: chronicleSystemPrompt},
 			{Role: "user", Content: user},
@@ -177,24 +185,21 @@ func (w *ChronicleWriter) generate(ctx context.Context, synopsis, traces, dateLa
 		Temperature:        0.5, // narrative needs a little life, still grounded
 		MaxTokens:          chronicleActMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+	}, func(delta string, _ bool, _ *llm.Usage) error {
+		sb.WriteString(delta)
+		return nil
 	})
-	if err != nil || resp == nil || len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
-		if err != nil {
-			w.logger.Warn().Err(err).Msg("chronicle generate failed")
-		}
-		return "", ""
+	if err != nil {
+		w.logger.Warn().Err(err).Msg("chronicle generate failed")
+		return "", "", err
 	}
-	raw := resp.Choices[0].Message.Content
-	if strings.TrimSpace(raw) == "" {
-		raw = resp.Choices[0].Message.Reasoning
-	}
-	parts := strings.SplitN(raw, chronicleSynopsisMarker, 2)
+	parts := strings.SplitN(sb.String(), chronicleSynopsisMarker, 2)
 	act := strings.TrimSpace(parts[0])
 	newSynopsis := ""
 	if len(parts) == 2 {
 		newSynopsis = strings.TrimSpace(parts[1])
 	}
-	return act, newSynopsis
+	return act, newSynopsis, nil
 }
 
 // buildChronicleTraces renders the new items as dated, capped trace lines.
