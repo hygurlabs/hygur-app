@@ -2,13 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronRight, FolderKanban, Sparkles } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, streamFollowupReport } from "../lib/api";
-import { useDetail } from "../components/DetailPanel";
-import { fmtDate, fmtDateTime } from "../lib/format";
+import {
+  ContradictionList,
+  useDismissContradiction,
+  useOpenSource,
+} from "../components/ContradictionList";
+import { fmtDate } from "../lib/format";
+import { useSlow } from "../lib/slow";
 import { ErrorBanner, Page, PageHeader } from "../components/ui";
 import type { DigestEntry } from "../lib/types";
 
 export function FollowUp() {
-  const openDetail = useDetail();
+  const openItem = useOpenSource();
+  const dismiss = useDismissContradiction();
   // "" = global (recent mail & notes); otherwise a project id (W7 scope).
   const [projectId, setProjectId] = useState("");
 
@@ -20,6 +26,8 @@ export function FollowUp() {
   });
   const contradictions = digest.data?.contradictions ?? [];
   const topics = digest.data?.topics ?? [];
+  const dueTasks = digest.data?.due_tasks ?? [];
+  const today = new Date().toISOString().slice(0, 10);
 
   const timeline = useQuery({
     queryKey: ["project-timeline", projectId],
@@ -33,23 +41,6 @@ export function FollowUp() {
     queryFn: () => api.claimContradictions(projectId || undefined),
   });
   const reconciled = claimConflicts.data?.contradictions ?? [];
-
-  const openItem = async (contentId: string, fallbackTitle: string) => {
-    try {
-      const it = await api.knowledgeItem(contentId);
-      openDetail({
-        title: it.title || fallbackTitle,
-        contentId,
-        sourceType: it.source_type,
-        meta: [it.date ? fmtDateTime(it.date) : "", it.source_type].filter(
-          Boolean,
-        ) as string[],
-        body: it.normalized_text || "",
-      });
-    } catch {
-      openDetail({ title: fallbackTitle, contentId, meta: [], body: "" });
-    }
-  };
 
   const rows = timeline.data?.items ?? [];
 
@@ -82,55 +73,43 @@ export function FollowUp() {
           re-streams from a clean slate when the project changes. */}
       <ReportStream key={projectId || "all"} projectId={projectId || undefined} />
 
+      {/* Deadlines — open tasks due soon or overdue, surfaced proactively. */}
+      {dueTasks.length > 0 && (
+        <section className="mb-8">
+          <Label tone="warn">Deadlines</Label>
+          <ul className="flex flex-col gap-2">
+            {dueTasks.map((t) => {
+              const overdue = t.due_date.slice(0, 10) < today;
+              return (
+                <li
+                  key={t.id}
+                  onClick={() => openItem(t.id, t.title)}
+                  className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-2.5 transition-colors hover:border-accent/40"
+                >
+                  <span className="truncate text-[14px] text-text">{t.title}</span>
+                  <span
+                    className={`tnum shrink-0 text-[12px] ${overdue ? "text-danger" : "text-muted"}`}
+                  >
+                    {overdue ? "overdue · " : "due "}
+                    {fmtDate(t.due_date)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
       {/* Cited contradictions (W6) — cross-source divergences reconciled by the LLM
           into a real conflict vs an evolution, each backed by a verbatim quote. */}
       {reconciled.length > 0 && (
         <section className="mb-8">
           <Label tone="warn">Contradictions (cited)</Label>
-          <ul className="flex flex-col gap-3">
-            {reconciled.map((c, i) => (
-              <li key={i} className="rounded-xl border border-border bg-surface px-4 py-3">
-                <div className="mb-1 flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide ${
-                      c.verdict.kind === "conflict"
-                        ? "bg-danger/10 text-danger"
-                        : "bg-accent-weak text-accent"
-                    }`}
-                  >
-                    {c.verdict.kind === "conflict" ? "Conflict" : "Evolution"}
-                  </span>
-                  <span className="text-[13.5px] font-medium text-text">
-                    {c.entity} · {c.attribute}
-                  </span>
-                </div>
-                {c.verdict.reason && (
-                  <p className="mb-2 text-[12.5px] text-muted">{c.verdict.reason}</p>
-                )}
-                <ul className="flex flex-col gap-1">
-                  {c.members.map((m, j) => (
-                    <li
-                      key={j}
-                      onClick={() => openItem(m.source_id, m.value)}
-                      className="cursor-pointer rounded-md px-2 py-1 transition-colors hover:bg-surface2"
-                    >
-                      <span className="text-[13px] font-medium text-text">{m.value}</span>
-                      {m.asserted_at && (
-                        <span className="tnum ml-2 text-[11px] text-faint">
-                          {fmtDate(m.asserted_at)}
-                        </span>
-                      )}
-                      {m.quote && (
-                        <span className="block truncate text-[12px] text-muted">
-                          «{m.quote}»
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
+          <ContradictionList
+            items={reconciled}
+            onOpenSource={openItem}
+            onDismiss={dismiss}
+          />
         </section>
       )}
 
@@ -260,6 +239,10 @@ function ReportStream({ projectId }: { projectId?: string }) {
   const visible = target.slice(0, shown);
   const paragraphs = visible.split(/\n{2,}/).filter((p) => p.trim().length > 0);
   const typing = streaming || shown < target.length;
+  // Stall awareness: the stream is open but has gone quiet (resetKey = bytes
+  // received so far). The report is a heavier synthesis than a chat reply, so a
+  // longer threshold before the "taking longer" hint.
+  const stalled = useSlow(streaming && !reportErr, 12000, target.length);
 
   return (
     <section className="mb-9">
@@ -282,6 +265,14 @@ function ReportStream({ projectId }: { projectId?: string }) {
               )}
             </p>
           ))}
+        </div>
+      )}
+
+      {/* Stall hint: still synthesizing, just gone quiet — reassures it's working. */}
+      {stalled && !reportErr && (
+        <div className="mt-2 flex items-center gap-2 text-[12.5px] text-muted">
+          <span className="size-1.5 rounded-full bg-amber-500" />
+          Still working — taking longer than usual…
         </div>
       )}
     </section>

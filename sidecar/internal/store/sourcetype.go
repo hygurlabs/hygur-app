@@ -8,6 +8,7 @@ const (
 	SourceTypeNote  = "note"
 	SourceTypeFile  = "file"
 	SourceTypeEvent = "event"
+	SourceTypeTask  = "task" // note-like to-do (body+tags+project) + task_attrs state
 )
 
 // MailSourceTypes is every source_type that represents a mail/email item.

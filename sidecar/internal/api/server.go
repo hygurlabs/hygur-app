@@ -193,6 +193,14 @@ func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
 }
 
+func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
 func (s *Server) handleTaskPatch(w http.ResponseWriter, r *http.Request) {
 	if s.taskHandler != nil {
 		s.taskHandler.Patch(w, r)
@@ -615,6 +623,16 @@ func (s *Server) handleItemClaims(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleClaimContradictions(w http.ResponseWriter, r *http.Request) {
 	if s.briefHandler != nil {
 		s.briefHandler.ClaimContradictions(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
+// handleDismissContradiction handles POST /knowledge/contradictions/dismiss —
+// records (or undoes) a user's dismissal of a contradiction.
+func (s *Server) handleDismissContradiction(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.DismissContradiction(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")

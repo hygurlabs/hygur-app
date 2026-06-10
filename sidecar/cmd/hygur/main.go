@@ -371,6 +371,8 @@ func main() {
 
 	// Create mail components
 	embeddingService := llm.NewEmbeddingService(llmClient, db)
+	// Tasks are note-like knowledge_items — index their bodies like notes.
+	taskHandler.SetEmbeddingService(embeddingService)
 	threadNormalizer := mail.NewThreadNormalizer()
 	emailIndexer := mail.NewEmailIndexer(db, threadNormalizer, embeddingService, logger)
 	emailIndexer.SetNotifyRecencyDays(cfg.Mail.NotifyRecencyDays)

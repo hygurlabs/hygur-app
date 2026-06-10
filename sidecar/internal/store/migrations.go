@@ -241,6 +241,52 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 `,
 	},
+	// Migration 14 records contradictions the user has dismissed ("seen it,
+	// hide it"). Keyed by a stable hash of the conflict (cluster + entity +
+	// attribute + value set) so it survives recomputation. Per-tenant DB → no
+	// tenant column.
+	{
+		Version: 14,
+		Name:    "dismissed_contradictions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS dismissed_contradictions (
+    key          TEXT PRIMARY KEY,
+    dismissed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
+	// Migration 15 turns tasks into note-like knowledge_items: a task is a
+	// knowledge_item (source_type='task') carrying a Markdown body, tags
+	// (item_tags) and a project (project_links) like a note, plus task state in
+	// task_attrs (status, due_date). Existing rows from the standalone `tasks`
+	// table are migrated into the new model, then that table is dropped (the
+	// off-box backup is the rollback). project_links are recreated only when the
+	// referenced project still exists, to respect the FK.
+	{
+		Version: 15,
+		Name:    "tasks_as_knowledge_items",
+		SQL: `
+CREATE TABLE IF NOT EXISTS task_attrs (
+    content_id   TEXT PRIMARY KEY REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'open',
+    due_date     TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_task_attrs_due ON task_attrs(due_date);
+CREATE INDEX IF NOT EXISTS idx_task_attrs_status ON task_attrs(status);
+
+INSERT OR IGNORE INTO knowledge_items (content_id, source_type, title, normalized_text, version_id, created_at, updated_at)
+    SELECT id, 'task', title, '', 'v1', created_at, updated_at FROM tasks;
+INSERT OR IGNORE INTO task_attrs (content_id, status, due_date, created_at, updated_at)
+    SELECT id, status, due_date, created_at, updated_at FROM tasks;
+INSERT OR IGNORE INTO project_links (link_id, project_id, content_id)
+    SELECT lower(hex(randomblob(16))), project_id, id
+    FROM tasks
+    WHERE project_id != '' AND project_id IN (SELECT project_id FROM projects);
+DROP TABLE tasks;
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

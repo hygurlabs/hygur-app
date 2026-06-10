@@ -22,8 +22,40 @@ import (
 type FollowUpDigest struct {
 	Topics         []DigestEntry `json:"topics"`
 	Contradictions []DigestEntry `json:"contradictions"`
+	DueTasks       []DueTask     `json:"due_tasks"`
 	Scanned        int           `json:"scanned"`
 	Window         string        `json:"window"`
+}
+
+// DueTask is an open task with a deadline, surfaced proactively as an attention
+// item (overdue or due soon). Deterministic — no LLM.
+type DueTask struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	DueDate string `json:"due_date"`
+	Status  string `json:"status"`
+}
+
+// followupDueHorizonDays bounds how far ahead a deadline is surfaced as
+// "attention"; overdue tasks (due_date in the past) are always included.
+const followupDueHorizonDays = 14
+
+// upcomingDueTasks lists open tasks due within the horizon (overdue included),
+// soonest first. Fresh each call so a just-edited due date shows immediately.
+func (d *DailyBrief) upcomingDueTasks(ctx context.Context) []DueTask {
+	if d.store == nil {
+		return nil
+	}
+	cutoff := time.Now().AddDate(0, 0, followupDueHorizonDays).UTC().Format(time.RFC3339)
+	tasks, err := d.store.TasksDueBefore(ctx, cutoff)
+	if err != nil {
+		return nil
+	}
+	out := make([]DueTask, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, DueTask{ID: t.ID, Title: t.Title, DueDate: t.DueDate, Status: t.Status})
+	}
+	return out
 }
 
 // DigestEntry is one topic or contradiction with its cited sources. Title is
@@ -89,8 +121,15 @@ func (d *DailyBrief) FollowUp(ctx context.Context, projectID string) (FollowUpDi
 	if projectID != "" {
 		window = "project"
 	}
+	// Deadlines are a global, deterministic attention surface — computed fresh
+	// each call (independent of the LLM digest cache) so a just-set due date
+	// shows at once. Project-scoped views keep their own focus.
+	var due []DueTask
+	if projectID == "" {
+		due = d.upcomingDueTasks(ctx)
+	}
 	if len(items) == 0 {
-		return FollowUpDigest{Window: window}, nil
+		return FollowUpDigest{Window: window, DueTasks: due}, nil
 	}
 
 	key := followupCacheKey(items, projectID)
@@ -98,6 +137,7 @@ func (d *DailyBrief) FollowUp(ctx context.Context, projectID string) (FollowUpDi
 	if followupKey == key && time.Now().Before(followupExpires) {
 		v := followupValue
 		followupMu.Unlock()
+		v.DueTasks = due
 		return v, nil
 	}
 	followupMu.Unlock()
@@ -109,6 +149,7 @@ func (d *DailyBrief) FollowUp(ctx context.Context, projectID string) (FollowUpDi
 	followupMu.Lock()
 	followupKey, followupValue, followupExpires = key, digest, time.Now().Add(followupTTL)
 	followupMu.Unlock()
+	digest.DueTasks = due
 	return digest, nil
 }
 

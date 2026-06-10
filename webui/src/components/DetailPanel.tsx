@@ -67,7 +67,6 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     try {
       await api.createTask({
         title: data.title || "Untitled",
-        source_content_id: data.contentId,
       });
       setTaskDone(true);
     } catch {

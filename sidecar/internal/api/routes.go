@@ -102,6 +102,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/{content_id}/draft-reply", s.handleDraftReply)
 			r.Get("/{content_id}/claims", s.handleItemClaims)
 			r.Get("/claim-contradictions", s.handleClaimContradictions)
+			r.Post("/contradictions/dismiss", s.handleDismissContradiction)
 		})
 
 		// Tag endpoints
@@ -129,6 +130,7 @@ func (s *Server) setupRoutes() {
 		r.Route("/tasks", func(r chi.Router) {
 			r.Get("/", s.handleTaskList)
 			r.Post("/", s.handleTaskCreate)
+			r.Get("/{id}", s.handleTaskGet)
 			r.Patch("/{id}", s.handleTaskPatch)
 			r.Delete("/{id}", s.handleTaskDelete)
 		})

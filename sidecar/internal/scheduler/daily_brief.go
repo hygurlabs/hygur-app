@@ -176,7 +176,14 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 	}
 
 	enriched := d.enrichItems(ctx, items)
-	prompt := buildBriefPrompt(enriched, opts, projectName)
+	// Personal daily brief → ground it in the user's open task deadlines
+	// (overdue + due soon). Project/scoped briefs keep their own focus.
+	var dueTasks []*store.Task
+	if opts.ProjectID == "" && d.store != nil {
+		cutoff := time.Now().AddDate(0, 0, followupDueHorizonDays).UTC().Format(time.RFC3339)
+		dueTasks, _ = d.store.TasksDueBefore(ctx, cutoff)
+	}
+	prompt := buildBriefPrompt(enriched, opts, projectName, dueTasks)
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			// Reasoning-capable backends (LM Studio + Nemotron/Qwen) emit
@@ -531,7 +538,7 @@ func (d *DailyBrief) enrichItems(ctx context.Context, items []*store.KnowledgeIt
 // We close with a "Sources" section listing the tags and project names
 // the brief drew from, so the user can audit the inputs without leaving
 // the brief.
-func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) string {
+func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string, dueTasks []*store.Task) string {
 	var sb strings.Builder
 	if opts.Instructions != "" {
 		sb.WriteString("User-requested focus: ")
@@ -583,6 +590,21 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 	sb.WriteString("- Prioritise what's urgent or actionable; ignore noise — newsletters, auto-notifications, and spam/marketing/phishing — and never turn it into a task.\n")
 	sb.WriteString("- Use only what the context says; never invent or distort. Omit any section with no content.\n")
 	sb.WriteString("- Don't add a \"Sources\" section (it's appended automatically). Output raw Markdown, no preamble.\n\n")
+
+	// The user's own open tasks with deadlines — ground the deadline/action
+	// sections in what's already tracked, and don't re-suggest creating them.
+	if len(dueTasks) > 0 {
+		sb.WriteString("The user's open tasks with deadlines (already tracked — fold these into the deadlines/actions, do not recreate them):\n")
+		for _, t := range dueTasks {
+			due := t.DueDate
+			if len(due) >= 10 {
+				due = due[:10]
+			}
+			sb.WriteString(fmt.Sprintf("- due %s — %s\n", due, t.Title))
+		}
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("Context (")
 	sb.WriteString(strconv.Itoa(len(items)))
 	sb.WriteString(" items):\n")
