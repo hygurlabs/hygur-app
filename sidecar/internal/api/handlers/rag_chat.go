@@ -120,6 +120,7 @@ type RAGChatHandler struct {
 	chatStore       *store.DB
 	toolRegistry    *tools.Registry
 	chatTokenCap    int           // monthly chat-token cap; 0 = unlimited (local default)
+	chatTokenCapDay int           // daily chat-token cap; 0 = unlimited (the fast fuse)
 	rpmLimiter      *rateLimiter  // per-tenant request-rate fuse; nil = off
 	chatSem         chan struct{} // per-tenant concurrency cap; nil = off
 	config          RAGConfig
@@ -151,6 +152,15 @@ func NewRAGChatHandler(
 func (h *RAGChatHandler) SetChatTokenCap(n int) {
 	if n > 0 {
 		h.chatTokenCap = n
+	}
+}
+
+// SetDailyTokenCap sets the DAILY LLM-token budget — a fast fuse against a
+// runaway loop that complements the monthly cap. 0 disables it. Set on a managed
+// tenant from HYGUR_CHAT_TOKEN_CAP_DAILY.
+func (h *RAGChatHandler) SetDailyTokenCap(n int) {
+	if n > 0 {
+		h.chatTokenCapDay = n
 	}
 }
 
@@ -388,6 +398,17 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn().Int("used", used).Int("cap", h.chatTokenCap).Msg("monthly chat-token cap reached")
 			writeChatError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED",
 				"You've reached this month's usage limit. It resets at the start of next month.")
+			return
+		}
+	}
+
+	// Per-tenant DAILY budget — the fast fuse: catches a runaway loop within a day,
+	// long before the monthly cap. Fails OPEN on a read error.
+	if h.chatTokenCapDay > 0 && h.chatStore != nil {
+		if used, err := h.chatStore.ChatTokensToday(r.Context()); err == nil && used >= h.chatTokenCapDay {
+			h.logger.Warn().Int("used", used).Int("cap", h.chatTokenCapDay).Msg("daily chat-token cap reached")
+			writeChatError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED",
+				"You've reached today's usage limit. It resets tomorrow.")
 			return
 		}
 	}

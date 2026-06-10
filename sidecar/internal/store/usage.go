@@ -128,6 +128,23 @@ func (d *DB) ChatTokensThisMonth(ctx context.Context) (int, error) {
 	return 0, nil
 }
 
+// ChatTokensToday returns total chat (LLM) tokens — prompt + completion —
+// recorded today (local calendar date). Drives the per-tenant DAILY cap: a fast
+// fuse against a runaway loop that complements the slower monthly cap.
+func (d *DB) ChatTokensToday(ctx context.Context) (int, error) {
+	day := time.Now().Format("2006-01-02")
+	cats, err := d.TokenUsageSince(ctx, day)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range cats {
+		if c.Category == TokenCategoryChat {
+			return c.TokensIn + c.TokensOut, nil
+		}
+	}
+	return 0, nil
+}
+
 // Pricing holds the per-1M-token prices used to estimate cost. Chat is billed
 // per direction; embeddings + indexing share a single ingest price.
 type Pricing struct {

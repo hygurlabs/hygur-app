@@ -682,6 +682,15 @@ func main() {
 			logger.Warn().Str("value", v).Msg("ignoring invalid HYGUR_CHAT_TOKEN_CAP_MONTHLY")
 		}
 	}
+	// Per-tenant DAILY cap — the fast fuse (catches a runaway loop within a day).
+	if v := strings.TrimSpace(os.Getenv("HYGUR_CHAT_TOKEN_CAP_DAILY")); v != "" {
+		if cap, err := strconv.Atoi(v); err == nil && cap > 0 {
+			ragChatHandler.SetDailyTokenCap(cap)
+			logger.Info().Int("cap", cap).Msg("daily chat-token cap enabled")
+		} else {
+			logger.Warn().Str("value", v).Msg("ignoring invalid HYGUR_CHAT_TOKEN_CAP_DAILY")
+		}
+	}
 
 	// Per-tenant fast fuses against a runaway client loop (req/min + concurrent
 	// generations), complementing the monthly token cap. Unset/0 = off (local).

@@ -49,3 +49,27 @@ func TestTokenUsageDailySince_AndDump(t *testing.T) {
 		t.Fatalf("dump pricing: got %+v", pricing)
 	}
 }
+
+// TestChatTokensToday: only today's chat tokens (in+out) count; ingest excluded.
+func TestChatTokensToday(t *testing.T) {
+	dir := t.TempDir()
+	db, err := NewDB(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err := db.RecordTokenUsage(ctx, TokenCategoryChat, 1000, 500); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordTokenUsage(ctx, TokenCategoryEmbedding, 9999, 0); err != nil {
+		t.Fatal(err)
+	}
+	n, err := db.ChatTokensToday(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1500 {
+		t.Fatalf("ChatTokensToday: got %d, want 1500 (chat only)", n)
+	}
+}
