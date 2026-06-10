@@ -241,7 +241,7 @@ export const api = {
   chronicle: () => getJSON<{ chapters: ChronicleChapterSummary[] }>("/chronicle"),
   chronicleChapter: (id: string) =>
     getJSON<ChronicleChapterDetail>(`/chronicle/${encodeURIComponent(id)}`),
-  chronicleRun: () => postJSON<{ written: boolean; act: string }>("/chronicle/run", {}),
+  chronicleRun: () => postJSON<{ started: boolean }>("/chronicle/run", {}),
 
   task: (id: string) => getJSON<Task>(`/tasks/${id}`),
   createTask: (body: {

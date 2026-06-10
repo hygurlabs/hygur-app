@@ -187,6 +187,7 @@ export interface ChronicleAct {
   date: string; // YYYY-MM-DD
   title: string; // e.g. "12 June 2026"
   markdown: string;
+  sources: string[]; // content_ids; index n-1 ↔ "[n]" anchor in the prose
 }
 export interface ChronicleChapterDetail {
   id: string;

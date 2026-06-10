@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -33,9 +34,10 @@ type chronicleChapterDTO struct {
 }
 
 type chronicleActDTO struct {
-	Date     string `json:"date"`  // YYYY-MM-DD
-	Title    string `json:"title"` // e.g. "12 June 2026"
-	Markdown string `json:"markdown"`
+	Date     string   `json:"date"`  // YYYY-MM-DD
+	Title    string   `json:"title"` // e.g. "12 June 2026"
+	Markdown string   `json:"markdown"`
+	Sources  []string `json:"sources"` // content_ids; index n-1 ↔ "[n]" anchor in the prose
 }
 
 // actDate extracts the YYYY-MM-DD from an act content_id ("chronicle:<chap>:<date>").
@@ -44,6 +46,18 @@ func actDate(contentID string) string {
 		return contentID[i+1:]
 	}
 	return ""
+}
+
+// actSources reads the stored source content_ids (a []any after a JSON round-trip).
+func actSources(m map[string]any) []string {
+	raw, _ := m["sources"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // List handles GET /chronicle — the chapters with their act counts.
@@ -88,24 +102,29 @@ func (h *ChronicleHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	dtos := make([]chronicleActDTO, 0, len(acts))
 	for _, a := range acts {
-		dtos = append(dtos, chronicleActDTO{Date: actDate(a.ContentID), Title: a.Title, Markdown: a.NormalizedText})
+		dtos = append(dtos, chronicleActDTO{
+			Date: actDate(a.ContentID), Title: a.Title, Markdown: a.NormalizedText,
+			Sources: actSources(a.Metadata),
+		})
 	}
 	writeKnowledgeJSON(w, http.StatusOK, map[string]any{
 		"id": chap.ID, "title": chap.Title, "status": chap.Status, "acts": dtos,
 	})
 }
 
-// Run handles POST /chronicle/run — generate today's act now (manual trigger, force).
+// Run handles POST /chronicle/run — regenerate today's acts across all chapters
+// now (manual trigger, force). The pass runs in the background (it may make several
+// LLM calls); the UI refetches shortly after. 202 Accepted.
 func (h *ChronicleHandler) Run(w http.ResponseWriter, r *http.Request) {
 	if h.writer == nil {
 		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "chronicle writer not configured")
 		return
 	}
-	act, err := h.writer.WriteLifeChapter(r.Context(), time.Now(), true)
-	if err != nil {
-		h.logger.Warn().Err(err).Msg("manual chronicle run failed")
-		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to write chronicle")
-		return
-	}
-	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"written": strings.TrimSpace(act) != "", "act": act})
+	go func() {
+		// Detached context: the pass must outlive this request.
+		if _, err := h.writer.RunAll(context.Background(), time.Now(), true); err != nil {
+			h.logger.Warn().Err(err).Msg("manual chronicle run failed")
+		}
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]any{"started": true})
 }
