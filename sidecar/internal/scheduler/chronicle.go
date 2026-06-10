@@ -48,6 +48,12 @@ Rules:
 
 After the entry, output a line containing exactly ` + chronicleSynopsisMarker + ` and then an updated "story so far" (<= 120 words): the durable threads and current state, folding in this entry. Keep it tight.`
 
+// chronicleClosingPrompt writes the farewell entry that closes a chapter, from the
+// story-so-far + the user's optional closing note. Grounded, no synopsis update.
+const chronicleClosingPrompt = `You are Hygur, closing a chapter of the user's chronicle. Write a brief CLOSING entry — a few sentences of flowing prose wrapping up where things landed and how this chapter ends.
+
+Use ONLY the story-so-far and the user's closing note below; never invent. A sober, readable register in your own plain voice — no heading, no bullet list. It is a farewell to the chapter, so it may be lightly reflective, but stay grounded in what's given.`
+
 // ChronicleWriter appends nightly acts to chapters.
 type ChronicleWriter struct {
 	store  *store.DB
@@ -99,6 +105,9 @@ func (w *ChronicleWriter) RunAll(ctx context.Context, now time.Time, force bool)
 		}
 		chapID := "proj:" + p.ProjectID
 		chap, _ := w.store.GetChronicleChapter(ctx, chapID)
+		if chap != nil && chap.Status == "closed" {
+			continue // the user closed this chapter — it stays closed
+		}
 		if chap == nil {
 			chap = &store.ChronicleChapter{ID: chapID, ProjectID: p.ProjectID, Title: p.Name, Status: "open"}
 		} else {
@@ -118,6 +127,88 @@ func (w *ChronicleWriter) RunAll(ctx context.Context, now time.Time, force bool)
 		}
 	}
 	return written, nil
+}
+
+// CloseChapter writes a final, grounded closing act to a chapter from its synopsis
+// plus the user's optional note, then marks it closed. The nightly pass skips closed
+// chapters, so the closure sticks. The "life" chapter cannot be closed.
+func (w *ChronicleWriter) CloseChapter(ctx context.Context, chapterID, note string, now time.Time) error {
+	if w == nil {
+		return fmt.Errorf("chronicle writer not configured")
+	}
+	if chapterID == chronicleLifeChapterID {
+		return fmt.Errorf("the life chapter cannot be closed")
+	}
+	chap, err := w.store.GetChronicleChapter(ctx, chapterID)
+	if err != nil {
+		return err
+	}
+	if chap == nil {
+		return fmt.Errorf("chapter not found")
+	}
+	act, gerr := w.generateClosing(ctx, chap.Synopsis, note)
+	if gerr != nil {
+		return gerr // surface; the chapter stays open so the user can retry
+	}
+	if strings.TrimSpace(act) == "" {
+		act = "This chapter closes here."
+	}
+	today := now.UTC().Format("2006-01-02")
+	actID := "chronicle:" + chap.ID + ":" + today
+	_ = w.store.DeleteKnowledgeItem(ctx, actID) // the closing supersedes any auto-entry written today
+	if err := w.store.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
+		ContentID:      actID,
+		SourceType:     store.SourceTypeChronicleAct,
+		Title:          now.Format("2 January 2006"),
+		NormalizedText: act,
+		Metadata: map[string]any{
+			"chapter_id":     chap.ID,
+			"act_date":       today,
+			"canonical_date": now.UTC().Format(time.RFC3339),
+			"sources":        []string{},
+			"closing":        true,
+		},
+		VersionID: today,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		return err
+	}
+	chap.Status = "closed"
+	chap.Watermark = now.UTC().Format(time.RFC3339)
+	return w.store.UpsertChronicleChapter(ctx, chap)
+}
+
+// generateClosing runs the bounded closing LLM call (no synopsis update). Streamed
+// on the no-timeout client like generate().
+func (w *ChronicleWriter) generateClosing(ctx context.Context, synopsis, note string) (string, error) {
+	storySoFar := strings.TrimSpace(synopsis)
+	if storySoFar == "" {
+		storySoFar = "(no prior story was recorded for this chapter)"
+	}
+	closingNote := strings.TrimSpace(note)
+	if closingNote == "" {
+		closingNote = "(none)"
+	}
+	user := fmt.Sprintf("STORY SO FAR:\n%s\n\nCLOSING NOTE (from the user):\n%s", storySoFar, closingNote)
+	var sb strings.Builder
+	err := w.llm.StreamChat(ctx, llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: "system", Content: chronicleClosingPrompt},
+			{Role: "user", Content: user},
+		},
+		Temperature:        0.5,
+		MaxTokens:          chronicleActMaxTokens,
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+	}, func(delta string, _ bool, _ *llm.Usage) error {
+		sb.WriteString(delta)
+		return nil
+	})
+	if err != nil {
+		w.logger.Warn().Err(err).Msg("chronicle closing generate failed")
+		return "", err
+	}
+	return strings.TrimSpace(sb.String()), nil
 }
 
 // writeChapter appends one act to chap from its in-window items. Returns whether

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -38,6 +39,7 @@ type chronicleActDTO struct {
 	Title    string   `json:"title"` // e.g. "12 June 2026"
 	Markdown string   `json:"markdown"`
 	Sources  []string `json:"sources"` // content_ids; index n-1 ↔ "[n]" anchor in the prose
+	Closing  bool     `json:"closing"` // the act that closed the chapter
 }
 
 // actDate extracts the YYYY-MM-DD from an act content_id ("chronicle:<chap>:<date>").
@@ -102,9 +104,10 @@ func (h *ChronicleHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	dtos := make([]chronicleActDTO, 0, len(acts))
 	for _, a := range acts {
+		closing, _ := a.Metadata["closing"].(bool)
 		dtos = append(dtos, chronicleActDTO{
 			Date: actDate(a.ContentID), Title: a.Title, Markdown: a.NormalizedText,
-			Sources: actSources(a.Metadata),
+			Sources: actSources(a.Metadata), Closing: closing,
 		})
 	}
 	writeKnowledgeJSON(w, http.StatusOK, map[string]any{
@@ -124,6 +127,32 @@ func (h *ChronicleHandler) Run(w http.ResponseWriter, r *http.Request) {
 		// Detached context: the pass must outlive this request.
 		if _, err := h.writer.RunAll(context.Background(), time.Now(), true); err != nil {
 			h.logger.Warn().Err(err).Msg("manual chronicle run failed")
+		}
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]any{"started": true})
+}
+
+// Close handles POST /chronicle/{id}/close — write a final, grounded closing act
+// from the chapter's synopsis + an optional note, then mark it closed. Async (one
+// LLM call); the UI refetches. 202 Accepted. The "life" chapter cannot be closed.
+func (h *ChronicleHandler) Close(w http.ResponseWriter, r *http.Request) {
+	if h.writer == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "chronicle writer not configured")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "life" {
+		writeKnowledgeError(w, http.StatusBadRequest, "INVALID", "the life chapter cannot be closed")
+		return
+	}
+	var body struct {
+		Note string `json:"note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // note is optional; ignore a malformed/empty body
+	note := body.Note
+	go func() {
+		if err := h.writer.CloseChapter(context.Background(), id, note, time.Now()); err != nil {
+			h.logger.Warn().Err(err).Str("chapter", id).Msg("chronicle close failed")
 		}
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]any{"started": true})

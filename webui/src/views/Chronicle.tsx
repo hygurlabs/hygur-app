@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { BookCheck, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import type { ChronicleAct } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
@@ -54,17 +54,31 @@ export function Chronicle() {
   const act = current > 0 ? acts[current - 1] : undefined;
 
   const [generating, setGenerating] = useState(false);
-  const run = useMutation({
-    mutationFn: () => api.chronicleRun(),
+  // The writer works in the background (LLM calls) — flag it and refetch as it lands.
+  const scheduleRefetch = () => {
+    setGenerating(true);
+    setPage(null);
+    window.setTimeout(() => qc.invalidateQueries({ queryKey: ["chronicle"] }), 8000);
+    window.setTimeout(() => qc.invalidateQueries({ queryKey: ["chronicle"] }), 22000);
+    window.setTimeout(() => setGenerating(false), 24000);
+  };
+  const run = useMutation({ mutationFn: () => api.chronicleRun(), onSuccess: scheduleRefetch });
+
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closeNote, setCloseNote] = useState("");
+  const closeChapter = useMutation({
+    mutationFn: () => api.closeChronicleChapter(selected, closeNote.trim()),
     onSuccess: () => {
-      // The pass runs in the background (several LLM calls) — refetch as it lands.
-      setGenerating(true);
-      setPage(null);
-      window.setTimeout(() => qc.invalidateQueries({ queryKey: ["chronicle"] }), 8000);
-      window.setTimeout(() => qc.invalidateQueries({ queryKey: ["chronicle"] }), 22000);
-      window.setTimeout(() => setGenerating(false), 24000);
+      setCloseOpen(false);
+      setCloseNote("");
+      scheduleRefetch();
     },
   });
+
+  const isProject = selected !== LIFE;
+  const chapterStatus = chapterQ.data?.status ?? "open";
+  const isClosed = chapterStatus === "closed";
+  const canClose = isProject && !isClosed && total > 0;
 
   // Chapter rail: existing chapters (Life first), or just Life before the first run.
   const rail =
@@ -85,7 +99,7 @@ export function Chronicle() {
 
       {generating && (
         <p className="mb-3 text-[12.5px] text-muted">
-          Writing tonight's entries in the background — they'll appear here shortly.
+          Writing in the background — it'll appear here shortly.
         </p>
       )}
 
@@ -110,6 +124,53 @@ export function Chronicle() {
         ))}
       </div>
 
+      {/* Close-chapter control — project chapters only ("Life" never closes) */}
+      {isProject && (
+        <div className="mb-4">
+          {isClosed ? (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-surface2 px-2.5 py-1 text-[12px] text-muted">
+              <BookCheck size={13} strokeWidth={1.9} /> This chapter is closed.
+            </span>
+          ) : closeOpen ? (
+            <div className="rounded-lg border border-border bg-surface p-3">
+              <label className="mb-1.5 block text-[12.5px] text-muted">
+                Close this chapter — Hygur writes a final entry. Add a line on how it ends
+                (optional).
+              </label>
+              <textarea
+                value={closeNote}
+                onChange={(e) => setCloseNote(e.target.value)}
+                rows={2}
+                placeholder="e.g. shipped and handed over — nothing more expected here."
+                className="w-full resize-y rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:border-accent focus:outline-none"
+              />
+              <div className="mt-2 flex items-center gap-3">
+                <Button onClick={() => closeChapter.mutate()} disabled={closeChapter.isPending}>
+                  <BookCheck size={14} strokeWidth={1.9} />
+                  {closeChapter.isPending ? "Closing…" : "Close chapter"}
+                </Button>
+                <button
+                  onClick={() => {
+                    setCloseOpen(false);
+                    setCloseNote("");
+                  }}
+                  className="text-[13px] text-muted transition-colors hover:text-text"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : canClose ? (
+            <button
+              onClick={() => setCloseOpen(true)}
+              className="inline-flex items-center gap-1.5 text-[12.5px] text-muted transition-colors hover:text-text"
+            >
+              <BookCheck size={13} strokeWidth={1.9} /> Close this chapter
+            </button>
+          ) : null}
+        </div>
+      )}
+
       {chapterQ.isLoading ? (
         <Skeleton rows={6} />
       ) : total === 0 || !act ? (
@@ -122,6 +183,11 @@ export function Chronicle() {
           <article className="mx-auto min-h-[360px] max-w-[58ch] rounded-xl border border-border bg-surface px-7 py-8 sm:px-9 sm:py-10">
             <h2 className="mb-5 font-display text-[15px] font-medium uppercase tracking-[0.14em] text-faint">
               {act.title}
+              {act.closing && (
+                <span className="ml-2 normal-case tracking-normal text-muted">
+                  · final entry
+                </span>
+              )}
             </h2>
             <div className="prose-answer font-display text-[16px] leading-[1.75] text-text [&_p]:mb-4">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{act.markdown}</ReactMarkdown>

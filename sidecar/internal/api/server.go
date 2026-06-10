@@ -207,6 +207,14 @@ func (s *Server) handleChronicleRun(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
 }
 
+func (s *Server) handleChronicleClose(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Close(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	if s.taskHandler != nil {
 		s.taskHandler.List(w, r)

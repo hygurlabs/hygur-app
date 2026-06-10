@@ -188,6 +188,7 @@ export interface ChronicleAct {
   title: string; // e.g. "12 June 2026"
   markdown: string;
   sources: string[]; // content_ids; index n-1 ↔ "[n]" anchor in the prose
+  closing?: boolean; // the act that closed the chapter
 }
 export interface ChronicleChapterDetail {
   id: string;
