@@ -165,6 +165,16 @@ export interface TimelineItem {
   date: string; // RFC3339
 }
 
+/** A long-term memory Hygur keeps about the user (fact / action / preference). */
+export interface Memory {
+  memory_id: string;
+  type: string; // "fact" | "action" | "preference"
+  content: string;
+  created_at: string;
+  source?: string; // "manual" | "extracted"
+  accepted_at?: string; // "" = pending review
+}
+
 /** Chronicle — Hygur's grounded narrative, read as a book. */
 export interface ChronicleChapterSummary {
   id: string;

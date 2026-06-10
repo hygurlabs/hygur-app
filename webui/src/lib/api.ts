@@ -14,6 +14,7 @@ import type {
   FollowUpDigest,
   KnowledgeItem,
   MarketplaceItem,
+  Memory,
   Mention,
   Note,
   Project,
@@ -227,6 +228,15 @@ export const api = {
     const q = qs.toString();
     return getJSON<{ tasks: Task[] }>(`/tasks${q ? `?${q}` : ""}`);
   },
+  // Long-term memory — what Hygur remembers about you (facts/actions/preferences).
+  memories: () => getJSON<{ memories: Memory[]; total: number }>("/memory/list"),
+  pendingMemories: () => getJSON<{ memories: Memory[]; total: number }>("/memory/pending"),
+  storeMemory: (body: { type: string; content: string }) =>
+    postJSON<Memory>("/memory/store", body),
+  acceptMemory: (id: string) => postJSON<void>(`/memory/${encodeURIComponent(id)}/accept`, {}),
+  discardMemory: (id: string) => postJSON<void>(`/memory/${encodeURIComponent(id)}/discard`, {}),
+  deleteMemory: (id: string) => del(`/memory/${encodeURIComponent(id)}`),
+
   // Chronicle — Hygur's grounded narrative (read as a book).
   chronicle: () => getJSON<{ chapters: ChronicleChapterSummary[] }>("/chronicle"),
   chronicleChapter: (id: string) =>

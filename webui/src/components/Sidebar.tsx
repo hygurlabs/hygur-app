@@ -12,6 +12,7 @@ import {
   Scale,
   Newspaper,
   BookOpen,
+  Brain,
   Plug,
   LogOut,
   Settings as SettingsIcon,
@@ -41,6 +42,7 @@ const NAV: NavItem[] = [
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
   { to: "/contradictions", label: "Contradictions", icon: Scale },
+  { to: "/memory", label: "Memory", icon: Brain },
 ];
 
 // Pinned to the bottom, just above the health indicator. Settings joins this
