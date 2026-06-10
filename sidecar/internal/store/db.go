@@ -249,9 +249,26 @@ func backupConn(ctx context.Context, conn *sql.DB, destPath, key string) error {
 // schema is irrelevant, so the same call snapshots both the tenant knowledge
 // store and the control-plane admin DB.
 func SnapshotTo(ctx context.Context, srcPath, destPath, key string) error {
+	return snapshotExport(ctx, srcPath, destPath, key, key)
+}
+
+// RekeyTo copies the DB at srcPath (opened with oldKey) to destPath encrypted
+// under newKey — the export half of a SQLCipher DEK rotation. destPath must not
+// exist; the caller verifies it opens with newKey, then swaps it in. Reads via
+// its own connection, so it does not disturb a server holding the source open
+// (though an in-place rotation should still quiesce writers before the swap).
+func RekeyTo(ctx context.Context, srcPath, destPath, oldKey, newKey string) error {
+	return snapshotExport(ctx, srcPath, destPath, oldKey, newKey)
+}
+
+// snapshotExport opens srcPath with openKey on its own pinned connection (no
+// migrations, no source mutation) and writes a consistent copy to destPath
+// encrypted under destKey. Shared core of SnapshotTo (openKey == destKey) and
+// RekeyTo (open with old, write with new).
+func snapshotExport(ctx context.Context, srcPath, destPath, openKey, destKey string) error {
 	dsn := "file:" + srcPath + "?_foreign_keys=off&_busy_timeout=30000"
-	if key != "" {
-		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	if openKey != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(openKey))
 	}
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -262,7 +279,7 @@ func SnapshotTo(ctx context.Context, srcPath, destPath, key string) error {
 	if err := conn.PingContext(ctx); err != nil {
 		return fmt.Errorf("snapshot open (wrong key?): %w", err)
 	}
-	return backupConn(ctx, conn, destPath, key)
+	return backupConn(ctx, conn, destPath, destKey)
 }
 
 // MigratePlaintextToEncrypted converts an existing plaintext database at path

@@ -119,7 +119,9 @@ type RAGChatHandler struct {
 	agendaStore     *store.DB
 	chatStore       *store.DB
 	toolRegistry    *tools.Registry
-	chatTokenCap    int // monthly chat-token cap; 0 = unlimited (local default)
+	chatTokenCap    int           // monthly chat-token cap; 0 = unlimited (local default)
+	rpmLimiter      *rateLimiter  // per-tenant request-rate fuse; nil = off
+	chatSem         chan struct{} // per-tenant concurrency cap; nil = off
 	config          RAGConfig
 	logger          zerolog.Logger
 }
@@ -149,6 +151,20 @@ func NewRAGChatHandler(
 func (h *RAGChatHandler) SetChatTokenCap(n int) {
 	if n > 0 {
 		h.chatTokenCap = n
+	}
+}
+
+// SetRateLimits enables per-tenant request-rate (rpm, req/min) and concurrency
+// guards on the chat endpoint — fast fuses against a runaway client loop,
+// complementing the slower monthly token cap. 0 leaves a guard disabled (the
+// local default). Set on a managed tenant from HYGUR_CHAT_RPM_PER_TENANT /
+// HYGUR_CHAT_CONCURRENCY_PER_TENANT.
+func (h *RAGChatHandler) SetRateLimits(rpm, concurrency int) {
+	if rpm > 0 {
+		h.rpmLimiter = newRateLimiter(rpm)
+	}
+	if concurrency > 0 {
+		h.chatSem = make(chan struct{}, concurrency)
 	}
 }
 
@@ -372,6 +388,28 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn().Int("used", used).Int("cap", h.chatTokenCap).Msg("monthly chat-token cap reached")
 			writeChatError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED",
 				"You've reached this month's usage limit. It resets at the start of next month.")
+			return
+		}
+	}
+
+	// Per-tenant request-rate fuse (req/min) — a fast guard against a runaway
+	// client loop, before any work. 0/nil = off (local default).
+	if h.rpmLimiter != nil && !h.rpmLimiter.Allow() {
+		writeChatError(w, http.StatusTooManyRequests, "RATE_LIMITED",
+			"Too many requests in a short time — give it a moment and try again.")
+		return
+	}
+
+	// Per-tenant concurrency cap — bound simultaneous generations. Non-blocking:
+	// reject at capacity rather than queue (a queued SSE stream would just hang).
+	// Held for the whole request (the streamed generation). nil = off.
+	if h.chatSem != nil {
+		select {
+		case h.chatSem <- struct{}{}:
+			defer func() { <-h.chatSem }()
+		default:
+			writeChatError(w, http.StatusTooManyRequests, "BUSY",
+				"Too many chats in flight right now — try again in a moment.")
 			return
 		}
 	}

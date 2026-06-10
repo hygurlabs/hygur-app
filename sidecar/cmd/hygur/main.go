@@ -81,6 +81,9 @@ func main() {
 		case "backup-db":
 			runBackupDB(os.Args[2:])
 			return
+		case "rekey":
+			runRekey(os.Args[2:])
+			return
 		}
 	}
 
@@ -674,6 +677,17 @@ func main() {
 			logger.Info().Int("cap", cap).Msg("monthly chat-token cap enabled")
 		} else {
 			logger.Warn().Str("value", v).Msg("ignoring invalid HYGUR_CHAT_TOKEN_CAP_MONTHLY")
+		}
+	}
+
+	// Per-tenant fast fuses against a runaway client loop (req/min + concurrent
+	// generations), complementing the monthly token cap. Unset/0 = off (local).
+	{
+		rpm, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("HYGUR_CHAT_RPM_PER_TENANT")))
+		conc, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("HYGUR_CHAT_CONCURRENCY_PER_TENANT")))
+		if rpm > 0 || conc > 0 {
+			ragChatHandler.SetRateLimits(rpm, conc)
+			logger.Info().Int("rpm", rpm).Int("concurrency", conc).Msg("chat rate limits enabled")
 		}
 	}
 

@@ -82,3 +82,48 @@ func TestSnapshotTo_Plaintext(t *testing.T) {
 		t.Fatalf("plaintext snapshot probe: %v", err)
 	}
 }
+
+// TestRekeyTo proves a DEK rotation: a DB keyed with OLD becomes openable only
+// with NEW after RekeyTo, and the data survives.
+func TestRekeyTo(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.db")
+	const oldKey, newKey = "old-dek-aaa", "new-dek-bbb"
+
+	db, err := NewDBWithKey(src, oldKey)
+	if err != nil {
+		t.Fatalf("open src: %v", err)
+	}
+	if _, err := db.SQLDB().Exec(`CREATE TABLE _rk (v INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQLDB().Exec(`INSERT INTO _rk (v) VALUES (99)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	dest := filepath.Join(dir, "rekeyed.db")
+	if err := RekeyTo(context.Background(), src, dest, oldKey, newKey); err != nil {
+		t.Fatalf("RekeyTo: %v", err)
+	}
+	// Opens with NEW, not with OLD.
+	if err := QuickCheck(context.Background(), dest, newKey); err != nil {
+		t.Fatalf("rekeyed DB should open with the new key: %v", err)
+	}
+	if err := quickProbe(context.Background(), dest, oldKey); err == nil {
+		t.Fatal("rekeyed DB should NOT open with the old key")
+	}
+	// Data survived the rotation.
+	snap, err := NewDBWithKey(dest, newKey)
+	if err != nil {
+		t.Fatalf("reopen rekeyed: %v", err)
+	}
+	defer snap.Close()
+	var v int
+	if err := snap.SQLDB().QueryRow(`SELECT v FROM _rk`).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != 99 {
+		t.Fatalf("got %d, want 99", v)
+	}
+}
