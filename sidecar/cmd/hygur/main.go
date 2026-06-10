@@ -84,6 +84,9 @@ func main() {
 		case "rekey":
 			runRekey(os.Args[2:])
 			return
+		case "usage":
+			runUsage(os.Args[2:])
+			return
 		}
 	}
 

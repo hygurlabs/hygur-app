@@ -282,6 +282,36 @@ func snapshotExport(ctx context.Context, srcPath, destPath, openKey, destKey str
 	return backupConn(ctx, conn, destPath, destKey)
 }
 
+// DumpTokenUsage opens the DB at path READ-ONLY (its own pinned connection, no
+// migrations) and returns per-day token usage since startDay plus the pricing.
+// Read-only, so it is safe to run in-pod alongside the live server — the entry
+// point for the admin cost poll's `usage dump`.
+func DumpTokenUsage(ctx context.Context, path, key, startDay string) ([]DayCategoryUsage, Pricing, error) {
+	dsn := "file:" + path + "?_foreign_keys=off&mode=ro&_busy_timeout=30000"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, Pricing{}, fmt.Errorf("usage dump open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1)
+	if err := conn.PingContext(ctx); err != nil {
+		return nil, Pricing{}, fmt.Errorf("usage dump open (wrong key?): %w", err)
+	}
+	ro := &DB{db: conn}
+	days, err := ro.TokenUsageDailySince(ctx, startDay)
+	if err != nil {
+		return nil, Pricing{}, err
+	}
+	pricing, err := ro.GetPricing(ctx)
+	if err != nil {
+		return nil, Pricing{}, err
+	}
+	return days, pricing, nil
+}
+
 // MigratePlaintextToEncrypted converts an existing plaintext database at path
 // into a SQLCipher-encrypted one keyed by key, in place. It exports via
 // sqlcipher_export (schema + data + FTS5 indexes), verifies the result opens

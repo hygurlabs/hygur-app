@@ -74,6 +74,40 @@ GROUP BY category`, startDay)
 	return out, rows.Err()
 }
 
+// DayCategoryUsage is one day's raw token counts for a category — per-day rows
+// (unlike TokenUsageSince, which sums across days), so callers can compute a
+// run-rate / month-end forecast.
+type DayCategoryUsage struct {
+	Day       string `json:"day"`
+	Category  string `json:"category"`
+	TokensIn  int    `json:"tokens_in"`
+	TokensOut int    `json:"tokens_out"`
+}
+
+// TokenUsageDailySince returns raw per-day, per-category token rows on or after
+// startDay ('YYYY-MM-DD'), ordered by day — the granularity the admin cost
+// dashboard needs for run-rate (TokenUsageSince collapses the days).
+func (d *DB) TokenUsageDailySince(ctx context.Context, startDay string) ([]DayCategoryUsage, error) {
+	rows, err := d.db.QueryContext(ctx, `
+SELECT day, category, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0)
+FROM token_usage
+WHERE day >= ?
+ORDER BY day, category`, startDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DayCategoryUsage
+	for rows.Next() {
+		var u DayCategoryUsage
+		if err := rows.Scan(&u.Day, &u.Category, &u.TokensIn, &u.TokensOut); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // ChatTokensThisMonth returns total chat (LLM) tokens — prompt + completion —
 // recorded since the first day of the current calendar month. Embedding/indexing
 // (ingestion) tokens are excluded: they're a separate, much cheaper budget. This
