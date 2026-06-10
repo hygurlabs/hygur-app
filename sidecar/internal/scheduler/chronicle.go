@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,10 +17,15 @@ import (
 // never re-narrates. v1: the always-open "life" chapter only.
 
 const (
-	chronicleLifeChapterID  = "life"
-	chronicleMaxTraces      = 40  // cap the input traces per act
-	chronicleTraceCharCap   = 220 // per-trace snippet length
-	chronicleActMaxTokens   = 700 // act + synopsis (marker-delimited), bounded
+	chronicleLifeChapterID = "life"
+	chronicleMaxTraces     = 40  // cap the input traces per act
+	chronicleTraceCharCap  = 220 // per-trace snippet length
+	chronicleActMaxTokens  = 700 // act + synopsis (marker-delimited), bounded
+	// The entry covers a window by REAL (canonical) date, not ingestion: a 2024
+	// mail synced today, or a future calendar event, must NOT land in "today".
+	chronicleFirstRunDays = 7  // first entry covers ~the last week of real activity
+	chronicleLookbackDays = 60 // ingestion lookback to gather candidates, then filter by canonical date
+	chronicleCandidates   = 400
 	chronicleSynopsisMarker = "===SYNOPSIS==="
 )
 
@@ -32,6 +38,7 @@ You are given THE STORY SO FAR (a short synopsis) and NEW TRACES from the recent
 
 Rules:
 - Use ONLY the synopsis and the traces. NEVER invent an event, name, date, figure or outcome. If the traces are thin, write a short entry; if there is nothing of substance, write nothing at all.
+- Chronicle ONLY what happened in this period (the dates shown in the traces). Do NOT narrate anything dated outside it, and NEVER speculate about the future.
 - Continue the narrative: REFERENCE the past (from the synopsis) but do NOT re-tell it. Cover only what is new.
 - A sober, readable register in your own plain voice. Do NOT imitate any author's style.
 - No heading, no preamble — only the prose of the entry.
@@ -76,23 +83,46 @@ func (w *ChronicleWriter) WriteLifeChapter(ctx context.Context, now time.Time, f
 		}
 	}
 
-	var since time.Time
-	if chap.Watermark != "" {
-		if t, e := time.Parse(time.RFC3339, chap.Watermark); e == nil {
-			since = t
+	// The entry covers (periodStart, now] by REAL (canonical) date. periodStart =
+	// the last chronicled date (watermark), but never further back than the
+	// first-run window even if the chapter's been idle.
+	periodStart := now.AddDate(0, 0, -chronicleFirstRunDays)
+	// A manual (force) run re-narrates the recent week from scratch; the nightly
+	// run continues from the watermark (the last chronicled date).
+	if !force && chap.Watermark != "" {
+		if t, e := time.Parse(time.RFC3339, chap.Watermark); e == nil && t.After(periodStart) {
+			periodStart = t
 		}
 	}
-	items, err := w.store.ListKnowledgeItemsSince(ctx, since,
-		store.MailAndSourceTypes(store.SourceTypeNote, store.SourceTypeEvent), chronicleMaxTraces)
+	// Gather candidates broadly by ingestion, then keep ONLY those whose canonical
+	// (real) date is inside the window and not in the future — so a freshly-synced
+	// 2024 mail or an upcoming calendar event never lands in "what just happened".
+	candidates, err := w.store.ListKnowledgeItemsSince(ctx, now.AddDate(0, 0, -chronicleLookbackDays),
+		store.MailAndSourceTypes(store.SourceTypeNote, store.SourceTypeEvent), chronicleCandidates)
 	if err != nil {
 		return "", err
 	}
+	var items []*store.KnowledgeItem
+	for _, it := range candidates {
+		cd := store.GetCanonicalDate(it)
+		if cd.IsZero() || !cd.After(periodStart) || cd.After(now) {
+			continue // undated, older than the window, or in the future
+		}
+		items = append(items, it)
+	}
 	if len(items) == 0 {
-		return "", nil // nothing new to chronicle
+		return "", nil // nothing recent to chronicle
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return store.GetCanonicalDate(items[i]).Before(store.GetCanonicalDate(items[j]))
+	})
+	if len(items) > chronicleMaxTraces {
+		items = items[len(items)-chronicleMaxTraces:] // keep the most recent within the window
 	}
 
-	act, synopsis := w.generate(ctx, chap.Synopsis, buildChronicleTraces(items), today)
-	// New watermark = this write time → traces fed now are never re-fed.
+	periodLabel := periodStart.Format("2 Jan") + " – " + now.Format("2 Jan 2006")
+	act, synopsis := w.generate(ctx, chap.Synopsis, buildChronicleTraces(items), periodLabel)
+	// Advance the watermark to now → this period is never re-narrated.
 	chap.Watermark = now.UTC().Format(time.RFC3339)
 
 	if strings.TrimSpace(act) == "" {
@@ -138,7 +168,7 @@ func (w *ChronicleWriter) generate(ctx context.Context, synopsis, traces, dateLa
 	if storySoFar == "" {
 		storySoFar = "(this is the first entry — there is no prior story yet)"
 	}
-	user := fmt.Sprintf("STORY SO FAR:\n%s\n\nNEW TRACES (period ending %s):\n%s", storySoFar, dateLabel, traces)
+	user := fmt.Sprintf("STORY SO FAR:\n%s\n\nNEW TRACES (period %s):\n%s", storySoFar, dateLabel, traces)
 	resp, err := w.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: chronicleSystemPrompt},
