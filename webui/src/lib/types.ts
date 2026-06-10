@@ -165,6 +165,26 @@ export interface TimelineItem {
   date: string; // RFC3339
 }
 
+/** Chronicle — Hygur's grounded narrative, read as a book. */
+export interface ChronicleChapterSummary {
+  id: string;
+  title: string;
+  status: string;
+  act_count: number;
+  last_date?: string;
+}
+export interface ChronicleAct {
+  date: string; // YYYY-MM-DD
+  title: string; // e.g. "12 June 2026"
+  markdown: string;
+}
+export interface ChronicleChapterDetail {
+  id: string;
+  title: string;
+  status: string;
+  acts: ChronicleAct[];
+}
+
 /** An open task with a deadline, surfaced proactively in Follow-up. */
 export interface DueTask {
   id: string;

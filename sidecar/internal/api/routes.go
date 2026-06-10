@@ -135,6 +135,13 @@ func (s *Server) setupRoutes() {
 			r.Delete("/{id}", s.handleTaskDelete)
 		})
 
+		// Chronicle — Hygur's grounded narrative of the user's life (read as a book).
+		r.Route("/chronicle", func(r chi.Router) {
+			r.Get("/", s.handleChronicleList)
+			r.Post("/run", s.handleChronicleRun) // manual trigger (force today's act)
+			r.Get("/{id}", s.handleChronicleGet)
+		})
+
 		// Mail endpoints
 		r.Route("/mail", func(r chi.Router) {
 			r.Get("/sources", s.handleMailSources)

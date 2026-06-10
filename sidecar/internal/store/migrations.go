@@ -287,6 +287,26 @@ INSERT OR IGNORE INTO project_links (link_id, project_id, content_id)
 DROP TABLE tasks;
 `,
 	},
+	// Migration 16 — Chronicle: per-chapter narrative state. The acts (the nightly
+	// prose blocks) live as knowledge_items (source_type=chronicle_act); this table
+	// holds the rolling synopsis (continuity), the watermark (last chronicled
+	// ingestion time, so traces are never re-narrated), status and project link.
+	{
+		Version: 16,
+		Name:    "chronicle_chapters",
+		SQL: `
+CREATE TABLE IF NOT EXISTS chronicle_chapters (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open',
+    synopsis    TEXT NOT NULL DEFAULT '',
+    watermark   TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

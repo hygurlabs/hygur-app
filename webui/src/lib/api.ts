@@ -24,6 +24,8 @@ import type {
   SessionDetail,
   SessionSummary,
   SidecarConfig,
+  ChronicleChapterSummary,
+  ChronicleChapterDetail,
   SidecarConfigPatch,
   Tag,
   TagItem,
@@ -225,6 +227,12 @@ export const api = {
     const q = qs.toString();
     return getJSON<{ tasks: Task[] }>(`/tasks${q ? `?${q}` : ""}`);
   },
+  // Chronicle — Hygur's grounded narrative (read as a book).
+  chronicle: () => getJSON<{ chapters: ChronicleChapterSummary[] }>("/chronicle"),
+  chronicleChapter: (id: string) =>
+    getJSON<ChronicleChapterDetail>(`/chronicle/${encodeURIComponent(id)}`),
+  chronicleRun: () => postJSON<{ written: boolean; act: string }>("/chronicle/run", {}),
+
   task: (id: string) => getJSON<Task>(`/tasks/${id}`),
   createTask: (body: {
     title: string;

@@ -17,6 +17,7 @@ import { Tags } from "./views/Tags";
 import { Calendar } from "./views/Calendar";
 import { FollowUp } from "./views/FollowUp";
 import { Contradictions } from "./views/Contradictions";
+import { Chronicle } from "./views/Chronicle";
 import { Tasks } from "./views/Tasks";
 import { FirstRun } from "./views/FirstRun";
 
@@ -91,6 +92,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/follow-up" element={<FollowUp />} />
                 <Route path="/contradictions" element={<Contradictions />} />
+                <Route path="/chronicle" element={<Chronicle />} />
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

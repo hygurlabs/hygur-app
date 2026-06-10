@@ -44,6 +44,7 @@ type Server struct {
 	memoryHandler    *handlers.MemoryHandler
 	eventsHandler    *handlers.EventsHandler
 	briefHandler     *handlers.BriefHandler
+	chronicleHandler *handlers.ChronicleHandler
 	timelineHandler  *handlers.TimelineHandler
 	agendaHandler    *handlers.AgendaHandler
 	configHandler    *handlers.ConfigHandler
@@ -175,6 +176,35 @@ func (s *Server) SetProjectHandler(handler *handlers.ProjectHandler) {
 // SetTaskHandler sets the task handler for the server.
 func (s *Server) SetTaskHandler(handler *handlers.TaskHandler) {
 	s.taskHandler = handler
+}
+
+// SetChronicleHandler sets the chronicle handler for the server.
+func (s *Server) SetChronicleHandler(handler *handlers.ChronicleHandler) {
+	s.chronicleHandler = handler
+}
+
+func (s *Server) handleChronicleList(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleChronicleGet(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleChronicleRun(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Run(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
 }
 
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {

@@ -972,6 +972,13 @@ func main() {
 	briefHandler.SetStore(db)
 	scheduler.NewMeetingBriefScheduler(meetingBriefer, db, agendaExtractor, 8, logger).Start(ctx)
 
+	// Chronicle (v1) — Hygur writes one grounded narrative act per night into the
+	// always-open "life" chapter (continuity via synopsis + watermark). A manual
+	// trigger (POST /chronicle/run) regenerates today's act for testing.
+	chronicleWriter := scheduler.NewChronicleWriter(db, llmClient, logger)
+	server.SetChronicleHandler(handlers.NewChronicleHandler(db, chronicleWriter, logger))
+	scheduler.NewChronicleScheduler(chronicleWriter, 22, logger).Start(ctx)
+
 	// Agenda scheduler — runs daily at 08:00, emits agenda_alert events for
 	// high-priority items due within the next 48 h.
 	agendaScheduler := scheduler.NewAgendaScheduler(db, agendaExtractor, broker, "08:00", logger)
