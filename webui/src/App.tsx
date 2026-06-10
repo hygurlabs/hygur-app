@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { Menu } from "lucide-react";
+import { Menu, RefreshCw, X } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { QuickCapture } from "./views/QuickCapture";
 import { DetailPanelProvider } from "./components/DetailPanel";
 import { ActivityProvider } from "./lib/activity";
+import { useUpdateAvailable } from "./lib/version";
 import { Ask } from "./views/Ask";
 import { Library } from "./views/Library";
 import { Notes } from "./views/Notes";
@@ -34,6 +35,9 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
     const id = requestAnimationFrame(() => setRevealed(true));
     return () => cancelAnimationFrame(id);
   }, [revealed]);
+  // A new web build has been deployed → offer a reload (web-only).
+  const updateAvailable = useUpdateAvailable();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const { pathname } = useLocation();
 
   // The quick-capture palette runs in its own frameless Tauri window — render
@@ -94,6 +98,26 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             </div>
           </main>
         </div>
+        )}
+
+        {updateAvailable && !updateDismissed && (
+          <div className="fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-surface px-4 py-2.5 text-[13px] shadow-lg print:hidden">
+            <span className="text-text">A new version of Hygur is available.</span>
+            <button
+              onClick={() => window.location.reload()}
+              className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-medium text-white transition-opacity hover:opacity-90"
+            >
+              <RefreshCw size={13} strokeWidth={2} />
+              Reload
+            </button>
+            <button
+              onClick={() => setUpdateDismissed(true)}
+              aria-label="Dismiss"
+              className="rounded-md p-0.5 text-faint transition-colors hover:text-text"
+            >
+              <X size={14} strokeWidth={2} />
+            </button>
+          </div>
         )}
       </DetailPanelProvider>
     </ActivityProvider>
