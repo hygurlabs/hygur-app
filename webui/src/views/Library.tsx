@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import type { SearchResult } from "../lib/types";
 import { fmtDate, srcLabel } from "../lib/format";
+import { useSlow } from "../lib/slow";
 import { useDetail } from "../components/DetailPanel";
 import { RecordList, type RecordRow } from "../components/RecordList";
 import { SourceIcon } from "../components/SourceIcon";
@@ -55,6 +56,9 @@ export function Library() {
   const isLoading = searching ? search.isLoading : browse.isLoading;
   const error = (searching ? search.error : browse.error) as Error | null;
   const refetch = () => (searching ? search.refetch() : browse.refetch());
+  // A hybrid search occasionally runs long; tell the user it's still going
+  // rather than leaving a bare skeleton that reads as "stuck".
+  const slow = useSlow(isLoading, 10000);
 
   const rows: RecordRow[] = useMemo(() => {
     if (searching) {
@@ -136,7 +140,15 @@ export function Library() {
       )}
 
       {isLoading ? (
-        <Skeleton rows={5} />
+        <>
+          {slow && (
+            <div className="mb-3 flex items-center gap-2 text-[12.5px] text-muted">
+              <span className="size-1.5 rounded-full bg-amber-500" />
+              {searching ? "Still searching your knowledge base…" : "Still loading…"}
+            </div>
+          )}
+          <Skeleton rows={5} />
+        </>
       ) : rows.length > 0 ? (
         <RecordList rows={rows} />
       ) : searching ? (

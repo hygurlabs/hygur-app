@@ -75,15 +75,21 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
     [managed],
   );
   const [index, setIndex] = useState(0);
+  // Plays the "reveal" exit (the wizard lifts away) before the app swaps in.
+  const [leaving, setLeaving] = useState(false);
 
   if (!STEPS) return null; // brief async check; nothing painted yet
   const step = STEPS[index];
   const isLast = index === STEPS.length - 1;
+  // Hosted experience (remote tenant or a managed/proxy server that owns the
+  // LLM) → context-correct copy, never the "runs on this Mac" local story.
+  const cloud = isRemote() || !!managed;
 
   const complete = (route?: string) => {
     if (route) window.location.hash = route;
     markOnboardingComplete();
-    onComplete();
+    setLeaving(true);
+    window.setTimeout(onComplete, 450); // let the reveal animation play first
   };
   const next = () => {
     if (isLast) complete();
@@ -94,18 +100,22 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   const ctx: StepContext = { next, complete };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-bg">
+    <div
+      className={`fixed inset-0 z-50 flex flex-col bg-bg transition-[opacity,transform] duration-[450ms] ease-out ${
+        leaving ? "pointer-events-none scale-[1.04] opacity-0" : "scale-100 opacity-100"
+      }`}
+    >
       <div className="flex-1 overflow-y-auto">
         <div
           key={step.id}
           className="view-enter mx-auto flex min-h-full max-w-[560px] flex-col justify-center px-8 py-12"
         >
-          {step.id === "welcome" && <StepWelcome />}
+          {step.id === "welcome" && <StepWelcome cloud={cloud} />}
           {step.id === "permissions" && <StepPermissions />}
           {step.id === "model" && <StepModel ctx={ctx} />}
-          {step.id === "accounts" && <StepAccounts ctx={ctx} />}
+          {step.id === "accounts" && <StepAccounts ctx={ctx} cloud={cloud} />}
           {step.id === "notifications" && <StepNotifications />}
-          {step.id === "ready" && <StepReady />}
+          {step.id === "ready" && <StepReady cloud={cloud} />}
         </div>
       </div>
 

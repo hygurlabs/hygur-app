@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
@@ -15,11 +15,20 @@ import { Settings } from "./views/Settings";
 import { Tags } from "./views/Tags";
 import { Calendar } from "./views/Calendar";
 import { FollowUp } from "./views/FollowUp";
+import { Contradictions } from "./views/Contradictions";
 import { Tasks } from "./views/Tasks";
 
-export default function App() {
+export default function App({ revealOnMount = false }: { revealOnMount?: boolean }) {
   // Left nav is a static column on desktop and an off-canvas drawer on mobile.
   const [navOpen, setNavOpen] = useState(false);
+  // Gentle fade-in only when arriving from onboarding (the "reveal"); a normal
+  // launch starts already-revealed so reloads don't fade every time.
+  const [revealed, setRevealed] = useState(!revealOnMount);
+  useEffect(() => {
+    if (revealed) return;
+    const id = requestAnimationFrame(() => setRevealed(true));
+    return () => cancelAnimationFrame(id);
+  }, [revealed]);
   const { pathname } = useLocation();
 
   // The quick-capture palette runs in its own frameless Tauri window — render
@@ -29,7 +38,11 @@ export default function App() {
   return (
     <ActivityProvider>
       <DetailPanelProvider>
-        <div className="relative flex h-dvh">
+        <div
+          className={`relative flex h-dvh transition-opacity duration-500 ease-out ${
+            revealed ? "opacity-100" : "opacity-0"
+          }`}
+        >
           <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
           {navOpen && (
             <div
@@ -65,6 +78,7 @@ export default function App() {
                 <Route path="/calendar" element={<Calendar />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/follow-up" element={<FollowUp />} />
+                <Route path="/contradictions" element={<Contradictions />} />
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

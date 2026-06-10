@@ -19,6 +19,9 @@ import { isDesktop, getDesktopConfig } from "./lib/desktop";
  *  invisible to the user. */
 export function Root() {
   const [done, setDone] = useState<boolean | null>(null);
+  // True only on the transition out of onboarding, so App can play its reveal
+  // fade-in once (and not on every plain launch).
+  const [justOnboarded, setJustOnboarded] = useState(false);
   // Desktop-only: has the user picked local vs cloud yet? Synchronously `true` in
   // a plain browser (no picker there); `null` on desktop until the async check.
   const [modeChosen, setModeChosen] = useState<boolean | null>(() =>
@@ -79,6 +82,14 @@ export function Root() {
   if (modeChosen === null) return null;
   if (!modeChosen) return <ModePicker onDone={() => setModeChosen(true)} />;
   if (done === null) return null;
-  if (!done) return <Onboarding onComplete={() => setDone(true)} />;
-  return <App />;
+  if (!done)
+    return (
+      <Onboarding
+        onComplete={() => {
+          setJustOnboarded(true);
+          setDone(true);
+        }}
+      />
+    );
+  return <App revealOnMount={justOnboarded} />;
 }
