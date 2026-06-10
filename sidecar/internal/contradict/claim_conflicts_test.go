@@ -19,7 +19,7 @@ func TestDetectClaimConflicts_DivergentAcrossSources(t *testing.T) {
 		ccItem("m1", "Re: Devis projet X", ccClaim("solde à payer", "montant", "1000 €")),
 		ccItem("m2", "RE: Devis projet X", ccClaim("Solde à payer", "Montant", "1200 €")),
 	}
-	got := DetectClaimConflicts(items)
+	got := DetectClaimConflicts(items, "")
 	if len(got) != 1 {
 		t.Fatalf("want 1 conflict, got %d: %+v", len(got), got)
 	}
@@ -36,7 +36,7 @@ func TestDetectClaimConflicts_NoConflictWhenAgree(t *testing.T) {
 		ccItem("m1", "Facture", ccClaim("montant", "total", "500 €")),
 		ccItem("m2", "RE: Facture", ccClaim("Montant", "Total", "500 €")),
 	}
-	if got := DetectClaimConflicts(items); len(got) != 0 {
+	if got := DetectClaimConflicts(items, ""); len(got) != 0 {
 		t.Errorf("agreeing claims must not conflict: %+v", got)
 	}
 }
@@ -46,7 +46,7 @@ func TestDetectClaimConflicts_NeedsTwoSources(t *testing.T) {
 	items := []*store.KnowledgeItem{
 		ccItem("m1", "Devis", ccClaim("prix", "valeur", "100 €"), ccClaim("prix", "valeur", "200 €")),
 	}
-	if got := DetectClaimConflicts(items); len(got) != 0 {
+	if got := DetectClaimConflicts(items, ""); len(got) != 0 {
 		t.Errorf("single source must not conflict: %+v", got)
 	}
 }
@@ -56,8 +56,27 @@ func TestDetectClaimConflicts_SeparateThreads(t *testing.T) {
 		ccItem("m1", "Projet A", ccClaim("deadline", "date", "1 mai")),
 		ccItem("m2", "Projet B", ccClaim("deadline", "date", "2 mai")),
 	}
-	if got := DetectClaimConflicts(items); len(got) != 0 {
+	if got := DetectClaimConflicts(items, ""); len(got) != 0 {
 		t.Errorf("different threads must not cluster: %+v", got)
+	}
+}
+
+func TestDetectClaimConflicts_RecencyFilter(t *testing.T) {
+	old1 := ccClaim("solde", "montant", "1000 €")
+	old1.AssertedAt = "2024-09-12T08:00:00Z"
+	old2 := ccClaim("solde", "montant", "1200 €")
+	old2.AssertedAt = "2024-09-13T08:00:00Z"
+	items := []*store.KnowledgeItem{
+		ccItem("m1", "Devis X", old1),
+		ccItem("m2", "RE: Devis X", old2),
+	}
+	// No cutoff → the (stale) divergence is still a candidate.
+	if got := DetectClaimConflicts(items, ""); len(got) != 1 {
+		t.Fatalf("no cutoff: want 1 candidate, got %d", len(got))
+	}
+	// A 2026 cutoff → both 2024 claims are stale → dropped → no candidate.
+	if got := DetectClaimConflicts(items, "2026-01-01T00:00:00Z"); len(got) != 0 {
+		t.Fatalf("recency cutoff should drop 2024 claims, got %+v", got)
 	}
 }
 

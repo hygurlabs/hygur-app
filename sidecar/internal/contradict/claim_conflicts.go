@@ -35,7 +35,13 @@ type ClaimRef struct {
 // DetectClaimConflicts scans the cached claims of items, clusters by thread, and
 // returns candidate conflicts (≥2 distinct values from ≥2 distinct sources for one
 // entity+attribute). Deterministic order.
-func DetectClaimConflicts(items []*store.KnowledgeItem) []ClaimConflict {
+//
+// sinceRFC3339 is a recency cutoff: claims asserted before it are dropped, because
+// time-relative facts go stale (a 2024 "available this week" means nothing now) and
+// surfacing year-old contradictions is noise. Empty = no filter; undated claims are
+// always kept (can't prove them stale). Compare is lexicographic, so the cutoff and
+// the stored AssertedAt must share the RFC3339/UTC form the indexer already uses.
+func DetectClaimConflicts(items []*store.KnowledgeItem, sinceRFC3339 string) []ClaimConflict {
 	type sourced struct {
 		claim     Claim
 		contentID string
@@ -50,6 +56,9 @@ func DetectClaimConflicts(items []*store.KnowledgeItem) []ClaimConflict {
 			continue
 		}
 		for _, c := range claimsFromMetadata(it.Metadata) {
+			if sinceRFC3339 != "" && c.AssertedAt != "" && c.AssertedAt < sinceRFC3339 {
+				continue // stale: outside the recency window
+			}
 			cid := c.SourceID
 			if cid == "" {
 				cid = it.ContentID

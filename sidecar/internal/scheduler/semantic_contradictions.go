@@ -2,6 +2,9 @@ package scheduler
 
 import (
 	"context"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +19,22 @@ import (
 // hour is fine.
 
 const semanticContradictionsTTL = time.Hour
+
+// contradictionRecencyDays bounds how far back claims are considered for
+// contradictions: older ones are stale (a year-old "available this week" is
+// meaningless now) and only add noise. Env-overridable; 0/unset = the default.
+const contradictionRecencyDays = 120
+
+// contradictionSince returns the RFC3339/UTC cutoff for the recency window.
+func contradictionSince() string {
+	days := contradictionRecencyDays
+	if v := strings.TrimSpace(os.Getenv("HYGUR_CONTRADICT_RECENCY_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	return time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
+}
 
 type semContraEntry struct {
 	conflicts []contradict.ReconciledConflict
@@ -47,7 +66,7 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 	if err != nil {
 		return nil, 0, err
 	}
-	candidates := contradict.DetectClaimConflicts(items)
+	candidates := contradict.DetectClaimConflicts(items, contradictionSince())
 	reconciled := contradict.Reconcile(ctx, d.llm, candidates)
 	if reconciled == nil {
 		reconciled = []contradict.ReconciledConflict{}
