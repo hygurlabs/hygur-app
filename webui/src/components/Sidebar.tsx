@@ -9,6 +9,7 @@ import {
   CheckSquare,
   FolderKanban,
   GitCompareArrows,
+  Scale,
   Newspaper,
   Plug,
   LogOut,
@@ -37,6 +38,7 @@ const NAV: NavItem[] = [
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
+  { to: "/contradictions", label: "Contradictions", icon: Scale },
 ];
 
 // Pinned to the bottom, just above the health indicator. Settings joins this

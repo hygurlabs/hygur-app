@@ -1,8 +1,11 @@
 package contradict
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/hygur/sidecar/internal/store"
@@ -22,6 +25,22 @@ type ClaimConflict struct {
 	Entity    string     `json:"entity"`    // representative entity (first seen)
 	Attribute string     `json:"attribute"` // representative attribute (first seen)
 	Members   []ClaimRef `json:"members"`   // ≥2, one per distinct value, cited
+	// Key is a stable identity for the conflict (cluster + entity + attribute +
+	// value set), used to remember a user's dismissal across recomputations.
+	Key string `json:"key"`
+}
+
+// conflictKey hashes the conflict's stable identity so a dismissal survives the
+// ~hourly recomputation as long as the same divergent values persist. A new
+// divergent value changes the key — that's a genuinely new contradiction.
+func conflictKey(cluster, entity, attribute string, members []ClaimRef) string {
+	vals := make([]string, 0, len(members))
+	for _, m := range members {
+		vals = append(vals, normKey(m.Value))
+	}
+	sort.Strings(vals)
+	h := sha256.Sum256([]byte(cluster + "\x1f" + normKey(entity) + "\x1f" + normKey(attribute) + "\x1f" + strings.Join(vals, "\x1e")))
+	return hex.EncodeToString(h[:])
 }
 
 // ClaimRef cites one side of a candidate conflict: the asserted value + its source.
@@ -38,13 +57,18 @@ type ClaimRef struct {
 //
 // sinceRFC3339 is a recency cutoff: claims asserted before it are dropped, because
 // time-relative facts go stale (a 2024 "available this week" means nothing now) and
-// surfacing year-old contradictions is noise. Empty = no filter; undated claims are
-// always kept (can't prove them stale). Compare is lexicographic, so the cutoff and
-// the stored AssertedAt must share the RFC3339/UTC form the indexer already uses.
+// surfacing year-old contradictions is noise. Empty = no filter.
+//
+// The date a claim is judged by is the MESSAGE's real date (canonical_date / mail_date,
+// via store.GetCanonicalDate), NOT the extractor's ingestion stamp — a 2024 mail
+// re-synced in 2026 must read as 2024 here, or the window never drops it. An item with
+// no canonical date falls back to the stored stamp; a claim still undated is kept (can't
+// prove it stale). Compare is lexicographic on the shared RFC3339/UTC form.
 func DetectClaimConflicts(items []*store.KnowledgeItem, sinceRFC3339 string) []ClaimConflict {
 	type sourced struct {
-		claim     Claim
-		contentID string
+		claim      Claim
+		contentID  string
+		assertedAt string // the message's real date, not the ingestion stamp
 	}
 	threads := map[string][]sourced{}
 	for _, it := range items {
@@ -55,15 +79,25 @@ func DetectClaimConflicts(items []*store.KnowledgeItem, sinceRFC3339 string) []C
 		if key == "" {
 			continue
 		}
+		// Prefer the real content date; fall back to the per-claim stamp only when
+		// the item carries no canonical/mail date at all.
+		itemDate := ""
+		if t := store.GetCanonicalDate(it); !t.IsZero() {
+			itemDate = t.UTC().Format(time.RFC3339)
+		}
 		for _, c := range claimsFromMetadata(it.Metadata) {
-			if sinceRFC3339 != "" && c.AssertedAt != "" && c.AssertedAt < sinceRFC3339 {
+			at := itemDate
+			if at == "" {
+				at = c.AssertedAt
+			}
+			if sinceRFC3339 != "" && at != "" && at < sinceRFC3339 {
 				continue // stale: outside the recency window
 			}
 			cid := c.SourceID
 			if cid == "" {
 				cid = it.ContentID
 			}
-			threads[key] = append(threads[key], sourced{claim: c, contentID: cid})
+			threads[key] = append(threads[key], sourced{claim: c, contentID: cid, assertedAt: at})
 		}
 	}
 
@@ -94,7 +128,7 @@ func DetectClaimConflicts(items []*store.KnowledgeItem, sinceRFC3339 string) []C
 				SourceID:   s.contentID,
 				Value:      s.claim.Value,
 				Quote:      s.claim.Quote,
-				AssertedAt: s.claim.AssertedAt,
+				AssertedAt: s.assertedAt,
 			})
 		}
 		for _, gk := range order {
@@ -105,6 +139,7 @@ func DetectClaimConflicts(items []*store.KnowledgeItem, sinceRFC3339 string) []C
 					Entity:    g.entity,
 					Attribute: g.attribute,
 					Members:   members,
+					Key:       conflictKey(k, g.entity, g.attribute, members),
 				})
 			}
 		}

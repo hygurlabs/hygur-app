@@ -1,10 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Sparkles, X, FolderKanban, StickyNote, Mail, FileText } from "lucide-react";
+import { AlertTriangle, Sparkles, X, FolderKanban, StickyNote, Mail, FileText } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDateTime } from "../lib/format";
 import type { Mention } from "../lib/types";
 import { useDetail } from "../components/DetailPanel";
+import {
+  ContradictionList,
+  useDismissContradiction,
+  useOpenSource,
+} from "../components/ContradictionList";
 import { RecordList, type RecordRow } from "../components/RecordList";
 import {
   Button,
@@ -64,6 +69,8 @@ export function Briefings() {
         }
       />
 
+      <BriefContradictions />
+
       {composing && (
         <NewBriefingForm
           onClose={() => setComposing(false)}
@@ -94,6 +101,38 @@ export function Briefings() {
         />
       )}
     </Page>
+  );
+}
+
+/** Contradiction callout inside the brief surface (placement: "in the daily
+ *  brief"). Flags where two sources disagree, contextualized above the briefings.
+ *  Renders nothing when there are none. */
+function BriefContradictions() {
+  const openSource = useOpenSource();
+  const dismiss = useDismissContradiction();
+  const { data } = useQuery({
+    queryKey: ["claim-contradictions", ""],
+    queryFn: () => api.claimContradictions(),
+  });
+  const items = data?.contradictions ?? [];
+  if (items.length === 0) return null;
+  return (
+    <section className="mb-6 rounded-xl border border-danger/30 bg-danger/5 p-4">
+      <h2 className="flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-danger">
+        <AlertTriangle size={13} strokeWidth={2} />
+        Your sources disagree
+      </h2>
+      <p className="mb-3 mt-1.5 text-[13px] text-muted">
+        {items.length} point{items.length === 1 ? "" : "s"} where two of your sources contradict
+        each other — worth a look before you rely on them.
+      </p>
+      <ContradictionList
+        items={items}
+        onOpenSource={openSource}
+        onDismiss={dismiss}
+        limit={3}
+      />
+    </section>
   );
 }
 

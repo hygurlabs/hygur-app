@@ -104,7 +104,15 @@ func (i *Ingestor) extractClaimsForItem(ctx context.Context, item *store.Knowled
 		log.Printf("[ingest] claim extraction failed for %s: %v", item.ContentID, err)
 		return nil, false
 	}
+	// Stamp the claim with the message's real date (canonical_date / mail_date /
+	// note date), NOT the ingestion time — created_at must never stand in for a
+	// real sent date in temporal reasoning (see store.GetCanonicalDate). Falls back
+	// to created_at only when the item carries no content date (e.g. an undated
+	// note). Detection re-derives this too, so existing caches are corrected there.
 	at := item.CreatedAt.UTC().Format(time.RFC3339)
+	if d := store.GetCanonicalDate(item); !d.IsZero() {
+		at = d.UTC().Format(time.RFC3339)
+	}
 	for j := range got {
 		got[j].SourceID = item.ContentID
 		got[j].AssertedAt = at

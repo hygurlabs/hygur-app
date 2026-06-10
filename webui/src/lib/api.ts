@@ -187,11 +187,20 @@ export const api = {
       `/knowledge/followup${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
     ),
   /** W6 reconciled semantic contradictions (conflict/supersedes), cited. Scoped to
-   *  a project when given; cached ~1h server-side. */
-  claimContradictions: (projectId?: string) =>
-    getJSON<{ contradictions: ReconciledConflict[]; scanned: number }>(
-      `/knowledge/claim-contradictions${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
-    ),
+   *  a project when given; cached ~1h server-side. include_dismissed returns the
+   *  ones the user hid, flagged, for the manage view (default hides them). */
+  claimContradictions: (projectId?: string, includeDismissed?: boolean) => {
+    const qs = new URLSearchParams();
+    if (projectId) qs.set("project_id", projectId);
+    if (includeDismissed) qs.set("include_dismissed", "1");
+    const q = qs.toString();
+    return getJSON<{ contradictions: ReconciledConflict[]; scanned: number }>(
+      `/knowledge/claim-contradictions${q ? `?${q}` : ""}`,
+    );
+  },
+  /** Dismiss a contradiction by its stable key (undo=true restores it). */
+  dismissContradiction: (key: string, undo = false) =>
+    postJSON<void>("/knowledge/contradictions/dismiss", { key, undo }),
   /** A project's items as a date-sorted exchange timeline (W7). */
   projectTimeline: (projectId: string) =>
     getJSON<{ items: TimelineItem[] }>(
@@ -212,14 +221,26 @@ export const api = {
     const q = qs.toString();
     return getJSON<{ tasks: Task[] }>(`/tasks${q ? `?${q}` : ""}`);
   },
+  task: (id: string) => getJSON<Task>(`/tasks/${id}`),
   createTask: (body: {
     title: string;
+    body?: string;
+    status?: string;
     due_date?: string;
     project_id?: string;
-    source_content_id?: string;
+    tag_ids?: string[];
   }) => postJSON<Task>("/tasks", body),
-  updateTask: (id: string, patch: { title?: string; status?: string; due_date?: string }) =>
-    patchJSON(`/tasks/${id}`, patch),
+  updateTask: (
+    id: string,
+    patch: {
+      title?: string;
+      body?: string;
+      status?: string;
+      due_date?: string;
+      project_id?: string;
+      tag_ids?: string[];
+    },
+  ) => patchJSON(`/tasks/${id}`, patch),
   deleteTask: (id: string) => del(`/tasks/${id}`),
 
   // Notes — full CRUD.

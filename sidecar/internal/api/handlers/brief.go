@@ -411,11 +411,59 @@ func (h *BriefHandler) ClaimContradictions(w http.ResponseWriter, r *http.Reques
 		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to reconcile contradictions")
 		return
 	}
-	if conflicts == nil {
-		conflicts = []contradict.ReconciledConflict{}
+	// Apply the user's dismissals fresh each request (not baked into the ~1h
+	// reconciliation cache, so a dismiss takes effect immediately). Default hides
+	// dismissed ones; ?include_dismissed=1 returns them flagged (the manage view).
+	includeDismissed := r.URL.Query().Get("include_dismissed") == "1"
+	var dismissed map[string]bool
+	if h.store != nil {
+		if d, derr := h.store.DismissedContradictions(r.Context()); derr == nil {
+			dismissed = d
+		}
+	}
+	out := make([]contradict.ReconciledConflict, 0, len(conflicts))
+	for _, c := range conflicts {
+		isDismissed := dismissed[c.Key]
+		if isDismissed && !includeDismissed {
+			continue
+		}
+		c.Dismissed = isDismissed
+		out = append(out, c)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"contradictions": conflicts, "scanned": scanned})
+	_ = json.NewEncoder(w).Encode(map[string]any{"contradictions": out, "scanned": scanned})
+}
+
+// dismissContradictionRequest is the body of POST /knowledge/contradictions/dismiss.
+type dismissContradictionRequest struct {
+	Key  string `json:"key"`
+	Undo bool   `json:"undo"` // true → restore a previously dismissed contradiction
+}
+
+// DismissContradiction handles POST /knowledge/contradictions/dismiss — records
+// (or, with undo, clears) a dismissed contradiction key. 204 on success.
+func (h *BriefHandler) DismissContradiction(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	var req dismissContradictionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		writeBriefError(w, http.StatusBadRequest, "BAD_REQUEST", "a contradiction key is required")
+		return
+	}
+	var err error
+	if req.Undo {
+		err = h.store.UndismissContradiction(r.Context(), req.Key)
+	} else {
+		err = h.store.DismissContradiction(r.Context(), req.Key)
+	}
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("dismiss contradiction failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to update dismissal")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  AlertTriangle,
   ArrowUp,
   History,
   Paperclip,
@@ -35,8 +36,14 @@ import type {
   SessionSummary,
 } from "../lib/types";
 import { fmtDate, srcLabel } from "../lib/format";
+import { useSlow } from "../lib/slow";
 import { useDetail } from "../components/DetailPanel";
 import { RecordList, type RecordRow } from "../components/RecordList";
+import {
+  ContradictionList,
+  useDismissContradiction,
+  useOpenSource,
+} from "../components/ContradictionList";
 import { ErrorBanner } from "../components/ui";
 
 interface Turn {
@@ -333,6 +340,45 @@ const newSessionId = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : String(Date.now());
+
+/** Home-screen contradiction card (the "feature phare" placement): surfaces the
+ *  W6 reconciled contradictions on the Ask landing so they're visible on open,
+ *  with a link to the full list. Renders nothing when there are none. */
+function HomeContradictions() {
+  const navigate = useNavigate();
+  const openSource = useOpenSource();
+  const dismiss = useDismissContradiction();
+  const { data } = useQuery({
+    queryKey: ["claim-contradictions", ""],
+    queryFn: () => api.claimContradictions(),
+  });
+  const items = data?.contradictions ?? [];
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-9 rounded-xl border border-border bg-surface2/40 p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-danger">
+          <AlertTriangle size={13} strokeWidth={2} />
+          {items.length} contradiction{items.length === 1 ? "" : "s"} in your sources
+        </span>
+        {items.length > 2 && (
+          <button
+            onClick={() => navigate("/contradictions")}
+            className="shrink-0 text-[12.5px] text-muted transition-colors hover:text-accent"
+          >
+            See all →
+          </button>
+        )}
+      </div>
+      <ContradictionList
+        items={items}
+        onOpenSource={openSource}
+        onDismiss={dismiss}
+        limit={2}
+      />
+    </div>
+  );
+}
 
 export function Ask() {
   const openDetail = useDetail();
@@ -736,10 +782,11 @@ export function Ask() {
                     </button>
                   ))}
                 </div>
+                <HomeContradictions />
               </div>
             ) : (
               <div className="flex flex-col gap-7">
-                {turns.map((t) =>
+                {turns.map((t, i) =>
                   t.role === "user" ? (
                     <div
                       key={t.id}
@@ -822,7 +869,12 @@ export function Ask() {
                       )}
                     </div>
                   ) : (
-                    <AssistantTurn key={t.id} turn={t} openDetail={openDetail} />
+                    <AssistantTurn
+                      key={t.id}
+                      turn={t}
+                      live={streaming && i === turns.length - 1}
+                      openDetail={openDetail}
+                    />
                   ),
                 )}
               </div>
@@ -1365,12 +1417,22 @@ function ContextPanel({
 
 function AssistantTurn({
   turn,
+  live = false,
   openDetail,
 }: {
   turn: Turn;
+  /** This is the turn currently being streamed (last turn + an active request). */
+  live?: boolean;
   openDetail: (d: { title: string; meta: string[]; body: string }) => void;
 }) {
-  const streaming = turn.activity !== undefined && turn.content === "";
+  // Mid-stream once any answer text has arrived; the activity line covers the
+  // pre-token phase (Thinking… / Reading sources… / Running tool…).
+  const streaming = live && turn.content !== "";
+  // Stall awareness: resetKey changes on every progress event (a streamed token,
+  // a new source, a status change), so the "taking longer than usual" hint fires
+  // only after a genuine gap of silence — not on a slow-but-steady answer.
+  const stallKey = `${turn.content.length}:${turn.activity ?? ""}:${turn.sources?.length ?? 0}`;
+  const stalled = useSlow(live && !turn.error, 9000, stallKey);
   const sourceRows: RecordRow[] = (turn.sources ?? []).map((s, i) => ({
     id: `${s.content_id}-${i}`,
     title: s.title,
@@ -1407,6 +1469,15 @@ function AssistantTurn({
               style={{ animation: "hygur-blink 1s steps(2) infinite" }}
             />
           )}
+        </div>
+      )}
+
+      {/* Stall hint: the request is still open but has gone quiet — tells the
+          user it's working, not stuck, without an alarming error. */}
+      {stalled && !turn.error && (
+        <div className="mt-2 flex items-center gap-2 text-[12.5px] text-muted">
+          <span className="size-1.5 rounded-full bg-amber-500" />
+          Still working — taking longer than usual…
         </div>
       )}
 

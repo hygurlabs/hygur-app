@@ -29,6 +29,9 @@ type Verdict struct {
 type ReconciledConflict struct {
 	ClaimConflict
 	Verdict Verdict `json:"verdict"`
+	// Dismissed is set per-request from the tenant's dismissed set (not cached
+	// with the reconciliation, so dismissing takes effect immediately).
+	Dismissed bool `json:"dismissed"`
 }
 
 const reconcileSystemPrompt = `You judge whether claims about the same subject genuinely contradict each other, for a contradiction checker. You are given an entity, an attribute, and several values asserted by different sources at different dates. Decide exactly one:

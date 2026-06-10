@@ -124,10 +124,11 @@ export interface DigestEntry {
 export interface Task {
   id: string;
   title: string;
+  body: string; // Markdown — a task is a note-like knowledge_item
   status: string; // "open" | "done"
   due_date?: string;
   project_id?: string;
-  source_content_id?: string;
+  tags: Tag[];
   created_at: string;
   updated_at: string;
 }
@@ -149,6 +150,10 @@ export interface ReconciledConflict {
   attribute: string;
   members: ClaimRef[];
   verdict: { kind: "conflict" | "supersedes" | string; reason: string };
+  /** Stable identity used to dismiss/restore this contradiction. */
+  key: string;
+  /** True when the user has dismissed it (only surfaced with include_dismissed). */
+  dismissed?: boolean;
 }
 
 /** One row of a project's exchange timeline (GET /knowledge/project-timeline). */
@@ -160,10 +165,19 @@ export interface TimelineItem {
   date: string; // RFC3339
 }
 
+/** An open task with a deadline, surfaced proactively in Follow-up. */
+export interface DueTask {
+  id: string;
+  title: string;
+  due_date: string;
+  status: string;
+}
+
 /** Grounded Follow-up synthesis (GET /knowledge/followup). */
 export interface FollowUpDigest {
   topics: DigestEntry[];
   contradictions: DigestEntry[];
+  due_tasks?: DueTask[];
   scanned: number;
   window: string;
 }

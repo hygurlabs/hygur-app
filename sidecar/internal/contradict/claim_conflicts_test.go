@@ -80,6 +80,35 @@ func TestDetectClaimConflicts_RecencyFilter(t *testing.T) {
 	}
 }
 
+func TestDetectClaimConflicts_CanonicalDateBeatsIngestionStamp(t *testing.T) {
+	// Claims carry a 2026 INGESTION stamp, but the messages are really from 2024
+	// (re-synced old mail). The recency window must judge by the real date.
+	c1 := ccClaim("solde", "montant", "1000 €")
+	c1.AssertedAt = "2026-06-01T00:00:00Z"
+	c2 := ccClaim("solde", "montant", "1200 €")
+	c2.AssertedAt = "2026-06-01T00:00:00Z"
+	it1 := ccItem("m1", "Devis X", c1)
+	it1.Metadata["canonical_date"] = "2024-09-12T08:00:00Z"
+	it2 := ccItem("m2", "RE: Devis X", c2)
+	it2.Metadata["canonical_date"] = "2024-09-13T08:00:00Z"
+	items := []*store.KnowledgeItem{it1, it2}
+
+	// A 2026 cutoff must drop them by their REAL 2024 date, despite the 2026 stamp.
+	if got := DetectClaimConflicts(items, "2026-01-01T00:00:00Z"); len(got) != 0 {
+		t.Fatalf("canonical date should drive the cutoff, got %+v", got)
+	}
+	// No cutoff → still a candidate, and the cited date is the canonical 2024 one.
+	got := DetectClaimConflicts(items, "")
+	if len(got) != 1 {
+		t.Fatalf("want 1 candidate, got %d", len(got))
+	}
+	for _, m := range got[0].Members {
+		if len(m.AssertedAt) < 4 || m.AssertedAt[:4] != "2024" {
+			t.Errorf("cited date should be the canonical message date, got %q", m.AssertedAt)
+		}
+	}
+}
+
 func TestClaimsFromMetadata_JSONRoundTrip(t *testing.T) {
 	// The shape metadata takes after a store JSON round-trip: []any of map[string]any.
 	m := map[string]any{"extracted_claims": []any{
