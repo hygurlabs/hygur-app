@@ -135,7 +135,10 @@ func runServe(args []string) {
 	// passkey-minted token. HYGUR_OPERATOR_ACCOUNT = admin@hygur.ai's account number.
 	if op := strings.TrimSpace(os.Getenv("HYGUR_OPERATOR_ACCOUNT")); op != "" {
 		controlplane.NewAdminConsole(store, svc, op).Register(root)
-		fmt.Printf("hygur-console: admin cost API enabled (/admin/cost, operator %s)\n", op)
+		if err := registerAdminSPA(root); err != nil {
+			die(fmt.Errorf("admin SPA: %w", err))
+		}
+		fmt.Printf("hygur-console: admin enabled — SPA at /admin, cost API /admin/cost (operator %s)\n", op)
 	}
 
 	fmt.Printf("hygur-console serving on %s (domain %s)\n", *addr, *domain)
