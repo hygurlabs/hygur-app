@@ -11,12 +11,14 @@ import {
   GitCompareArrows,
   Newspaper,
   Plug,
+  LogOut,
   Settings as SettingsIcon,
   Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useActivity } from "../lib/activity";
+import { clearTokens, isRemote } from "../lib/connection";
 
 interface NavItem {
   to: string;
@@ -100,6 +102,23 @@ export function Sidebar({
             {label}
           </NavLink>
         ))}
+
+        {/* Sign out — only for a cloud/remote session (a local desktop has no
+            account to sign out of). clearTokens() logs out + purges + reroutes
+            to Connect via SIGNED_OUT_EVENT. */}
+        {isRemote() && (
+          <button
+            type="button"
+            onClick={() => {
+              onClose?.();
+              clearTokens();
+            }}
+            className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[14px] text-muted transition-colors hover:bg-accent-weak/50 hover:text-text"
+          >
+            <LogOut size={17} strokeWidth={1.75} />
+            Sign out
+          </button>
+        )}
 
         {busy ? (
           <div className="px-2.5 pt-3 text-[12px] text-accent">
