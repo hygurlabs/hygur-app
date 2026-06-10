@@ -197,7 +197,14 @@ func (s *Service) issueAndRespond(w http.ResponseWriter, now time.Time, dev Devi
 	// Refresh token → HttpOnly cookie (out of JS/XSS reach) for the web shell. It is
 	// NOT echoed in the body here (tokenResp.RefreshToken stays empty); the desktop
 	// path receives its refresh token via /desktop/claim instead.
-	s.setRefreshCookie(w, refresh)
+	//
+	// EXCEPT the operator/admin account: its cookie sits on the shared hygur.ai
+	// domain, so a tenant web shell's refresh-on-load would pick it up and get
+	// hijacked onto operator.hygur.ai. The admin SPA re-authenticates per session
+	// via passkey instead of relying on the shared cookie.
+	if acc.TenantID != operatorTenantID {
+		s.setRefreshCookie(w, refresh)
+	}
 	writeJSON(w, http.StatusOK, tokenResp{
 		AccessToken: access,
 		Endpoint:    fmt.Sprintf("https://%s.%s", acc.TenantID, s.domain),
@@ -207,6 +214,13 @@ func (s *Service) issueAndRespond(w http.ResponseWriter, now time.Time, dev Devi
 }
 
 const refreshCookieName = "hygur_rt"
+
+// operatorTenantID is the sentinel tenant_id of the admin/operator account
+// (admin@hygur.ai). It has no tenant pod — it exists only to authenticate the
+// operator cost dashboard — so its session is deliberately cookie-less (see
+// issueAndRespond): a shared hygur.ai cookie would otherwise be adopted by a real
+// tenant's web shell on refresh-on-load and redirect it to operator.hygur.ai.
+const operatorTenantID = "operator"
 
 // setRefreshCookie stores the refresh token in an HttpOnly, Secure, SameSite=Lax
 // cookie scoped to the registrable domain + the /token path — sent only to the
