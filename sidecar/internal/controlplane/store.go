@@ -164,6 +164,27 @@ CREATE TABLE IF NOT EXISTS webauthn_sessions (
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("controlplane: migrate reaped_at: %w", err)
 	}
+	// Admin cost dashboard (#5): per-tenant per-day usage snapshots fed by the
+	// on-box poller (`hygur usage dump` → `hygur-console usage ingest`), plus a
+	// single fleet-wide pricing row. The internet-facing console only READS these;
+	// the on-box poller writes them. Idempotent.
+	if _, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS tenant_usage_snapshots (
+  tenant_id      TEXT NOT NULL,
+  account_number TEXT NOT NULL DEFAULT '',
+  day            TEXT NOT NULL,
+  chat_in        INTEGER NOT NULL DEFAULT 0,
+  chat_out       INTEGER NOT NULL DEFAULT 0,
+  ingest         INTEGER NOT NULL DEFAULT 0,
+  captured_at    TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, day)
+);
+CREATE TABLE IF NOT EXISTS fleet_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);`); err != nil {
+		return fmt.Errorf("controlplane: migrate usage: %w", err)
+	}
 	return nil
 }
 
