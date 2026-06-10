@@ -45,3 +45,50 @@ func TestTenantUsageSnapshots_AndPricing(t *testing.T) {
 		t.Fatalf("ListLiveTenants: %v", err)
 	}
 }
+
+func approxEq(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-9
+}
+
+func TestCostSummary_AndForecast(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "c.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.SetFleetPricing(FleetPricing{ChatInPer1M: 2, ChatOutPer1M: 6, IngestPer1M: 0.5, Currency: "€"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) // June (30 days), day 10
+	// 1M chat-in (=2) + 1M chat-out (=6) + 4M ingest (=2) → cost 10
+	if err := s.UpsertTenantUsage(now, TenantUsageDay{TenantID: "home", Account: "42", Day: "2026-06-10", ChatIn: 1_000_000, ChatOut: 1_000_000, Ingest: 4_000_000}); err != nil {
+		t.Fatal(err)
+	}
+
+	cs, err := s.GlobalCostSummary(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approxEq(cs.Today.Cost, 10) || !approxEq(cs.Month.Cost, 10) {
+		t.Fatalf("cost: today=%v month=%v want 10", cs.Today.Cost, cs.Month.Cost)
+	}
+	if cs.DaysInMonth != 30 || cs.DaysElapsed != 10 {
+		t.Fatalf("days: elapsed=%d inMonth=%d want 10/30", cs.DaysElapsed, cs.DaysInMonth)
+	}
+	if !approxEq(cs.RunRatePerDay, 1) || !approxEq(cs.ForecastEOMCost, 30) {
+		t.Fatalf("forecast: runrate=%v eom=%v want 1/30", cs.RunRatePerDay, cs.ForecastEOMCost)
+	}
+
+	pt, err := s.PerTenantCost(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pt) != 1 || !approxEq(pt[0].Month.Cost, 10) {
+		t.Fatalf("per-tenant: %+v", pt)
+	}
+}

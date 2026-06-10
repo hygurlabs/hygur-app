@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"sort"
 	"strconv"
 	"time"
 )
@@ -130,4 +131,119 @@ func (s *Store) GetFleetPricing() (FleetPricing, error) {
 		}
 	}
 	return p, rows.Err()
+}
+
+// PeriodCost holds token totals + estimated cost for a time window.
+type PeriodCost struct {
+	ChatIn  int     `json:"chat_in"`
+	ChatOut int     `json:"chat_out"`
+	Ingest  int     `json:"ingest"`
+	Cost    float64 `json:"cost"`
+}
+
+// CostSummary is the fleet-wide cost view: today / last 7 days / month-to-date,
+// plus a month-end forecast (MTD cost extrapolated at the current run-rate).
+type CostSummary struct {
+	Currency        string     `json:"currency"`
+	Today           PeriodCost `json:"today"`
+	Week            PeriodCost `json:"week"`
+	Month           PeriodCost `json:"month"`
+	RunRatePerDay   float64    `json:"run_rate_per_day"`
+	DaysElapsed     int        `json:"days_elapsed"`
+	DaysInMonth     int        `json:"days_in_month"`
+	ForecastEOMCost float64    `json:"forecast_eom_cost"`
+}
+
+// TenantCost is one tenant's month-to-date usage + cost.
+type TenantCost struct {
+	Account  string     `json:"account"`
+	TenantID string     `json:"tenant_id"`
+	Month    PeriodCost `json:"month"`
+}
+
+func (p FleetPricing) cost(chatIn, chatOut, ingest int) float64 {
+	return float64(chatIn)/1e6*p.ChatInPer1M +
+		float64(chatOut)/1e6*p.ChatOutPer1M +
+		float64(ingest)/1e6*p.IngestPer1M
+}
+
+// daysInMonth returns the number of days in t's month (day 0 of next month ==
+// the last day of this one).
+func daysInMonth(t time.Time) int {
+	return time.Date(t.Year(), t.Month()+1, 0, 0, 0, 0, 0, t.Location()).Day()
+}
+
+func (s *Store) sumSince(startDay string) (chatIn, chatOut, ingest int, err error) {
+	err = s.db.QueryRow(`
+SELECT COALESCE(SUM(chat_in),0), COALESCE(SUM(chat_out),0), COALESCE(SUM(ingest),0)
+FROM tenant_usage_snapshots WHERE day >= ?`, startDay).Scan(&chatIn, &chatOut, &ingest)
+	return
+}
+
+// GlobalCostSummary aggregates all tenants' snapshots into today / last-7-days /
+// month-to-date token + cost totals, plus a month-end forecast at the current
+// run-rate (MTD cost / days elapsed × days in month).
+func (s *Store) GlobalCostSummary(now time.Time) (CostSummary, error) {
+	pricing, err := s.GetFleetPricing()
+	if err != nil {
+		return CostSummary{}, err
+	}
+	day := now.Format("2006-01-02")
+	weekStart := now.AddDate(0, 0, -6).Format("2006-01-02")
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+
+	cs := CostSummary{Currency: pricing.Currency}
+	windows := []struct {
+		start string
+		p     *PeriodCost
+	}{{day, &cs.Today}, {weekStart, &cs.Week}, {monthStart, &cs.Month}}
+	for _, w := range windows {
+		ci, co, ing, err := s.sumSince(w.start)
+		if err != nil {
+			return cs, err
+		}
+		*w.p = PeriodCost{ChatIn: ci, ChatOut: co, Ingest: ing, Cost: pricing.cost(ci, co, ing)}
+	}
+	cs.DaysInMonth = daysInMonth(now)
+	cs.DaysElapsed = now.Day()
+	if cs.DaysElapsed > 0 {
+		cs.RunRatePerDay = cs.Month.Cost / float64(cs.DaysElapsed)
+		cs.ForecastEOMCost = cs.RunRatePerDay * float64(cs.DaysInMonth)
+	}
+	return cs, nil
+}
+
+// PerTenantCost returns each tenant's month-to-date usage + cost, sorted by cost
+// descending (biggest spenders first).
+func (s *Store) PerTenantCost(now time.Time) ([]TenantCost, error) {
+	pricing, err := s.GetFleetPricing()
+	if err != nil {
+		return nil, err
+	}
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	rows, err := s.db.Query(`
+SELECT tenant_id, account_number,
+       COALESCE(SUM(chat_in),0), COALESCE(SUM(chat_out),0), COALESCE(SUM(ingest),0)
+FROM tenant_usage_snapshots
+WHERE day >= ?
+GROUP BY tenant_id, account_number`, monthStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TenantCost
+	for rows.Next() {
+		var tc TenantCost
+		var ci, co, ing int
+		if err := rows.Scan(&tc.TenantID, &tc.Account, &ci, &co, &ing); err != nil {
+			return nil, err
+		}
+		tc.Month = PeriodCost{ChatIn: ci, ChatOut: co, Ingest: ing, Cost: pricing.cost(ci, co, ing)}
+		out = append(out, tc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Month.Cost > out[j].Month.Cost })
+	return out, nil
 }
