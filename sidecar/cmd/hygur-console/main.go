@@ -129,6 +129,13 @@ func runServe(args []string) {
 		fmt.Println("hygur-console: Stripe billing webhook + success page enabled")
 	}
 
+	// Operator admin surface (cost dashboard API), gated by the operator account's
+	// passkey-minted token. HYGUR_OPERATOR_ACCOUNT = admin@hygur.ai's account number.
+	if op := strings.TrimSpace(os.Getenv("HYGUR_OPERATOR_ACCOUNT")); op != "" {
+		controlplane.NewAdminConsole(store, svc, op).Register(root)
+		fmt.Printf("hygur-console: admin cost API enabled (/admin/cost, operator %s)\n", op)
+	}
+
 	fmt.Printf("hygur-console serving on %s (domain %s)\n", *addr, *domain)
 	srv := &http.Server{Addr: *addr, Handler: root, ReadHeaderTimeout: 10 * time.Second}
 	die(srv.ListenAndServe())

@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"database/sql"
 	"sort"
 	"strconv"
 	"time"
@@ -246,4 +247,17 @@ GROUP BY tenant_id, account_number`, monthStart)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Month.Cost > out[j].Month.Cost })
 	return out, nil
+}
+
+// LatestCapture returns the most recent snapshot capture time (RFC3339), or ""
+// when no snapshots exist yet — drives the dashboard's "updated Xs ago" freshness.
+func (s *Store) LatestCapture() (string, error) {
+	var v sql.NullString
+	if err := s.db.QueryRow(`SELECT MAX(captured_at) FROM tenant_usage_snapshots`).Scan(&v); err != nil {
+		return "", err
+	}
+	if v.Valid {
+		return v.String, nil
+	}
+	return "", nil
 }
