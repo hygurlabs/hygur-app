@@ -6,6 +6,9 @@ import {
   Server,
   Cloud,
   Blocks,
+  Quote,
+  Scale,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 
@@ -14,7 +17,7 @@ export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
 
 /** Hygur Cloud subscription — Stripe payment link (Personal, 35 €/mo standard;
  *  launch offer 29.90 €/mo locked for life for the first 2,000 subscribers). */
-export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/cNiaEQcFN7JracQ3wC2Fa02";
+export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/bJe8wIdJRbZHfxa1ou2Fa05";
 
 /** Master gate for paid signups. Keep FALSE until the production LLM backend is
  *  settled — closed = the Cloud card shows "coming soon" and never opens Stripe
@@ -55,6 +58,26 @@ export const PRINCIPLES: Principle[] = [
     icon: PlugZap,
     title: "Connect what matters",
     body: "Index mail, calendar and folders so Hygur can answer with your own context, not the public web.",
+  },
+];
+
+/** What the local-first, grounded approach actually buys you — the trust layer
+ *  (cited answers + caught contradictions). Same voice as the product. */
+export const GROUNDING: Principle[] = [
+  {
+    icon: Quote,
+    title: "Answers you can check",
+    body: "Every reply cites your own mail, notes and documents — never the public web, never invented. Dates and amounts are computed, not guessed.",
+  },
+  {
+    icon: Scale,
+    title: "Catches contradictions",
+    body: "When two of your own sources disagree on the same fact, Hygur surfaces it — both values, quoted and dated — so you decide what still holds.",
+  },
+  {
+    icon: Lock,
+    title: "Never leaves your side",
+    body: "It runs on your machine, or a private EU instance that's yours alone. No training on your data, ever.",
   },
 ];
 

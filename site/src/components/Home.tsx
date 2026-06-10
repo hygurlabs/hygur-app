@@ -1,6 +1,7 @@
 import { Nav } from "./Nav";
 import { Hero } from "./Hero";
 import { Principles } from "./Principles";
+import { Grounded } from "./Grounded";
 import { Editions } from "./Editions";
 import { HowItWorks } from "./HowItWorks";
 import { CtaBand } from "./CtaBand";
@@ -19,6 +20,7 @@ export function Home() {
       <main>
         <Hero />
         <Principles />
+        <Grounded />
         <Editions />
         <HowItWorks />
         <CtaBand />
