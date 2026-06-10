@@ -17,20 +17,21 @@ const SourceTypeChronicleAct = "chronicle_act"
 // carries the rolling synopsis + watermark used to write the next act in
 // continuity without re-narrating.
 type ChronicleChapter struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project_id,omitempty"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`
-	Synopsis  string `json:"synopsis,omitempty"`
-	Watermark string `json:"watermark,omitempty"` // RFC3339, last chronicled ingestion time
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string `json:"id"`
+	ProjectID   string `json:"project_id,omitempty"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	Synopsis    string `json:"synopsis,omitempty"`
+	Watermark   string `json:"watermark,omitempty"`    // RFC3339, last chronicled ingestion time
+	PendingNote string `json:"pending_note,omitempty"` // set on reopen; the next write folds it in, then clears it
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 func scanChronicleChapter(row interface{ Scan(...any) error }) (*ChronicleChapter, error) {
 	var c ChronicleChapter
 	var created, updated time.Time
-	if err := row.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Status, &c.Synopsis, &c.Watermark, &created, &updated); err != nil {
+	if err := row.Scan(&c.ID, &c.ProjectID, &c.Title, &c.Status, &c.Synopsis, &c.Watermark, &c.PendingNote, &created, &updated); err != nil {
 		return nil, err
 	}
 	c.CreatedAt = created.UTC().Format(time.RFC3339)
@@ -38,7 +39,7 @@ func scanChronicleChapter(row interface{ Scan(...any) error }) (*ChronicleChapte
 	return &c, nil
 }
 
-const chronicleChapterCols = `id, project_id, title, status, synopsis, watermark, created_at, updated_at`
+const chronicleChapterCols = `id, project_id, title, status, synopsis, watermark, pending_note, created_at, updated_at`
 
 // GetChronicleChapter loads one chapter by id; returns (nil, nil) when not found.
 func (d *DB) GetChronicleChapter(ctx context.Context, id string) (*ChronicleChapter, error) {
@@ -60,12 +61,13 @@ func (d *DB) UpsertChronicleChapter(ctx context.Context, c *ChronicleChapter) er
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.db.ExecContext(ctx, `
-INSERT INTO chronicle_chapters (id, project_id, title, status, synopsis, watermark, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO chronicle_chapters (id, project_id, title, status, synopsis, watermark, pending_note, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   project_id = excluded.project_id, title = excluded.title, status = excluded.status,
-  synopsis = excluded.synopsis, watermark = excluded.watermark, updated_at = excluded.updated_at`,
-		c.ID, c.ProjectID, c.Title, c.Status, c.Synopsis, c.Watermark, now, now)
+  synopsis = excluded.synopsis, watermark = excluded.watermark, pending_note = excluded.pending_note,
+  updated_at = excluded.updated_at`,
+		c.ID, c.ProjectID, c.Title, c.Status, c.Synopsis, c.Watermark, c.PendingNote, now, now)
 	return err
 }
 

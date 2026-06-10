@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookCheck, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { BookCheck, BookOpen, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import type { ChronicleAct } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
@@ -75,6 +75,20 @@ export function Chronicle() {
     },
   });
 
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenNote, setReopenNote] = useState("");
+  const [reopenedHint, setReopenedHint] = useState(false);
+  const reopenChapter = useMutation({
+    mutationFn: () => api.reopenChronicleChapter(selected, reopenNote.trim()),
+    onSuccess: () => {
+      setReopenOpen(false);
+      setReopenNote("");
+      setReopenedHint(true);
+      qc.invalidateQueries({ queryKey: ["chronicle"] }); // status flips back to open
+      window.setTimeout(() => setReopenedHint(false), 14000);
+    },
+  });
+
   const isProject = selected !== LIFE;
   const chapterStatus = chapterQ.data?.status ?? "open";
   const isClosed = chapterStatus === "closed";
@@ -124,13 +138,55 @@ export function Chronicle() {
         ))}
       </div>
 
-      {/* Close-chapter control — project chapters only ("Life" never closes) */}
+      {/* Lifecycle control — project chapters only ("Life" never closes) */}
       {isProject && (
         <div className="mb-4">
           {isClosed ? (
-            <span className="inline-flex items-center gap-1.5 rounded-md bg-surface2 px-2.5 py-1 text-[12px] text-muted">
-              <BookCheck size={13} strokeWidth={1.9} /> This chapter is closed.
-            </span>
+            reopenOpen ? (
+              <div className="rounded-lg border border-border bg-surface p-3">
+                <label className="mb-1.5 block text-[12.5px] text-muted">
+                  Reopen this chapter — tell Hygur why in a few words. It narrates the resumption
+                  from this on the next entry, with any mails or notes that back it up.
+                </label>
+                <textarea
+                  value={reopenNote}
+                  onChange={(e) => setReopenNote(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. the client came back — they want a second phase."
+                  className="w-full resize-y rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:border-accent focus:outline-none"
+                />
+                <div className="mt-2 flex items-center gap-3">
+                  <Button
+                    onClick={() => reopenChapter.mutate()}
+                    disabled={reopenChapter.isPending || !reopenNote.trim()}
+                  >
+                    <BookOpen size={14} strokeWidth={1.9} />
+                    {reopenChapter.isPending ? "Reopening…" : "Reopen chapter"}
+                  </Button>
+                  <button
+                    onClick={() => {
+                      setReopenOpen(false);
+                      setReopenNote("");
+                    }}
+                    className="text-[13px] text-muted transition-colors hover:text-text"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-1.5 rounded-md bg-surface2 px-2.5 py-1 text-[12px] text-muted">
+                  <BookCheck size={13} strokeWidth={1.9} /> This chapter is closed.
+                </span>
+                <button
+                  onClick={() => setReopenOpen(true)}
+                  className="inline-flex items-center gap-1.5 text-[12.5px] text-accent transition-colors hover:underline"
+                >
+                  <BookOpen size={13} strokeWidth={1.9} /> Reopen
+                </button>
+              </div>
+            )
           ) : closeOpen ? (
             <div className="rounded-lg border border-border bg-surface p-3">
               <label className="mb-1.5 block text-[12.5px] text-muted">
@@ -168,6 +224,12 @@ export function Chronicle() {
               <BookCheck size={13} strokeWidth={1.9} /> Close this chapter
             </button>
           ) : null}
+          {reopenedHint && (
+            <p className="mt-2 text-[12.5px] text-muted">
+              Reopened — the next entry resumes the story from your note. Use “Write today's
+              entry” to narrate it now.
+            </p>
+          )}
         </div>
       )}
 

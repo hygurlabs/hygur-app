@@ -157,3 +157,33 @@ func (h *ChronicleHandler) Close(w http.ResponseWriter, r *http.Request) {
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]any{"started": true})
 }
+
+// Reopen handles POST /chronicle/{id}/reopen — reopen a closed chapter with a required
+// free-text reason. The reason is staged (no LLM here); the next pass — nightly, or a
+// manual "Write today's entry" — narrates the resumption from it, corroborated by any
+// new traces. The "life" chapter cannot be reopened.
+func (h *ChronicleHandler) Reopen(w http.ResponseWriter, r *http.Request) {
+	if h.writer == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "chronicle writer not configured")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "life" {
+		writeKnowledgeError(w, http.StatusBadRequest, "INVALID", "the life chapter is always open")
+		return
+	}
+	var body struct {
+		Note string `json:"note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if strings.TrimSpace(body.Note) == "" {
+		writeKnowledgeError(w, http.StatusBadRequest, "INVALID", "a reason for reopening is required")
+		return
+	}
+	if err := h.writer.ReopenChapter(r.Context(), id, body.Note, time.Now()); err != nil {
+		h.logger.Warn().Err(err).Str("chapter", id).Msg("chronicle reopen failed")
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to reopen chapter")
+		return
+	}
+	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"reopened": true})
+}

@@ -140,7 +140,8 @@ func (s *Server) setupRoutes() {
 			r.Get("/", s.handleChronicleList)
 			r.Post("/run", s.handleChronicleRun) // manual trigger (force today's act)
 			r.Get("/{id}", s.handleChronicleGet)
-			r.Post("/{id}/close", s.handleChronicleClose) // write a closing act + close the chapter
+			r.Post("/{id}/close", s.handleChronicleClose)   // write a closing act + close the chapter
+			r.Post("/{id}/reopen", s.handleChronicleReopen) // reopen with a reason the night narrates
 		})
 
 		// Mail endpoints

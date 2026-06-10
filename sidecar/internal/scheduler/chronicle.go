@@ -179,6 +179,29 @@ func (w *ChronicleWriter) CloseChapter(ctx context.Context, chapterID, note stri
 	return w.store.UpsertChronicleChapter(ctx, chap)
 }
 
+// ReopenChapter flips a closed chapter back to open and stages the user's free-text
+// reason as a pending note. No LLM here — the next pass (nightly, or a manual run)
+// folds the note into a resumption entry, corroborated by traces in the window. The
+// "life" chapter is always open and cannot be reopened.
+func (w *ChronicleWriter) ReopenChapter(ctx context.Context, chapterID, note string, now time.Time) error {
+	if w == nil {
+		return fmt.Errorf("chronicle writer not configured")
+	}
+	if chapterID == chronicleLifeChapterID {
+		return fmt.Errorf("the life chapter is always open")
+	}
+	chap, err := w.store.GetChronicleChapter(ctx, chapterID)
+	if err != nil {
+		return err
+	}
+	if chap == nil {
+		return fmt.Errorf("chapter not found")
+	}
+	chap.Status = "open"
+	chap.PendingNote = strings.TrimSpace(note)
+	return w.store.UpsertChronicleChapter(ctx, chap)
+}
+
 // generateClosing runs the bounded closing LLM call (no synopsis update). Streamed
 // on the no-timeout client like generate().
 func (w *ChronicleWriter) generateClosing(ctx context.Context, synopsis, note string) (string, error) {
@@ -226,13 +249,14 @@ func (w *ChronicleWriter) writeChapter(ctx context.Context, chap *store.Chronicl
 	if err != nil {
 		return false, err
 	}
-	if len(items) == 0 {
-		return false, nil
+	pendingNote := strings.TrimSpace(chap.PendingNote)
+	if len(items) == 0 && pendingNote == "" {
+		return false, nil // nothing new and no reopen note → skip (0 tokens)
 	}
 
 	today := now.UTC().Format("2006-01-02")
 	actID := "chronicle:" + chap.ID + ":" + today
-	if !force {
+	if !force && pendingNote == "" {
 		if existing, _ := w.store.GetKnowledgeItem(ctx, actID); existing != nil {
 			return false, nil // already chronicled today
 		}
@@ -240,7 +264,7 @@ func (w *ChronicleWriter) writeChapter(ctx context.Context, chap *store.Chronicl
 
 	traces, sources := buildNumberedTraces(items)
 	periodLabel := periodStart.Format("2 Jan") + " – " + now.Format("2 Jan 2006")
-	act, synopsis, gerr := w.generate(ctx, chap.Title, chap.Synopsis, traces, periodLabel)
+	act, synopsis, gerr := w.generate(ctx, chap.Title, chap.Synopsis, traces, periodLabel, pendingNote)
 	if gerr != nil {
 		return false, gerr // surface; don't advance the watermark → next run retries
 	}
@@ -250,8 +274,8 @@ func (w *ChronicleWriter) writeChapter(ctx context.Context, chap *store.Chronicl
 		return false, nil
 	}
 
-	if force {
-		_ = w.store.DeleteKnowledgeItem(ctx, actID)
+	if force || pendingNote != "" {
+		_ = w.store.DeleteKnowledgeItem(ctx, actID) // overwrite today's act on force / reopen
 	}
 	if err := w.store.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
 		ContentID:      actID,
@@ -272,6 +296,7 @@ func (w *ChronicleWriter) writeChapter(ctx context.Context, chap *store.Chronicl
 	}
 
 	chap.Status = "open" // (re)open on write
+	chap.PendingNote = "" // the reopen note, if any, is now narrated
 	if s := strings.TrimSpace(synopsis); s != "" {
 		chap.Synopsis = s
 	}
@@ -316,13 +341,22 @@ func (w *ChronicleWriter) gatherFor(ctx context.Context, chap *store.ChronicleCh
 
 // generate runs the bounded LLM call → (act, updatedSynopsis, err). Streamed on the
 // no-timeout client (a background narrative must not be cut by the 30s timeout).
-func (w *ChronicleWriter) generate(ctx context.Context, title, synopsis, traces, dateLabel string) (string, string, error) {
+// reopenNote, when set, is the user's own words on why the chapter resumes — it seeds
+// a resumption entry, corroborated by whatever traces fall in the window.
+func (w *ChronicleWriter) generate(ctx context.Context, title, synopsis, traces, dateLabel, reopenNote string) (string, string, error) {
 	storySoFar := strings.TrimSpace(synopsis)
 	if storySoFar == "" {
 		storySoFar = "(this is the first entry — there is no prior story yet)"
 	}
+	if strings.TrimSpace(traces) == "" {
+		traces = "(none)"
+	}
 	user := fmt.Sprintf("CHAPTER: %s\n\nSTORY SO FAR:\n%s\n\nNEW TRACES (period %s):\n%s",
 		title, storySoFar, dateLabel, traces)
+	if n := strings.TrimSpace(reopenNote); n != "" {
+		user += fmt.Sprintf("\n\nTHE USER IS REOPENING THIS CHAPTER. In their words: «%s»\n"+
+			"Write a resumption entry now: pick the story back up from here, grounded in their words and in any traces above that corroborate them. If the traces are thin, narrate the resumption itself from what they said — do not invent beyond it.", n)
+	}
 	var sb strings.Builder
 	err := w.llm.StreamChat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{

@@ -307,6 +307,14 @@ CREATE TABLE IF NOT EXISTS chronicle_chapters (
 );
 `,
 	},
+	// Migration 17 — Chronicle reopen: a staged, free-text note set when the user
+	// reopens a closed chapter. The next nightly write folds it into the resumption
+	// narration (grounded by the user's own words + corroborating traces), then clears it.
+	{
+		Version: 17,
+		Name:    "chronicle_pending_note",
+		SQL:     `ALTER TABLE chronicle_chapters ADD COLUMN pending_note TEXT NOT NULL DEFAULT '';`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

@@ -244,6 +244,8 @@ export const api = {
   chronicleRun: () => postJSON<{ started: boolean }>("/chronicle/run", {}),
   closeChronicleChapter: (id: string, note: string) =>
     postJSON<{ started: boolean }>(`/chronicle/${encodeURIComponent(id)}/close`, { note }),
+  reopenChronicleChapter: (id: string, note: string) =>
+    postJSON<{ reopened: boolean }>(`/chronicle/${encodeURIComponent(id)}/reopen`, { note }),
 
   task: (id: string) => getJSON<Task>(`/tasks/${id}`),
   createTask: (body: {
