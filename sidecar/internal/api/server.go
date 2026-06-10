@@ -524,15 +524,6 @@ func (s *Server) handleBriefRun(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
-// handleBriefMeeting handles POST /brief/meeting.
-func (s *Server) handleBriefMeeting(w http.ResponseWriter, r *http.Request) {
-	if s.briefHandler != nil {
-		s.briefHandler.Meeting(w, r)
-		return
-	}
-	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
-}
-
 // handleBriefingsList handles GET /briefings.
 func (s *Server) handleBriefingsList(w http.ResponseWriter, r *http.Request) {
 	if s.briefHandler != nil {

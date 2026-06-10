@@ -218,11 +218,8 @@ func (s *Server) setupRoutes() {
 		// asynchronously; the result lands in /events as a `brief` event.
 		r.Post("/brief/run", s.handleBriefRun)
 
-		// Meeting briefing — POST /brief/meeting generates a RAG briefing for
-		// one calendar event (the macOS app calls this ~30 min before).
-		r.Post("/brief/meeting", s.handleBriefMeeting)
-
-		// GET /briefings — unified list of daily briefs + meeting briefings.
+		// GET /briefings — unified list of daily briefs + meeting briefings
+		// (meeting briefs now come from the server-side MeetingBriefScheduler).
 		r.Get("/briefings", s.handleBriefingsList)
 
 		// Config read/write — exposes the tunable sidecar config to the macOS app.

@@ -16,12 +16,11 @@ import (
 )
 
 // BriefHandler exposes on-demand triggers for the daily brief task plus the
-// meeting-briefing endpoint and the unified briefings listing.
+// unified briefings listing.
 type BriefHandler struct {
-	brief   *scheduler.DailyBrief
-	meeting *scheduler.MeetingBriefer
-	store   *store.DB
-	logger  zerolog.Logger
+	brief  *scheduler.DailyBrief
+	store  *store.DB
+	logger zerolog.Logger
 }
 
 // NewBriefHandler builds a brief handler. The brief argument may be nil
@@ -33,9 +32,6 @@ func NewBriefHandler(brief *scheduler.DailyBrief, logger zerolog.Logger) *BriefH
 		logger: logger.With().Str("handler", "brief").Logger(),
 	}
 }
-
-// SetMeetingBriefer wires the meeting briefer used by POST /brief/meeting.
-func (h *BriefHandler) SetMeetingBriefer(m *scheduler.MeetingBriefer) { h.meeting = m }
 
 // SetStore wires the store used by GET /briefings to list stored briefs.
 func (h *BriefHandler) SetStore(db *store.DB) { h.store = db }
@@ -109,63 +105,6 @@ func (h *BriefHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-// meetingBriefRequest is the JSON body for POST /brief/meeting, sent by the
-// macOS app ~30 min before a calendar event.
-type meetingBriefRequest struct {
-	EventID   string   `json:"event_id"`
-	Title     string   `json:"title"`
-	Attendees []string `json:"attendees,omitempty"`
-	Notes     string   `json:"notes,omitempty"`
-	Location  string   `json:"location,omitempty"`
-	Start     string   `json:"start"` // RFC3339
-}
-
-// Meeting handles POST /brief/meeting — generate a briefing for one calendar
-// event synchronously and return it. When the KB has no relevant context the
-// response carries relevant=false and no notification is emitted.
-func (h *BriefHandler) Meeting(w http.ResponseWriter, r *http.Request) {
-	if h.meeting == nil {
-		writeBriefError(w, http.StatusServiceUnavailable, "MEETING_BRIEF_DISABLED", "Meeting briefing is not configured.")
-		return
-	}
-	var req meetingBriefRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeBriefError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
-		return
-	}
-	if req.Title == "" {
-		writeBriefError(w, http.StatusBadRequest, "VALIDATION_ERROR", "title is required")
-		return
-	}
-	when := time.Now()
-	if req.Start != "" {
-		if t, err := time.Parse(time.RFC3339, req.Start); err == nil {
-			when = t
-		}
-	}
-	key := req.EventID
-	if key == "" {
-		key = req.Title
-	}
-	result, err := h.meeting.Generate(r.Context(), scheduler.MeetingInput{
-		Kind:      "calendar",
-		Key:       key,
-		Title:     req.Title,
-		Attendees: req.Attendees,
-		Notes:     req.Notes,
-		Location:  req.Location,
-		When:      when,
-	})
-	if err != nil {
-		h.logger.Warn().Err(err).Str("title", req.Title).Msg("meeting brief failed")
-		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate briefing")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(result)
 }
 
 // BriefingDTO is one entry in the unified briefings list (daily + meeting).

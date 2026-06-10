@@ -963,15 +963,12 @@ func main() {
 		}
 	}
 
-	// Meeting briefings — short RAG briefings ahead of events/deadlines.
-	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
-	//    each event (it owns EventKit); the briefer generates + emits the SSE.
-	//  - Mail-extracted deadlines: the scheduler below briefs them the morning
-	//    they fall due. Both paths emit a `meeting_briefing` event the app turns
-	//    into a notification, and persist a `meeting_brief` knowledge item that
-	//    the Briefings view lists.
+	// Meeting briefings — short RAG briefings ahead of events/deadlines, emitted
+	// server-side by the scheduler: upcoming calendar events (source_type=event)
+	// and mail-extracted deadlines due today. Each emits a `meeting_briefing`
+	// event (→ notification) + persists a `meeting_brief` item for the Briefings
+	// view. (The old per-event POST /brief/meeting native path is retired.)
 	meetingBriefer := scheduler.NewMeetingBriefer(db, llmClient, unifiedSearcher, broker, logger)
-	briefHandler.SetMeetingBriefer(meetingBriefer)
 	briefHandler.SetStore(db)
 	scheduler.NewMeetingBriefScheduler(meetingBriefer, db, agendaExtractor, 8, logger).Start(ctx)
 
