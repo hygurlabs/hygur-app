@@ -1,0 +1,27 @@
+# Hygur
+
+> Hygur is a local-first, memory-augmented AI assistant. It indexes your mail, notes, and documents on your own machine, then answers questions, surfaces what needs your attention, and drafts replies — without sending your data to anyone. An optional managed "Hygur Cloud" runs a private instance for you on infrastructure located in the European Union.
+
+## What Hygur does
+
+- **Local-first**: your documents, mail, notes, and prompts stay on your machine (or, with Hygur Cloud, in your own private EU instance, encrypted at rest). Run it fully offline with a local model — turn off the network and it still works on everything already indexed.
+- **One place for everything**: indexes mail, notes, and documents, with hybrid search (keyword + semantic) across all of it.
+- **Daily brief**: summarises what's new and what needs attention across your mail and calendar.
+- **Catches contradictions**: flags when two sources disagree (e.g. two emails citing different amounts or dates for the same thing), with citations.
+- **Drafts, never sends**: prepares reply drafts and task suggestions; it never sends mail or deletes anything without you.
+- **Calendar & tasks**: surfaces events and turns follow-ups into tasks.
+- **Yours to keep**: export everything at any time. We never train any model on your data and never sell or share it.
+
+## Privacy
+
+Hygur is built so your private data never reaches us by default. The local app sends nothing to our servers. Hygur Cloud (optional) processes only what you push to your instance, in the EU, encrypted at rest, with no model training on your data.
+
+## Links
+
+- Website: https://hygur.ai
+- Privacy Policy: https://hygur.ai/#/privacy
+- Terms of Service: https://hygur.ai/#/terms
+
+## Company
+
+Hygur is published by 0x0800 SRL (Belgium). Payments are processed by Stripe.
