@@ -46,6 +46,10 @@ type Client struct {
 	// embeddings are always recorded under "embedding".
 	usageRecorder UsageRecorder
 	chatCategory  string
+	// omitChatTemplateKwargs strips chat_template_kwargs from every chat request
+	// (set from config for hosted backends that reject the field — e.g. Gemma on
+	// Infomaniak). Default false keeps the vLLM/Qwen enable_thinking:false path.
+	omitChatTemplateKwargs bool
 }
 
 // UsageRecorder receives token usage observed by the client. Implementations
@@ -399,14 +403,15 @@ func NewClient(cfg *config.LMStudioConfig) *Client {
 		embeddingTimeout = defaultEmbeddingTimeout
 	}
 	return &Client{
-		baseURL:            strings.TrimSuffix(cfg.URL, "/"),
-		embeddingBaseURL:   strings.TrimSuffix(cfg.EmbeddingURL, "/"),
-		timeout:            cfg.Timeout,
-		maxRetries:         cfg.MaxRetries,
-		embeddingModel:     cfg.EmbeddingModel,
-		embeddingMaxTokens: maxTokens,
-		embeddingBatchSize: cfg.EmbeddingBatchSize,
-		apiKey:             cfg.APIKey,
+		baseURL:                strings.TrimSuffix(cfg.URL, "/"),
+		embeddingBaseURL:       strings.TrimSuffix(cfg.EmbeddingURL, "/"),
+		timeout:                cfg.Timeout,
+		maxRetries:             cfg.MaxRetries,
+		embeddingModel:         cfg.EmbeddingModel,
+		embeddingMaxTokens:     maxTokens,
+		embeddingBatchSize:     cfg.EmbeddingBatchSize,
+		apiKey:                 cfg.APIKey,
+		omitChatTemplateKwargs: cfg.NoChatTemplateKwargs,
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
@@ -481,6 +486,9 @@ func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.
 	// it — keeps the request identical to before for callers without a recorder.
 	if c.usageRecorder != nil && req.StreamOptions == nil {
 		req.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
+	if c.omitChatTemplateKwargs {
+		req.ChatTemplateKwargs = nil // hosted backend rejects the field
 	}
 
 	body, err := json.Marshal(req)
@@ -560,6 +568,9 @@ func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.
 // Chat sends a non-streaming chat request and returns the complete response.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	req.Stream = false
+	if c.omitChatTemplateKwargs {
+		req.ChatTemplateKwargs = nil // hosted backend rejects the field
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {

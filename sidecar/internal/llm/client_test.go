@@ -957,3 +957,44 @@ func BenchmarkStreamChat(b *testing.B) {
 		})
 	}
 }
+
+// TestChatOmitsChatTemplateKwargs verifies the NoChatTemplateKwargs config gate:
+// when set, chat_template_kwargs is stripped from the wire request (for hosted
+// backends like Gemma on Infomaniak that reject the field); when unset, it is
+// sent as before (vLLM/Qwen enable_thinking:false path).
+func TestChatOmitsChatTemplateKwargs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		omit bool
+		want bool // expect chat_template_kwargs present on the wire
+	}{
+		{"default sends it", false, true},
+		{"gated strips it", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+			}))
+			defer server.Close()
+
+			client := NewClient(&config.LMStudioConfig{
+				URL: server.URL, Timeout: 10 * time.Second, MaxRetries: 1,
+				NoChatTemplateKwargs: tc.omit,
+			})
+			_, err := client.Chat(context.Background(), ChatRequest{
+				Messages:           []Message{{Role: "user", Content: "hi"}},
+				ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+			})
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if got := strings.Contains(gotBody, "chat_template_kwargs"); got != tc.want {
+				t.Errorf("chat_template_kwargs present=%v, want %v (body: %s)", got, tc.want, gotBody)
+			}
+		})
+	}
+}

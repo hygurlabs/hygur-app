@@ -230,6 +230,13 @@ type LMStudioConfig struct {
 	// Falls back to ModelDefault when empty.
 	VisionModel string `mapstructure:"vision_model"`
 
+	// NoChatTemplateKwargs omits chat_template_kwargs (e.g. {"enable_thinking":
+	// false}) from chat requests. Set true for hosted backends that reject unknown
+	// request fields — e.g. Gemma on Infomaniak, OpenAI, Mistral. Leave false for
+	// vLLM/SGLang (Qwen3, Nemotron) which NEED enable_thinking:false to suppress
+	// reasoning. Env: HYGUR_LM_STUDIO_NO_CHAT_TEMPLATE_KWARGS.
+	NoChatTemplateKwargs bool `mapstructure:"no_chat_template_kwargs"`
+
 	// EmbeddingMaxTokens is the per-input token budget enforced before sending
 	// requests to the embedding endpoint. Inputs that exceed it are truncated
 	// so they never trigger a 500 "input too large" from servers whose

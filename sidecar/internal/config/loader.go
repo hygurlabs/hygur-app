@@ -126,6 +126,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("lm_studio.embedding_max_tokens", DefaultEmbeddingMaxTokens)
 	v.SetDefault("lm_studio.timeout", DefaultLMStudioTimeout)
 	v.SetDefault("lm_studio.max_retries", DefaultMaxRetries)
+	// Empty default so AutomaticEnv binds HYGUR_LM_STUDIO_NO_CHAT_TEMPLATE_KWARGS
+	// (viper only env-binds keys it already knows). Default false = send the
+	// kwarg (vLLM/Qwen path); set true for hosted backends that reject it.
+	v.SetDefault("lm_studio.no_chat_template_kwargs", false)
 
 	// Store defaults
 	v.SetDefault("store.path", DefaultStorePath)
