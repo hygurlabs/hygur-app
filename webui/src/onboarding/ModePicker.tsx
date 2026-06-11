@@ -102,17 +102,11 @@ export function ModePicker({
     const ep = server.trim().replace(/\/+$/, "");
     if (!ep) return setError("Enter your Hygur Cloud server URL.");
     if (!tokenSet && !token.trim()) return setError("A device token is required.");
-    setBusy(true);
     setError(null);
-    try {
-      // Reachability sanity check (public /version; the cloud allows the loopback origin).
-      const r = await fetch(ep + "/version");
-      if (!r.ok) throw new Error(`server responded ${r.status}`);
-    } catch (e) {
-      setError(`Couldn't reach ${ep} — ${(e as Error).message}`);
-      setBusy(false);
-      return;
-    }
+    // No client-side reachability probe here: the desktop webview can't reach the
+    // tenant cross-origin (CORS → "Load failed"), while the sidecar proxies to it
+    // server-side just fine. apply() restarts the sidecar in cloud mode — that
+    // restart IS the real connection test.
     await apply({
       mode: "cloud",
       server: ep,
@@ -184,8 +178,11 @@ export function ModePicker({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8">
-      <div className="w-full max-w-[460px]">
+    // Scrollable overlay: centers when the form fits, scrolls when the window is
+    // short (the cloud form is tall — otherwise the Connect button is unreachable).
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-bg">
+      <div className="flex min-h-full flex-col items-center justify-center px-8 py-10">
+        <div className="w-full max-w-[460px]">
         <div className="mb-7 flex flex-col items-center text-center">
           <img src={logo} alt="" className="mb-4 size-20 rounded-[22%] shadow-sm" />
           <h1 className="font-display text-[26px] font-semibold leading-tight tracking-tight">
@@ -354,6 +351,7 @@ export function ModePicker({
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>,
     document.body,
