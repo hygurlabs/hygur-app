@@ -108,6 +108,10 @@ const maxToolRounds = 5
 // without crowding out the actual conversation context.
 const memoryInjectionTokenBudget = 500
 
+// decisionInjectionMax caps how many standing decisions are injected as brain
+// context per turn (most recent first), so the block never dominates the prompt.
+const decisionInjectionMax = 8
+
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
 	llmClient       *llm.Client
@@ -565,6 +569,25 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err == nil && len(hits) > 0 {
 			messages = injectMemoriesIntoSystem(messages, hits)
 		}
+	}
+
+	// Brain context (Direction A): Hygur's own signals — the user's standing
+	// decisions + the running "story so far" synopsis — so a chat answer can
+	// ground in "you decided X" / the ongoing narrative even when document
+	// retrieval didn't surface them. Cheap (no LLM), bounded, best-effort.
+	if h.chatStore != nil {
+		var decisions []*store.Decision
+		if ds, err := h.chatStore.ListDecisions(r.Context(), "", "standing"); err == nil {
+			if len(ds) > decisionInjectionMax {
+				ds = ds[:decisionInjectionMax]
+			}
+			decisions = ds
+		}
+		var synopsis string
+		if ch, err := h.chatStore.GetChronicleChapter(r.Context(), "life"); err == nil && ch != nil {
+			synopsis = ch.Synopsis
+		}
+		messages = injectBrainContext(messages, decisions, synopsis)
 	}
 
 	// Build the LLM request
@@ -1050,6 +1073,50 @@ func injectMemoriesIntoSystem(messages []llm.Message, memories []tools.MemoryRes
 		out = append(out, messages[1:]...)
 	} else {
 		out = append(out, llm.Message{Role: "system", Content: memBlock})
+		out = append(out, messages...)
+	}
+	return out
+}
+
+// injectBrainContext prepends a compact, grounded block of Hygur's own signals —
+// the user's standing decisions and the running life synopsis — so the assistant
+// can reference "you decided X" / the ongoing story even when document retrieval
+// didn't surface them. Cheap lookups (no LLM), bounded, grounded in stored state.
+func injectBrainContext(messages []llm.Message, decisions []*store.Decision, synopsis string) []llm.Message {
+	if len(decisions) == 0 && strings.TrimSpace(synopsis) == "" {
+		return messages
+	}
+	var b strings.Builder
+	if len(decisions) > 0 {
+		b.WriteString("## The user's standing decisions\n\n")
+		for _, d := range decisions {
+			b.WriteString("- ")
+			b.WriteString(d.Statement)
+			if len(d.DecidedOn) >= 10 {
+				b.WriteString(" (")
+				b.WriteString(d.DecidedOn[:10])
+				b.WriteString(")")
+			}
+			b.WriteString("\n")
+		}
+	}
+	if s := strings.TrimSpace(synopsis); s != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## The story so far\n\n")
+		b.WriteString(s)
+		b.WriteString("\n")
+	}
+	block := b.String()
+
+	hasSystem := len(messages) > 0 && messages[0].Role == "system"
+	out := make([]llm.Message, 0, len(messages)+1)
+	if hasSystem {
+		out = append(out, llm.Message{Role: "system", Content: messages[0].Content + "\n\n" + block})
+		out = append(out, messages[1:]...)
+	} else {
+		out = append(out, llm.Message{Role: "system", Content: block})
 		out = append(out, messages...)
 	}
 	return out
