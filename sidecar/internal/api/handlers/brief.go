@@ -373,6 +373,76 @@ func (h *BriefHandler) ClaimContradictions(w http.ResponseWriter, r *http.Reques
 	_ = json.NewEncoder(w).Encode(map[string]any{"contradictions": out, "scanned": scanned})
 }
 
+// Digest handles GET /digest — the daily "state of your world" surface
+// (Direction C). It ASSEMBLES already-computed signals into one proactive view:
+// where things stand (the life synopsis), open contradictions, decisions awaiting
+// confirmation, and tasks due soon. Cheap reads + the durable contradiction cache
+// — no mega-prompt; this is composition, not generation.
+func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	ctx := r.Context()
+	const (
+		maxContradictions = 5
+		maxDecisions      = 8
+		maxTasks          = 10
+	)
+
+	// Where things stand: the rolling life synopsis (compact, grounded).
+	var synopsis string
+	if ch, err := h.store.GetChronicleChapter(ctx, "life"); err == nil && ch != nil {
+		synopsis = ch.Synopsis
+	}
+
+	// Open contradictions (non-dismissed). Uses the cached/durable reconcile path.
+	contradictions := make([]contradict.ReconciledConflict, 0, maxContradictions)
+	if h.brief != nil {
+		if conflicts, _, err := h.brief.SemanticContradictions(ctx, ""); err == nil {
+			dismissed, _ := h.store.DismissedContradictions(ctx)
+			for _, c := range conflicts {
+				if dismissed[c.Key] {
+					continue
+				}
+				contradictions = append(contradictions, c)
+				if len(contradictions) >= maxContradictions {
+					break
+				}
+			}
+		} else {
+			h.logger.Debug().Err(err).Msg("digest: contradictions unavailable")
+		}
+	}
+
+	// Decisions awaiting confirmation.
+	proposed := []*store.Decision{}
+	if ds, err := h.store.ListDecisions(ctx, "", "proposed"); err == nil {
+		if len(ds) > maxDecisions {
+			ds = ds[:maxDecisions]
+		}
+		proposed = ds
+	}
+
+	// Tasks due within the next week (open, dated, soonest first).
+	dueTasks := []*store.Task{}
+	cutoff := time.Now().AddDate(0, 0, 7).UTC().Format(time.RFC3339)
+	if ts, err := h.store.TasksDueBefore(ctx, cutoff); err == nil {
+		if len(ts) > maxTasks {
+			ts = ts[:maxTasks]
+		}
+		dueTasks = ts
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"synopsis":           synopsis,
+		"contradictions":     contradictions,
+		"proposed_decisions": proposed,
+		"due_tasks":          dueTasks,
+	})
+}
+
 // dismissContradictionRequest is the body of POST /knowledge/contradictions/dismiss.
 type dismissContradictionRequest struct {
 	Key  string `json:"key"`

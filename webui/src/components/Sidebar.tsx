@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   MessageSquareText,
+  Sunrise,
   Library,
   StickyNote,
   Tag,
@@ -34,6 +35,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: "/", label: "Ask", icon: MessageSquareText, end: true },
+  { to: "/digest", label: "Today", icon: Sunrise },
   { to: "/library", label: "Library", icon: Library },
   { to: "/notes", label: "Notes", icon: StickyNote },
   { to: "/projects", label: "Projects", icon: FolderKanban },

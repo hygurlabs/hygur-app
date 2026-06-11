@@ -242,6 +242,10 @@ func (s *Server) setupRoutes() {
 		// (meeting briefs now come from the server-side MeetingBriefScheduler).
 		r.Get("/briefings", s.handleBriefingsList)
 
+		// GET /digest — the daily composed "state of your world" (Direction C):
+		// life synopsis + open contradictions + decisions to confirm + tasks due.
+		r.Get("/digest", s.handleDigest)
+
 		// Config read/write — exposes the tunable sidecar config to the macOS app.
 		// Changes are persisted to config.yaml and take effect on next restart.
 		r.Get("/config", s.handleGetConfig)

@@ -340,6 +340,23 @@ CREATE INDEX IF NOT EXISTS idx_decision_attrs_status ON decision_attrs(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_attrs_dedup ON decision_attrs(dedup_key) WHERE dedup_key != '';
 `,
 	},
+	// Migration 19 — durable cache of reconciled contradictions (W6). The
+	// reconciliation is LLM-backed and was only cached in-memory (lost on restart,
+	// per-process). Persisting the latest result per scope makes it readable
+	// instantly + cheaply by Ask (brain-context injection) and the daily digest,
+	// without recomputing. One JSON blob per scope ("" = all mail+notes).
+	{
+		Version: 19,
+		Name:    "contradiction_cache",
+		SQL: `
+CREATE TABLE IF NOT EXISTS contradiction_cache (
+    scope         TEXT PRIMARY KEY,
+    conflicts     TEXT NOT NULL DEFAULT '[]',
+    scanned       INTEGER NOT NULL DEFAULT 0,
+    computed_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

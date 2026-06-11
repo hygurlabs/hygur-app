@@ -29,6 +29,7 @@ import type {
   ChronicleChapterDetail,
   SidecarConfigPatch,
   Decision,
+  Digest,
   Tag,
   TagItem,
   Task,
@@ -299,6 +300,9 @@ export const api = {
   ) => patchJSON(`/decisions/${encodeURIComponent(id)}`, patch),
   deleteDecision: (id: string) => del(`/decisions/${encodeURIComponent(id)}`),
   scanDecisions: () => postJSON<{ started: boolean }>("/decisions/scan", {}),
+
+  // Daily composed digest — the "state of your world" surface.
+  digest: () => getJSON<Digest>("/digest"),
 
   // Notes — full CRUD.
   notes: () => getJSON<{ notes: Note[] }>("/notes"),

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -62,6 +63,22 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 	}
 	semContraMu.Unlock()
 
+	// Cold in-memory cache (e.g. after a restart): fall back to the durable cache
+	// before recomputing — the reconcile is LLM-backed, so a fresh-enough row
+	// saves the cost. Repopulates the in-memory cache.
+	if js, scanned, age, found, err := d.store.GetContradictionCache(ctx, projectID); err == nil && found && age < semanticContradictionsTTL {
+		var cached []contradict.ReconciledConflict
+		if json.Unmarshal([]byte(js), &cached) == nil {
+			if cached == nil {
+				cached = []contradict.ReconciledConflict{}
+			}
+			semContraMu.Lock()
+			semContraCache[key] = semContraEntry{conflicts: cached, scanned: scanned, expires: time.Now().Add(semanticContradictionsTTL - age)}
+			semContraMu.Unlock()
+			return cached, scanned, nil
+		}
+	}
+
 	items, err := d.contradictionItems(ctx, projectID)
 	if err != nil {
 		return nil, 0, err
@@ -75,6 +92,11 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 	semContraMu.Lock()
 	semContraCache[key] = semContraEntry{conflicts: reconciled, scanned: len(items), expires: time.Now().Add(semanticContradictionsTTL)}
 	semContraMu.Unlock()
+	// Write-through to the durable cache so Ask + the digest can read it cheaply,
+	// and a restart doesn't force a recompute. Best-effort.
+	if blob, mErr := json.Marshal(reconciled); mErr == nil {
+		_ = d.store.PutContradictionCache(ctx, projectID, string(blob), len(items))
+	}
 	return reconciled, len(items), nil
 }
 

@@ -624,6 +624,15 @@ func (s *Server) handleBriefRun(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
+// handleDigest handles GET /digest — the daily composed "state of your world".
+func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.Digest(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
 // handleBriefingsList handles GET /briefings.
 func (s *Server) handleBriefingsList(w http.ResponseWriter, r *http.Request) {
 	if s.briefHandler != nil {

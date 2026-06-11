@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/agenda"
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/intent"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/retrieval"
@@ -111,6 +112,11 @@ const memoryInjectionTokenBudget = 500
 // decisionInjectionMax caps how many standing decisions are injected as brain
 // context per turn (most recent first), so the block never dominates the prompt.
 const decisionInjectionMax = 8
+
+// contradictionInjectionMax caps how many open contradictions are injected as
+// brain context per turn. Read from the durable cache (never computed in the chat
+// path), so injection stays cheap and non-blocking.
+const contradictionInjectionMax = 5
 
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
@@ -587,7 +593,26 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ch, err := h.chatStore.GetChronicleChapter(r.Context(), "life"); err == nil && ch != nil {
 			synopsis = ch.Synopsis
 		}
-		messages = injectBrainContext(messages, decisions, synopsis)
+		// Open contradictions from the DURABLE cache only — never computed here, so
+		// the chat path stays cheap + non-blocking. Empty until the digest /
+		// Contradictions view has warmed it. Dismissed ones are filtered out.
+		var contradictions []contradict.ReconciledConflict
+		if js, _, _, found, err := h.chatStore.GetContradictionCache(r.Context(), ""); err == nil && found {
+			var all []contradict.ReconciledConflict
+			if json.Unmarshal([]byte(js), &all) == nil && len(all) > 0 {
+				dismissed, _ := h.chatStore.DismissedContradictions(r.Context())
+				for _, c := range all {
+					if dismissed[c.Key] {
+						continue
+					}
+					contradictions = append(contradictions, c)
+					if len(contradictions) >= contradictionInjectionMax {
+						break
+					}
+				}
+			}
+		}
+		messages = injectBrainContext(messages, decisions, synopsis, contradictions)
 	}
 
 	// Build the LLM request
@@ -1082,8 +1107,8 @@ func injectMemoriesIntoSystem(messages []llm.Message, memories []tools.MemoryRes
 // the user's standing decisions and the running life synopsis — so the assistant
 // can reference "you decided X" / the ongoing story even when document retrieval
 // didn't surface them. Cheap lookups (no LLM), bounded, grounded in stored state.
-func injectBrainContext(messages []llm.Message, decisions []*store.Decision, synopsis string) []llm.Message {
-	if len(decisions) == 0 && strings.TrimSpace(synopsis) == "" {
+func injectBrainContext(messages []llm.Message, decisions []*store.Decision, synopsis string, contradictions []contradict.ReconciledConflict) []llm.Message {
+	if len(decisions) == 0 && strings.TrimSpace(synopsis) == "" && len(contradictions) == 0 {
 		return messages
 	}
 	var b strings.Builder
@@ -1096,6 +1121,35 @@ func injectBrainContext(messages []llm.Message, decisions []*store.Decision, syn
 				b.WriteString(" (")
 				b.WriteString(d.DecidedOn[:10])
 				b.WriteString(")")
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(contradictions) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## Open contradictions in the user's records\n\n")
+		for _, c := range contradictions {
+			b.WriteString("- ")
+			if c.Entity != "" {
+				b.WriteString(c.Entity)
+				b.WriteString(" — ")
+			}
+			b.WriteString(c.Attribute)
+			vals := make([]string, 0, len(c.Members))
+			for _, m := range c.Members {
+				if m.Value != "" {
+					vals = append(vals, m.Value)
+				}
+			}
+			if len(vals) > 0 {
+				b.WriteString(": ")
+				b.WriteString(strings.Join(vals, " vs "))
+			}
+			if c.Verdict.Reason != "" {
+				b.WriteString(" — ")
+				b.WriteString(c.Verdict.Reason)
 			}
 			b.WriteString("\n")
 		}

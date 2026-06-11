@@ -149,6 +149,16 @@ export interface Decision {
   updated_at: string;
 }
 
+/** The daily composed "state of your world" (GET /digest) — assembles already-
+ *  computed signals: where things stand, open contradictions, decisions to
+ *  confirm, tasks due soon. */
+export interface Digest {
+  synopsis: string;
+  contradictions: ReconciledConflict[];
+  proposed_decisions: Decision[];
+  due_tasks: Task[];
+}
+
 /** One cited side of a reconciled claim conflict (W6 REDUCE). */
 export interface ClaimRef {
   source_id: string;

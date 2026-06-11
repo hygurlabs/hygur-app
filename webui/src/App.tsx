@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Menu, RefreshCw, X } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { QuickCapture } from "./views/QuickCapture";
+import { Digest } from "./views/Digest";
 import { DetailPanelProvider } from "./components/DetailPanel";
 import { ActivityProvider } from "./lib/activity";
 import { useUpdateAvailable } from "./lib/version";
@@ -83,6 +84,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             <div className="relative min-h-0 flex-1 overflow-hidden">
               <Routes>
                 <Route path="/" element={<Ask />} />
+                <Route path="/digest" element={<Digest />} />
                 {/* Search merged into Library; redirect old links. */}
                 <Route path="/search" element={<Navigate to="/library" replace />} />
                 <Route path="/library" element={<Library />} />
