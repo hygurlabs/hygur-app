@@ -315,6 +315,31 @@ CREATE TABLE IF NOT EXISTS chronicle_chapters (
 		Name:    "chronicle_pending_note",
 		SQL:     `ALTER TABLE chronicle_chapters ADD COLUMN pending_note TEXT NOT NULL DEFAULT '';`,
 	},
+	// Migration 18 — Decisions: the user's decisions/commitments as first-class,
+	// note-like knowledge_items (source_type='decision') carrying a Markdown
+	// rationale, tags and a project like a note, plus decision state in
+	// decision_attrs (status, the date it was decided, the source item ids that
+	// ground it). status: 'proposed' (detected by the nightly scan, awaiting the
+	// user's confirmation), 'standing' (active), 'superseded' (no longer holds).
+	// dedup_key (hash of source ref + statement) makes the nightly scan idempotent
+	// — the same decision is never re-proposed.
+	{
+		Version: 18,
+		Name:    "decisions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS decision_attrs (
+    content_id   TEXT PRIMARY KEY REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'standing',
+    decided_on   TEXT NOT NULL DEFAULT '',
+    source_refs  TEXT NOT NULL DEFAULT '[]',
+    dedup_key    TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_decision_attrs_status ON decision_attrs(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_attrs_dedup ON decision_attrs(dedup_key) WHERE dedup_key != '';
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

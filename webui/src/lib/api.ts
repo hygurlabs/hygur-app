@@ -28,6 +28,7 @@ import type {
   ChronicleChapterSummary,
   ChronicleChapterDetail,
   SidecarConfigPatch,
+  Decision,
   Tag,
   TagItem,
   Task,
@@ -268,6 +269,36 @@ export const api = {
     },
   ) => patchJSON(`/tasks/${id}`, patch),
   deleteTask: (id: string) => del(`/tasks/${id}`),
+
+  // Decisions — the user's decisions/commitments, logged or proposed by the scan.
+  decisions: (projectId?: string, status?: string) => {
+    const qs = new URLSearchParams();
+    if (projectId) qs.set("project_id", projectId);
+    if (status) qs.set("status", status);
+    const q = qs.toString();
+    return getJSON<{ decisions: Decision[] }>(`/decisions${q ? `?${q}` : ""}`);
+  },
+  createDecision: (body: {
+    statement: string;
+    rationale?: string;
+    decided_on?: string;
+    source_ref?: string;
+    project_id?: string;
+    tag_ids?: string[];
+  }) => postJSON<Decision>("/decisions", body),
+  updateDecision: (
+    id: string,
+    patch: {
+      statement?: string;
+      rationale?: string;
+      status?: string;
+      decided_on?: string;
+      project_id?: string;
+      tag_ids?: string[];
+    },
+  ) => patchJSON(`/decisions/${encodeURIComponent(id)}`, patch),
+  deleteDecision: (id: string) => del(`/decisions/${encodeURIComponent(id)}`),
+  scanDecisions: () => postJSON<{ started: boolean }>("/decisions/scan", {}),
 
   // Notes — full CRUD.
   notes: () => getJSON<{ notes: Note[] }>("/notes"),

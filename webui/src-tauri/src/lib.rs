@@ -280,6 +280,33 @@ fn restart_sidecar(app: &AppHandle) {
     }
 }
 
+/// Sign out of the cloud account on desktop: drop the cloud binding (mode/server/
+/// token) from the config so the sidecar stops proxying, then restart it. Local
+/// source config (folder/proton) is left intact — it's account-independent. With
+/// `mode` cleared, the next load lands on the ModePicker (the desktop "login").
+#[tauri::command]
+fn sign_out_desktop(app: AppHandle) -> Result<(), String> {
+    let path = edge_config_path().ok_or("no HOME directory")?;
+    let mut next = load_edge_file();
+    next.mode = String::new();
+    next.server = String::new();
+    next.token = String::new();
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
+    }
+    let data = serde_json::to_string_pretty(&next).map_err(|e| format!("encode: {e}"))?;
+    std::fs::write(&path, data).map_err(|e| format!("write: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    restart_sidecar(&app);
+    Ok(())
+}
+
 /// Open a URL in the user's default SYSTEM browser (not the loopback webview) —
 /// used by the desktop passkey sign-in to launch cloud.hygur.ai, where the WebAuthn
 /// ceremony can run (it can't on the 127.0.0.1 webview origin).
@@ -305,7 +332,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![get_desktop_config, set_desktop_config, open_external])
+        .invoke_handler(tauri::generate_handler![get_desktop_config, set_desktop_config, sign_out_desktop, open_external])
         .manage(Sidecar {
             child: Mutex::new(None),
             shutting_down: AtomicBool::new(false),

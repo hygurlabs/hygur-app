@@ -76,6 +76,13 @@ export function randomState(): string {
   return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Signs out of the cloud account on desktop: the Tauri core drops the cloud
+ *  binding (mode/server/token) from the config and restarts the sidecar. The
+ *  caller waits for the restart and reloads → ModePicker (the desktop login). */
+export async function signOutDesktop(): Promise<void> {
+  await withTimeout(invoke<void>("sign_out_desktop"), 8000);
+}
+
 /** Persists the config. Returns true if the sidecar was restarted (a proxy-mode
  *  change), false if only source fields changed (the running edge loop re-reads
  *  those, no restart). The caller reloads only when restarted. */

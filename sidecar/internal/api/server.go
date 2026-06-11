@@ -33,6 +33,7 @@ type Server struct {
 	knowledgeHandler *handlers.KnowledgeHandler
 	projectHandler   *handlers.ProjectHandler
 	taskHandler      *handlers.TaskHandler
+	decisionHandler  *handlers.DecisionHandler
 	mailHandler      *handlers.MailHandler
 	searchHandler    *handlers.SearchHandler
 	notesHandler     *handlers.NotesHandler
@@ -261,6 +262,59 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+// SetDecisionHandler sets the decision handler for the server.
+func (s *Server) SetDecisionHandler(handler *handlers.DecisionHandler) {
+	s.decisionHandler = handler
+}
+
+func (s *Server) handleDecisionList(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionCreate(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Create(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionGet(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionPatch(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Patch(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionDelete(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Delete(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionScan(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Scan(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
 }
 
 // SetMailHandler sets the mail handler for the server.

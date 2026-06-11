@@ -9,6 +9,11 @@ const (
 	SourceTypeFile  = "file"
 	SourceTypeEvent = "event"
 	SourceTypeTask  = "task" // note-like to-do (body+tags+project) + task_attrs state
+	// SourceTypeDecision is a decision/commitment: a note-like item (statement +
+	// rationale + tags + project) plus decision_attrs state (status, decided_on,
+	// the source ids that ground it). Either logged by the user or proposed by the
+	// nightly scan from the user's own records.
+	SourceTypeDecision = "decision"
 )
 
 // MailSourceTypes is every source_type that represents a mail/email item.

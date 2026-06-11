@@ -979,6 +979,16 @@ func main() {
 	server.SetChronicleHandler(handlers.NewChronicleHandler(db, chronicleWriter, logger))
 	scheduler.NewChronicleScheduler(chronicleWriter, 22, logger).Start(ctx)
 
+	// Decisions — Hygur proposes the decisions it detects in the user's own
+	// records (nightly scan at 23:00 + a manual "Scan now"), for the user to
+	// confirm, making decisions first-class objects. Manual logging works even
+	// without the scanner; only the grounded scan needs the LLM.
+	decisionScanner := scheduler.NewDecisionScanner(db, llmClient, logger)
+	decisionHandler := handlers.NewDecisionHandler(db, decisionScanner, logger)
+	decisionHandler.SetEmbeddingService(embeddingService)
+	server.SetDecisionHandler(decisionHandler)
+	scheduler.NewDecisionScheduler(decisionScanner, 23, logger).Start(ctx)
+
 	// Agenda scheduler — runs daily at 08:00, emits agenda_alert events for
 	// high-priority items due within the next 48 h.
 	agendaScheduler := scheduler.NewAgendaScheduler(db, agendaExtractor, broker, "08:00", logger)

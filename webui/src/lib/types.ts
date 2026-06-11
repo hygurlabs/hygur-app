@@ -133,6 +133,22 @@ export interface Task {
   updated_at: string;
 }
 
+/** A decision/commitment as a first-class object: logged by the user or proposed
+ *  by the nightly grounded scan, then confirmed. A note-like knowledge_item
+ *  (statement + Markdown rationale + tags + project) plus decision state. */
+export interface Decision {
+  id: string;
+  statement: string;
+  rationale: string; // Markdown
+  status: string; // "proposed" | "standing" | "superseded"
+  decided_on?: string; // RFC3339
+  source_refs: string[]; // knowledge_item ids that ground it
+  project_id?: string;
+  tags: Tag[];
+  created_at: string;
+  updated_at: string;
+}
+
 /** One cited side of a reconciled claim conflict (W6 REDUCE). */
 export interface ClaimRef {
   source_id: string;

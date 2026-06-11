@@ -135,6 +135,17 @@ func (s *Server) setupRoutes() {
 			r.Delete("/{id}", s.handleTaskDelete)
 		})
 
+		// Decisions — the user's decisions/commitments as first-class objects:
+		// logged by hand or proposed by the nightly grounded scan, then confirmed.
+		r.Route("/decisions", func(r chi.Router) {
+			r.Get("/", s.handleDecisionList)
+			r.Post("/", s.handleDecisionCreate)
+			r.Post("/scan", s.handleDecisionScan) // manual trigger (grounded scan of recent items)
+			r.Get("/{id}", s.handleDecisionGet)
+			r.Patch("/{id}", s.handleDecisionPatch)
+			r.Delete("/{id}", s.handleDecisionDelete)
+		})
+
 		// Chronicle — Hygur's grounded narrative of the user's life (read as a book).
 		r.Route("/chronicle", func(r chi.Router) {
 			r.Get("/", s.handleChronicleList)

@@ -10,6 +10,7 @@ import {
   FolderKanban,
   GitCompareArrows,
   Scale,
+  Gavel,
   Newspaper,
   BookOpen,
   Brain,
@@ -22,6 +23,7 @@ import {
 import { api } from "../lib/api";
 import { useActivity } from "../lib/activity";
 import { clearTokens, isRemote } from "../lib/connection";
+import { getDesktopConfig, isDesktop, signOutDesktop, waitForSidecarThenReload } from "../lib/desktop";
 
 interface NavItem {
   to: string;
@@ -42,6 +44,7 @@ const NAV: NavItem[] = [
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
   { to: "/contradictions", label: "Contradictions", icon: Scale },
+  { to: "/decisions", label: "Decisions", icon: Gavel },
   { to: "/memory", label: "Memory", icon: Brain },
 ];
 
@@ -84,6 +87,26 @@ export function Sidebar({
     retry: false,
   });
 
+  // On desktop the cloud session lives in the Tauri config (the sidecar proxies
+  // with it), not localStorage — so isRemote() is false. Detect a cloud account
+  // via the config so "Sign out" shows, and route it through the Tauri command.
+  const { data: desktopCloud } = useQuery({
+    queryKey: ["desktop", "mode"],
+    queryFn: async () => (await getDesktopConfig()).mode === "cloud",
+    enabled: isDesktop(),
+    retry: false,
+  });
+  const canSignOut = isRemote() || desktopCloud === true;
+  const signOut = async () => {
+    onClose?.();
+    if (isDesktop()) {
+      await signOutDesktop();
+      await waitForSidecarThenReload();
+    } else {
+      clearTokens();
+    }
+  };
+
   return (
     <nav
       className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface2 px-2.5 py-4 transition-transform duration-200 ease-out md:static md:z-auto md:w-[212px] md:translate-x-0 print:hidden ${
@@ -109,16 +132,14 @@ export function Sidebar({
           </NavLink>
         ))}
 
-        {/* Sign out — only for a cloud/remote session (a local desktop has no
-            account to sign out of). clearTokens() logs out + purges + reroutes
-            to Connect via SIGNED_OUT_EVENT. */}
-        {isRemote() && (
+        {/* Sign out — only when there's a cloud account behind the session (a
+            purely-local desktop has none). On web, clearTokens() purges + reroutes
+            to Connect via SIGNED_OUT_EVENT; on desktop, the Tauri command drops the
+            cloud binding from the config + restarts the sidecar → ModePicker. */}
+        {canSignOut && (
           <button
             type="button"
-            onClick={() => {
-              onClose?.();
-              clearTokens();
-            }}
+            onClick={() => void signOut()}
             className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[14px] text-muted transition-colors hover:bg-accent-weak/50 hover:text-text"
           >
             <LogOut size={17} strokeWidth={1.75} />
