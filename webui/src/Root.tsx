@@ -12,6 +12,14 @@ import {
   SIGNED_OUT_EVENT,
 } from "./lib/connection";
 import { isDesktop, getDesktopConfig } from "./lib/desktop";
+import { desktopHandoff } from "./lib/passkey";
+import logo from "./assets/logo.png";
+
+/** Set when the web shell was opened by the desktop app for a passkey handoff
+ *  (cloud.hygur.ai/?desktop=<state>). The handoff must run whether or not the
+ *  browser already has a session — when it does, Connect (login) never mounts,
+ *  so Root performs the handback itself instead of dropping into the app. */
+const DESKTOP_STATE = new URLSearchParams(window.location.search).get("desktop");
 
 /** Gates the app behind first-run mode selection + onboarding. `done`/`modeChosen
  *  === null` are the brief async checks; the WebShellView paints its own
@@ -36,6 +44,11 @@ export function Root() {
   // remote with no key yet (a persisted/manual key or the desktop META token make
   // this false → no bootstrap needed).
   const [booting, setBooting] = useState<boolean>(() => isRemote() && !apiKey());
+  // Desktop handoff (cloud.hygur.ai/?desktop=<state>) when the browser is ALREADY
+  // signed in: Connect never mounts, so Root stashes the session for the native
+  // app and bounces back via hygur://. "" until attempted, then "done"/an error.
+  const [handoff, setHandoff] = useState<"idle" | "done" | "error">("idle");
+  const [handoffErr, setHandoffErr] = useState<string | null>(null);
 
   useEffect(() => {
     const onSignedOut = () => setSignedOutTick((n) => n + 1);
@@ -54,6 +67,23 @@ export function Root() {
       cancelled = true;
     };
   }, [booting]);
+
+  // Desktop handoff for an ALREADY-signed-in browser: once the token is restored
+  // (booting done) and we have a key, stash the session for the native app and
+  // bounce via hygur://. When NOT signed in, needsConnection() routes to Connect,
+  // which runs the same handoff after login — so this only covers the gap.
+  useEffect(() => {
+    if (!DESKTOP_STATE || booting || handoff !== "idle" || !apiKey()) return;
+    void desktopHandoff(DESKTOP_STATE)
+      .then(() => {
+        setHandoff("done");
+        window.location.href = `hygur://auth?state=${encodeURIComponent(DESKTOP_STATE)}`;
+      })
+      .catch((e: unknown) => {
+        setHandoffErr(e instanceof Error ? e.message : String(e));
+        setHandoff("error");
+      });
+  }, [booting, handoff]);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,9 +105,14 @@ export function Root() {
   }, []);
 
   // No server reachable yet (packaged client / bare browser) → connect first.
+  // When opened for a desktop handoff while signed OUT, Connect runs the handoff
+  // itself after login.
   if (needsConnection()) return <Connect />;
   // Cloud shell restoring its in-memory access token from the refresh cookie.
   if (booting) return null;
+  // Signed in AND opened by the desktop app → hand the session back, don't show
+  // the web app (that's the bug: the browser would just load the user's data).
+  if (DESKTOP_STATE) return <DesktopHandback phase={handoff} error={handoffErr} />;
   // Desktop first run: choose the engine mode before anything else.
   if (modeChosen === null) return null;
   if (!modeChosen) return <ModePicker onDone={() => setModeChosen(true)} />;
@@ -92,4 +127,47 @@ export function Root() {
       />
     );
   return <App revealOnMount={justOnboarded} />;
+}
+
+/** Shown on the web shell when the desktop app opened it for a passkey handoff and
+ *  the browser is already signed in: the session is being stashed + handed back to
+ *  the native app via hygur://. */
+function DesktopHandback({
+  phase,
+  error,
+}: {
+  phase: "idle" | "done" | "error";
+  error: string | null;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg px-8 text-center">
+      <img src={logo} alt="" className="mb-5 size-16 rounded-[22%] shadow-sm" />
+      {phase === "error" ? (
+        <>
+          <h1 className="font-display text-[22px] font-semibold tracking-tight">
+            Couldn't hand off
+          </h1>
+          <p className="mt-2 max-w-[42ch] text-[13.5px] leading-relaxed text-muted">
+            {error || "The desktop sign-in could not be prepared."} Close this tab and try “Sign in
+            with a passkey” again from the app.
+          </p>
+        </>
+      ) : phase === "done" ? (
+        <>
+          <h1 className="font-display text-[22px] font-semibold tracking-tight">Back to the app</h1>
+          <p className="mt-2 max-w-[42ch] text-[13.5px] leading-relaxed text-muted">
+            You're signed in. Return to the Hygur app — if it didn't open automatically, your
+            browser will ask for permission to launch it. You can close this tab.
+          </p>
+        </>
+      ) : (
+        <>
+          <h1 className="font-display text-[22px] font-semibold tracking-tight">Signing you in…</h1>
+          <p className="mt-2 max-w-[42ch] text-[13.5px] leading-relaxed text-muted">
+            Handing your session back to the Hygur app.
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
