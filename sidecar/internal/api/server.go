@@ -789,6 +789,15 @@ func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
 }
 
+// handleDBStats handles GET /admin/db/stats — storage + access metering.
+func (s *Server) handleDBStats(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.Stats(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
 func (s *Server) handleBackupSave(w http.ResponseWriter, r *http.Request) {
 	if s.backupHandler != nil {
 		s.backupHandler.SaveLocal(w, r)

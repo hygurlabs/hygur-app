@@ -35,6 +35,32 @@ func NewBackupHandler(db *store.DB, dbPath, dbKey string, logger zerolog.Logger)
 	}
 }
 
+// Stats (GET /admin/db/stats) reports the per-tenant storage-metering signals:
+// the logical DB size + how much of the corpus is actually accessed. Read-only,
+// cheap; the "measure before tiering" surface for memory consolidation
+// (docs/DREAM_PLAN.md Phase 0).
+func (h *BackupHandler) Stats(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		http.Error(w, "db not configured", http.StatusServiceUnavailable)
+		return
+	}
+	size, err := h.db.DBSizeBytes(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("db size")
+	}
+	items, accessed, err := h.db.ItemAccessStats(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("access stats")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"db_size_bytes":  size,
+		"items":          items,
+		"accessed_items": accessed,
+		"encrypted":      h.dbKey != "",
+	})
+}
+
 // Download (GET /admin/db/backup) streams a consistent snapshot of the DB,
 // preserving its encryption state (plaintext→plaintext, keyed→keyed-same-key).
 func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {

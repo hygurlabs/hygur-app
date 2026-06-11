@@ -887,6 +887,28 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pcancel()
 	}
 
+	// "Quand Hygur rêve" Phase 0: stamp access on the items that were CITED this
+	// turn — the "useful" signal that feeds future consolidation (docs/DREAM_PLAN.md).
+	// Detached + best-effort; never blocks the response. Observe-only: nothing reads
+	// this yet. Stamps regardless of SessionID (a transient chat still uses items).
+	if h.chatStore != nil && len(turnSources) > 0 {
+		ids := make([]string, 0, len(turnSources))
+		for _, s := range turnSources {
+			if s.ContentID != "" {
+				ids = append(ids, s.ContentID)
+			}
+		}
+		if len(ids) > 0 {
+			go func() {
+				actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := h.chatStore.BumpItemAccess(actx, ids); err != nil {
+					h.logger.Debug().Err(err).Msg("bump item access")
+				}
+			}()
+		}
+	}
+
 	// Post-stream: extract entities from the assistant answer and append a
 	// ResolvedQuery so the next turn's direct-answer check has fresh context.
 	// Skip when the session is transient (no SessionID) or the answer is empty.

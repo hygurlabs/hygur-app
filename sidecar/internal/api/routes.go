@@ -52,6 +52,8 @@ func (s *Server) setupRoutes() {
 		// Local at-rest encryption (opt-in; key in the OS keychain).
 		r.Get("/admin/db/encryption", s.handleEncryptionStatus)
 		r.Post("/admin/db/encrypt", s.handleEncryptionEnable)
+		// Storage + access metering (memory-consolidation Phase 0).
+		r.Get("/admin/db/stats", s.handleDBStats)
 	})
 
 	// Protected routes (authentication required) with standard timeout

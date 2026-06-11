@@ -357,6 +357,26 @@ CREATE TABLE IF NOT EXISTS contradiction_cache (
 );
 `,
 	},
+	// Migration 20 — "Quand Hygur rêve" Phase 0: the per-item ACCESS signal, the
+	// pivot of memory consolidation (docs/DREAM_PLAN.md). Stamped when an item is
+	// CITED in an answer (the "useful" signal, not a raw vector match). Separate
+	// table (not columns on knowledge_items) so a citation never rewrites the hot
+	// item row (with its big normalized_text). No FK: content_ids that aren't
+	// knowledge_items (e.g. synthetic thread ids) must not abort the batch; orphan
+	// rows are tiny and reaped during consolidation. OBSERVE-ONLY for now —
+	// nothing reads this yet; we measure before tiering.
+	{
+		Version: 20,
+		Name:    "item_access",
+		SQL: `
+CREATE TABLE IF NOT EXISTS item_access (
+    content_id        TEXT PRIMARY KEY,
+    hit_count         INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at  DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_item_access_last ON item_access(last_accessed_at);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
