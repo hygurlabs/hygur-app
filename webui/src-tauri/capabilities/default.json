@@ -15,6 +15,7 @@
     "core:default",
     "allow-get-desktop-config",
     "allow-set-desktop-config",
+    "allow-sign-out-desktop",
     "allow-open-external",
     "deep-link:default"
   ]
