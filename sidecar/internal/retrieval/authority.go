@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -128,6 +129,8 @@ func (us *UnifiedSearcher) annotateAuthority(ctx context.Context, results []Unif
 		for i := range results {
 			results[i].Tier, results[i].Validity = classifyAuthority(results[i].SourceType, status[results[i].ContentID])
 		}
+	} else {
+		log.Printf("[authority] WARN: decision-status lookup failed — tier/validity unset this turn (fail-open): %v", err)
 	}
 	// Pass 2 — capture-level supersession/conflict from the reconcile cache.
 	us.annotateConflictValidity(ctx, results)
@@ -141,11 +144,16 @@ func (us *UnifiedSearcher) annotateAuthority(ctx context.Context, results []Unif
 // decision is only ever touched when it is genuinely contradicted. Fail-open.
 func (us *UnifiedSearcher) annotateConflictValidity(ctx context.Context, results []UnifiedResult) {
 	js, _, _, found, err := us.store.GetContradictionCache(ctx, "")
-	if err != nil || !found || js == "" {
+	if err != nil {
+		log.Printf("[authority] WARN: contradiction-cache read failed — no capture-level validity (fail-open): %v", err)
 		return
+	}
+	if !found || js == "" {
+		return // never computed yet — normal, not an error
 	}
 	var conflicts []contradict.ReconciledConflict
 	if err := json.Unmarshal([]byte(js), &conflicts); err != nil {
+		log.Printf("[authority] WARN: contradiction-cache parse failed — no capture-level validity (fail-open): %v", err)
 		return
 	}
 	cv := conflictValidity(conflicts)
@@ -276,8 +284,23 @@ func (us *UnifiedSearcher) applyAuthorityRescore(results []UnifiedResult) {
 		return
 	}
 	w := us.authorityWeights
+	var boosted, demoted, surfaced int
 	for i := range results {
-		results[i].Score *= w.multiplier(results[i].Tier, results[i].Validity)
+		m := w.multiplier(results[i].Tier, results[i].Validity)
+		results[i].Score *= m
+		switch {
+		case results[i].Validity == ValidityConflicted:
+			surfaced++
+		case m > 1.0:
+			boosted++
+		case m < 1.0:
+			demoted++
+		}
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	// Observability: only logs when the re-score actually acted (most queries carry
+	// no authority signal → silent). Greppable: "[authority] rescore".
+	if boosted+demoted+surfaced > 0 {
+		log.Printf("[authority] rescore: boosted=%d demoted=%d surfaced=%d of=%d", boosted, demoted, surfaced, len(results))
+	}
 }

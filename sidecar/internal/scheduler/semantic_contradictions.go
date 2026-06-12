@@ -84,13 +84,19 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 		return nil, 0, err
 	}
 	since := contradictionSince()
-	candidates := contradict.DetectClaimConflicts(items, since)
+	captureCandidates := contradict.DetectClaimConflicts(items, since)
 	// G4: anchor standing decisions as cross-thread (entity, attribute) candidates so
 	// a fresh capture contradicting a confirmed decision surfaces through the SAME
 	// reconcile pipeline (and a "supersedes" verdict means the decision is overtaken).
 	decItems, decidedAt := d.standingDecisionItems(ctx, projectID)
-	candidates = append(candidates, contradict.DetectDecisionConflicts(decItems, decidedAt, items, since)...)
+	decisionConflicts := contradict.DetectDecisionConflicts(decItems, decidedAt, items, since)
+	candidates := append(captureCandidates, decisionConflicts...)
 	reconciled := d.reconcileCached(ctx, candidates)
+	// Observability: one structured line per scan — greppable to see if the scan ran,
+	// what it found (incl. G4 decision candidates), and how many survived reconcile.
+	d.logger.Info().Str("scope", projectID).Int("items", len(items)).
+		Int("capture_candidates", len(captureCandidates)).Int("decision_candidates", len(decisionConflicts)).
+		Int("reconciled", len(reconciled)).Msg("contradiction scan")
 	if reconciled == nil {
 		reconciled = []contradict.ReconciledConflict{}
 	}
@@ -176,6 +182,7 @@ func (d *DailyBrief) standingDecisionItems(ctx context.Context, projectID string
 	}
 	items := make([]*store.KnowledgeItem, 0, len(decs))
 	decidedAt := make(map[string]string, len(decs))
+	var extracted, failed int
 	for _, dec := range decs {
 		it, gerr := d.store.GetKnowledgeItem(ctx, dec.ID)
 		if gerr != nil || it == nil {
@@ -185,7 +192,12 @@ func (d *DailyBrief) standingDecisionItems(ctx context.Context, projectID string
 		// Ensure the decision's own claim is extracted + cached (off the chat budget).
 		if !hasExtractedClaims(it.Metadata) && idx != nil {
 			text := strings.TrimSpace(it.Title + "\n" + it.NormalizedText)
-			if claims, eerr := contradict.ExtractClaims(ctx, idx, text); eerr == nil && len(claims) > 0 {
+			claims, eerr := contradict.ExtractClaims(ctx, idx, text)
+			switch {
+			case eerr != nil:
+				failed++
+				d.logger.Warn().Err(eerr).Str("decision", it.ContentID).Msg("G4 decision-claim extraction failed (fail-open)")
+			case len(claims) > 0:
 				if it.Metadata == nil {
 					it.Metadata = map[string]any{}
 				}
@@ -193,9 +205,13 @@ func (d *DailyBrief) standingDecisionItems(ctx context.Context, projectID string
 				if uerr := d.store.UpdateKnowledgeItem(ctx, it); uerr != nil {
 					d.logger.Debug().Err(uerr).Str("decision", it.ContentID).Msg("persist decision claims")
 				}
+				extracted++
 			}
 		}
 		items = append(items, it)
+	}
+	if extracted+failed > 0 {
+		d.logger.Info().Int("standing", len(decs)).Int("extracted", extracted).Int("failed", failed).Msg("G4 decision-claim extraction")
 	}
 	return items, decidedAt
 }
