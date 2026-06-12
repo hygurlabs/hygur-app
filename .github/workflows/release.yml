@@ -9,7 +9,7 @@ jobs:
   build-and-release:
     # Apple Silicon runner: the sidecar ships local LLM inference via MLX (and
     # friends), which has no Intel path — so we build an arm64-only bundle.
-    runs-on: macos-15
+    runs-on: macos-26
 
     permissions:
       contents: write
