@@ -87,6 +87,9 @@ func main() {
 		case "usage":
 			runUsage(os.Args[2:])
 			return
+		case "mail-breakdown":
+			runMailBreakdown(os.Args[2:])
+			return
 		}
 	}
 

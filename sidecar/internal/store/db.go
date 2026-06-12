@@ -312,6 +312,54 @@ func DumpTokenUsage(ctx context.Context, path, key, startDay string) ([]DayCateg
 	return days, pricing, nil
 }
 
+// MailboxStat is one row of the mail-by-mailbox breakdown (the purge dry-run).
+type MailboxStat struct {
+	Mailbox   string `json:"mailbox"`
+	Count     int    `json:"count"`
+	TextBytes int64  `json:"text_bytes"`
+}
+
+// DumpMailBreakdown returns mail items grouped by their source mailbox
+// (metadata.mailbox), with counts and total normalized-text bytes. Read-only —
+// the dry-run for the differential KB purge; lets the user see the scale and the
+// provenance spread before any deletion. Mirrors DumpTokenUsage's keyed RO open.
+func DumpMailBreakdown(ctx context.Context, path, key string) ([]MailboxStat, error) {
+	dsn := "file:" + path + "?_foreign_keys=off&mode=ro&_busy_timeout=30000"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("mail breakdown open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1)
+	if err := conn.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("mail breakdown open (wrong key?): %w", err)
+	}
+	rows, err := conn.QueryContext(ctx, `
+SELECT COALESCE(json_extract(metadata, '$.mailbox'), '(none)') AS mbox,
+       COUNT(*) AS n,
+       COALESCE(SUM(LENGTH(normalized_text)), 0) AS bytes
+FROM knowledge_items
+WHERE source_type IN ('mail', 'email')
+GROUP BY mbox
+ORDER BY n DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MailboxStat
+	for rows.Next() {
+		var s MailboxStat
+		if err := rows.Scan(&s.Mailbox, &s.Count, &s.TextBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // MigratePlaintextToEncrypted converts an existing plaintext database at path
 // into a SQLCipher-encrypted one keyed by key, in place. It exports via
 // sqlcipher_export (schema + data + FTS5 indexes), verifies the result opens
