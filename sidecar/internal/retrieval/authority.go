@@ -4,11 +4,62 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/store"
 )
+
+// OwnerOrigin distinguishes the user's own content from third-party content, so
+// synthesis can attribute external claims to their source instead of presenting
+// them as the user's own position (the "Porto" case: a recruiter's "we chose
+// Porto" must never read as the user's decision).
+type OwnerOrigin string
+
+const (
+	OriginOwner    OwnerOrigin = "owner"    // SENT mail + the user's own notes/files/tasks/decisions
+	OriginExternal OwnerOrigin = "external" // received mail, invites — anything not clearly authored by the user
+)
+
+// ownerOrigin classifies a result deterministically. Own artifacts (note/file/
+// task/decision) are the user's; mail is the user's only when SENT-labelled;
+// everything else (received mail, events) is external. Conservative — never
+// elevates an unclear source to "owner".
+func ownerOrigin(sourceType string, metadata map[string]any) OwnerOrigin {
+	switch sourceType {
+	case store.SourceTypeNote, store.SourceTypeFile, store.SourceTypeTask, store.SourceTypeDecision:
+		return OriginOwner
+	}
+	if hasSentLabel(metadata) {
+		return OriginOwner
+	}
+	return OriginExternal
+}
+
+// hasSentLabel reports whether the item carries the "SENT" mail label (Gmail
+// system label / Sent folder), i.e. the user wrote it. Tolerant of []string and
+// []any metadata shapes.
+func hasSentLabel(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	switch v := m["gmail_labels"].(type) {
+	case []string:
+		for _, s := range v {
+			if strings.EqualFold(s, "SENT") {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok && strings.EqualFold(s, "SENT") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // AuthorityTier is the kind-of-claim ladder used to rank what "fait foi": a
 // user-confirmed decision outranks a derived artifact, which outranks a raw
@@ -70,6 +121,7 @@ func (us *UnifiedSearcher) annotateAuthority(ctx context.Context, results []Unif
 	ids := make([]string, 0, len(results))
 	for i := range results {
 		ids = append(ids, results[i].ContentID)
+		results[i].OwnerOrigin = ownerOrigin(results[i].SourceType, results[i].Metadata) // deterministic, always set
 	}
 	// Pass 1 — tier/validity from the decision graph.
 	if status, err := us.store.DecisionStatuses(ctx, ids); err == nil {

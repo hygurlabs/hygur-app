@@ -29,8 +29,9 @@ type UnifiedResult struct {
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	// Authority annotation (M1a) — deterministic tier/validity from the decision
 	// graph, set by annotateAuthority just before return. Empty when unannotated.
-	Tier     AuthorityTier `json:"tier,omitempty"`
-	Validity Validity      `json:"validity,omitempty"`
+	Tier        AuthorityTier `json:"tier,omitempty"`
+	Validity    Validity      `json:"validity,omitempty"`
+	OwnerOrigin OwnerOrigin   `json:"owner_origin,omitempty"` // owner vs external (Porto attribution)
 	// Mail-specific
 	MailFrom    string `json:"mail_from,omitempty"`
 	MailDate    string `json:"mail_date,omitempty"`

@@ -75,6 +75,10 @@ type RAGSource struct {
 	// LLM can reason about "when" for pre-injected context (entity follow-ups),
 	// matching what the search_knowledge_base tool exposes.
 	Date string `json:"date,omitempty"`
+	// OwnerOrigin: "owner" (the user's own content) vs "external" (a third party).
+	// Drives attribution in synthesis so a third party's claim never reads as the
+	// user's own position/decision (the Porto case).
+	OwnerOrigin string `json:"owner_origin,omitempty"`
 }
 
 // RAGContext holds the retrieved context for a RAG request.
@@ -1308,6 +1312,7 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 			MailDate:    r.MailDate,
 			MailSubject: r.MailSubject,
 			Date:        r.Date,
+			OwnerOrigin: string(r.OwnerOrigin),
 		})
 		totalChars += excerptChars
 	}
@@ -1373,12 +1378,16 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 		if source.Date != "" {
 			header += " (date : " + source.Date + ")"
 		}
+		if source.OwnerOrigin == string(retrieval.OriginExternal) {
+			header += " [external]"
+		}
 		contextBuilder.WriteString(header + "\n")
 		contextBuilder.WriteString(source.Excerpt)
 		contextBuilder.WriteString("\n\n")
 	}
 
 	contextBuilder.WriteString("---\nCite les sources avec [Document N], [Email N] ou [Note N] quand tu utilises ces informations.")
+	contextBuilder.WriteString("\nSources marked [external] come from a third party: attribute their claims to that source — never present them as the user's own position or decision.")
 
 	contextString := contextBuilder.String()
 
