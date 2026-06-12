@@ -6,6 +6,28 @@ import (
 	"github.com/hygur/sidecar/internal/store"
 )
 
+func TestParseDueDate(t *testing.T) {
+	ok := map[string]string{
+		"2026-07-30":      "2026-07-30",
+		"30/07/2026":      "2026-07-30",
+		"30-07-2026":      "2026-07-30",
+		"30 juillet 2026": "2026-07-30",
+		"July 30, 2026":   "2026-07-30",
+		"5/1/26":          "2026-01-05", // day-first, 2-digit year
+	}
+	for in, want := range ok {
+		got, parsed := ParseDueDate(in)
+		if !parsed || got.Format("2006-01-02") != want {
+			t.Errorf("ParseDueDate(%q) = %v,%v; want %s", in, got.Format("2006-01-02"), parsed, want)
+		}
+	}
+	for _, bad := range []string{"30 juillet", "next week", "", "nope"} { // no year / unparseable → rejected
+		if _, parsed := ParseDueDate(bad); parsed {
+			t.Errorf("ParseDueDate(%q) should fail (no concrete date)", bad)
+		}
+	}
+}
+
 func recItem(id, title, dateRFC string) *store.KnowledgeItem {
 	return &store.KnowledgeItem{ContentID: id, Title: title, Metadata: map[string]any{"canonical_date": dateRFC}}
 }

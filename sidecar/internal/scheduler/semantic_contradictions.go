@@ -3,13 +3,16 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/extract"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -224,27 +227,57 @@ func hasExtractedClaims(m map[string]any) bool {
 	return ok
 }
 
-// UpcomingRecurrences is the prospection surface (Conséquence P-1): recurring
-// subjects whose predicted next occurrence falls within the next withinDays (and
-// not more than a week overdue). Deterministic (DetectRecurrence over mail+notes);
-// the digest renders it as "what's coming". Nil-safe.
-func (d *DailyBrief) UpcomingRecurrences(ctx context.Context, withinDays int) []contradict.Recurrence {
+// Upcoming is one entry in the prospection surface ("Coming up"): a recurring
+// obligation's next occurrence, or a standing decision's future-dated horizon.
+type Upcoming struct {
+	Kind   string `json:"kind"`   // "recurrence" | "decision"
+	Title  string `json:"title"`
+	At     string `json:"at"`     // RFC3339 — the upcoming date
+	Detail string `json:"detail"` // "every 31d" | "decision"
+}
+
+// UpcomingItems is the prospection surface (Conséquence): recurring subjects whose
+// next occurrence is within ~withinDays (not >1w overdue), plus standing decisions
+// carrying a future-dated obligation in their text. Fully deterministic (no LLM,
+// no claim extraction) — sorted soonest-first. Nil-safe.
+func (d *DailyBrief) UpcomingItems(ctx context.Context, withinDays int) []Upcoming {
 	if d == nil || d.store == nil {
-		return nil
-	}
-	items, err := d.contradictionItems(ctx, "")
-	if err != nil {
 		return nil
 	}
 	now := time.Now().UTC()
 	from, horizon := now.AddDate(0, 0, -7), now.AddDate(0, 0, withinDays)
-	var out []contradict.Recurrence
-	for _, r := range contradict.DetectRecurrence(items, 3) {
-		t, perr := time.Parse(time.RFC3339, r.NextAt)
-		if perr != nil || t.Before(from) || t.After(horizon) {
-			continue
+	inWindow := func(t time.Time) bool { return !t.Before(from) && !t.After(horizon) }
+
+	var out []Upcoming
+
+	// Recurring obligations (mail + notes).
+	if items, err := d.contradictionItems(ctx, ""); err == nil {
+		for _, r := range contradict.DetectRecurrence(items, 3) {
+			if t, perr := time.Parse(time.RFC3339, r.NextAt); perr == nil && inWindow(t) {
+				out = append(out, Upcoming{Kind: "recurrence", Title: r.Title, At: r.NextAt, Detail: fmt.Sprintf("every %dd", r.PeriodDays)})
+			}
 		}
-		out = append(out, r)
 	}
+
+	// Decision horizons: the soonest future date in each standing decision's text.
+	if decs, err := d.store.ListDecisions(ctx, "", store.DecisionStanding); err == nil {
+		for _, dec := range decs {
+			var soonest time.Time
+			for _, ds := range extract.ExtractDueDates(dec.Statement + "\n" + dec.Rationale) {
+				t, ok := contradict.ParseDueDate(ds)
+				if !ok || !inWindow(t) {
+					continue
+				}
+				if soonest.IsZero() || t.Before(soonest) {
+					soonest = t
+				}
+			}
+			if !soonest.IsZero() {
+				out = append(out, Upcoming{Kind: "decision", Title: dec.Statement, At: soonest.Format(time.RFC3339), Detail: "decision"})
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].At < out[j].At })
 	return out
 }

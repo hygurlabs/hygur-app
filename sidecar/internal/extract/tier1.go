@@ -116,6 +116,11 @@ func ExtractTier1(text string) Tier1Entities {
 // "due by 25/04/2026" into a deduplicated list of raw date strings.
 // Normalisation to time.Time is left to the caller (different consumers care
 // about different precision).
+// ExtractDueDates exposes the deterministic Tier-1 due-date extractor for callers
+// that need to scan arbitrary text (e.g. decision horizons) without the full enrich
+// pass. Returns the raw matched date strings.
+func ExtractDueDates(text string) []string { return extractDueDates(text) }
+
 func extractDueDates(text string) []string {
 	normalized := unicodeSpaceReplacer.Replace(text)
 	matches := reDueDate.FindAllStringSubmatch(normalized, -1)

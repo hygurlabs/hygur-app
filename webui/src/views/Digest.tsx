@@ -53,14 +53,14 @@ export function Digest() {
           {upcoming.length > 0 && (
             <Section icon={CalendarClock} title={`Coming up · ${upcoming.length}`}>
               <ul className="flex flex-col gap-2">
-                {upcoming.map((r) => (
+                {upcoming.map((u, i) => (
                   <li
-                    key={r.subject}
+                    key={`${u.title}-${u.at}-${i}`}
                     className="flex items-baseline justify-between gap-3 text-[14px]"
                   >
-                    <span className="text-text">{r.title}</span>
+                    <span className="text-text">{u.title}</span>
                     <span className="tnum shrink-0 text-[12px] text-muted">
-                      ~{fmtDate(r.next_at)} · every {r.period_days}d
+                      ~{fmtDate(u.at)} · {u.detail}
                     </span>
                   </li>
                 ))}

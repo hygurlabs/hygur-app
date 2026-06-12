@@ -2,10 +2,55 @@ package contradict
 
 import (
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hygur/sidecar/internal/store"
 )
+
+// ParseDueDate parses a raw due-date string (ISO, day-first numeric, or FR/EN
+// named) into a concrete UTC date. Requires a YEAR — a horizon needs a concrete
+// date, so an undated "30 juillet" is rejected. Reuses the contradiction date
+// regexes + month map (reNumDate/reNamedDMY/reNamedMDY/monthByName).
+func ParseDueDate(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t.UTC(), true
+	}
+	day, mon, year := 0, 0, 0
+	switch {
+	case reNumDate.MatchString(s):
+		m := reNumDate.FindStringSubmatch(s)
+		day, _ = strconv.Atoi(m[1])
+		mon, _ = strconv.Atoi(m[2])
+		year = parseYear(m[3])
+	case reNamedDMY.MatchString(s):
+		m := reNamedDMY.FindStringSubmatch(s)
+		day, _ = strconv.Atoi(m[1])
+		mon = monthByName[strings.ToLower(m[2])]
+		year = parseYear(m[3])
+	case reNamedMDY.MatchString(s):
+		m := reNamedMDY.FindStringSubmatch(s)
+		mon = monthByName[strings.ToLower(m[1])]
+		day, _ = strconv.Atoi(m[2])
+		year = parseYear(m[3])
+	default:
+		return time.Time{}, false
+	}
+	if year == 0 || mon < 1 || mon > 12 || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+	return time.Date(year, time.Month(mon), day, 0, 0, 0, 0, time.UTC), true
+}
+
+func parseYear(s string) int {
+	y, _ := strconv.Atoi(strings.TrimSpace(s))
+	if y > 0 && y < 100 {
+		y += 2000
+	}
+	return y
+}
 
 // Recurrence is a detected periodic pattern — a subject cluster whose items recur
 // at a ~regular interval — with a predicted next occurrence. The seed of the
