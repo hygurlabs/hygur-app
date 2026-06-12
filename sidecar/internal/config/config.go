@@ -237,6 +237,24 @@ type LMStudioConfig struct {
 	// reasoning. Env: HYGUR_LM_STUDIO_NO_CHAT_TEMPLATE_KWARGS.
 	NoChatTemplateKwargs bool `mapstructure:"no_chat_template_kwargs"`
 
+	// MaxCompletionTokens makes chat requests carry `max_completion_tokens` instead
+	// of the legacy `max_tokens` — required by backends (Infomaniak, newer OpenAI)
+	// whose schema only accepts the former. Default false (vLLM/LM Studio/Sparky).
+	MaxCompletionTokens bool `mapstructure:"max_completion_tokens"`
+	// ReasoningEffort, when non-empty ("none"|"low"|"medium"|"high"), is sent as the
+	// OpenAI `reasoning_effort` on chat requests — "none" disables thinking on a
+	// reasoning model (the Infomaniak way, replacing chat_template_kwargs). Leave
+	// empty for models that reject it (e.g. gemma → 400). Per-endpoint.
+	ReasoningEffort string `mapstructure:"reasoning_effort"`
+	// IndexingReasoningEffort is ReasoningEffort for the separate indexing model
+	// (e.g. "none" for a reasoning-capable Tier-2 model like Nemotron-Nano).
+	IndexingReasoningEffort string `mapstructure:"indexing_reasoning_effort"`
+	// RerankURL + RerankModel enable a dedicated reranker (Cohere-shaped /rerank,
+	// e.g. Infomaniak serving bge-reranker-v2-m3). When both set, retrieval reranks
+	// there instead of via the chat LLM. Empty = LLM reranking (Sparky/local).
+	RerankURL   string `mapstructure:"rerank_url"`
+	RerankModel string `mapstructure:"rerank_model"`
+
 	// EmbeddingMaxTokens is the per-input token budget enforced before sending
 	// requests to the embedding endpoint. Inputs that exceed it are truncated
 	// so they never trigger a 500 "input too large" from servers whose

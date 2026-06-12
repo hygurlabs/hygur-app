@@ -998,3 +998,71 @@ func TestChatOmitsChatTemplateKwargs(t *testing.T) {
 		})
 	}
 }
+
+// TestBackendCompatTransforms verifies the Infomaniak-profile request transforms:
+// max_tokens→max_completion_tokens and reasoning_effort injection (gated by config).
+func TestBackendCompatTransforms(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	// Infomaniak profile.
+	c := NewClient(&config.LMStudioConfig{
+		URL: server.URL, Timeout: 10 * time.Second, MaxRetries: 1,
+		MaxCompletionTokens: true, ReasoningEffort: "none",
+	})
+	_, err := c.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}}, MaxTokens: 500,
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if !strings.Contains(gotBody, `"max_completion_tokens":500`) {
+		t.Errorf("expected max_completion_tokens:500, body: %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"max_tokens"`) {
+		t.Errorf("max_tokens must be dropped on the Infomaniak profile, body: %s", gotBody)
+	}
+	if !strings.Contains(gotBody, `"reasoning_effort":"none"`) {
+		t.Errorf("expected reasoning_effort:none, body: %s", gotBody)
+	}
+
+	// Default (Sparky) profile keeps max_tokens, no reasoning_effort.
+	c2 := NewClient(&config.LMStudioConfig{URL: server.URL, Timeout: 10 * time.Second, MaxRetries: 1})
+	_, _ = c2.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}, MaxTokens: 500})
+	if !strings.Contains(gotBody, `"max_tokens":500`) || strings.Contains(gotBody, "reasoning_effort") {
+		t.Errorf("default profile should keep max_tokens + omit reasoning_effort, body: %s", gotBody)
+	}
+}
+
+// TestRerank verifies the dedicated reranker call + relevance ordering.
+func TestRerank(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Out-of-order on purpose — Rerank must sort by relevance desc.
+		_, _ = w.Write([]byte(`{"results":[{"index":0,"relevance_score":0.2},{"index":2,"relevance_score":0.9},{"index":1,"relevance_score":0.5}]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(&config.LMStudioConfig{URL: "http://unused", RerankURL: server.URL, RerankModel: "bge-reranker-v2-m3"})
+	if !c.RerankConfigured() {
+		t.Fatal("RerankConfigured should be true")
+	}
+	order, err := c.Rerank(context.Background(), "q", []string{"a", "b", "c"}, 0)
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	want := []int{2, 1, 0}
+	if len(order) != 3 || order[0] != want[0] || order[1] != want[1] || order[2] != want[2] {
+		t.Errorf("order = %v, want %v", order, want)
+	}
+	// Not configured → RerankConfigured false.
+	if NewClient(&config.LMStudioConfig{URL: "x"}).RerankConfigured() {
+		t.Error("RerankConfigured should be false without rerank_url/model")
+	}
+}

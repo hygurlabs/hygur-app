@@ -24,8 +24,8 @@ import (
 	"github.com/hygur/sidecar/internal/api/handlers"
 	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
-	filesconnector "github.com/hygur/sidecar/internal/connectors/files"
 	caldavconnector "github.com/hygur/sidecar/internal/connectors/caldav"
+	filesconnector "github.com/hygur/sidecar/internal/connectors/files"
 	imapconnector "github.com/hygur/sidecar/internal/connectors/imap"
 	mailconnector "github.com/hygur/sidecar/internal/connectors/mail"
 	notesconnector "github.com/hygur/sidecar/internal/connectors/notes"
@@ -33,8 +33,8 @@ import (
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/health"
 	"github.com/hygur/sidecar/internal/ingest"
-	"github.com/hygur/sidecar/internal/interactions"
 	"github.com/hygur/sidecar/internal/ingest/parsers"
+	"github.com/hygur/sidecar/internal/interactions"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/mail/gmail"
@@ -242,6 +242,10 @@ func main() {
 		if cfg.LMStudio.ModelIndexing != "" {
 			idxCfg.ModelDefault = cfg.LMStudio.ModelIndexing
 		}
+		// The indexing model gets its OWN reasoning_effort (e.g. "none" to disable
+		// thinking on a reasoning-capable Tier-2 model like Nemotron-Nano), distinct
+		// from the chat model (which may reject the field).
+		idxCfg.ReasoningEffort = cfg.LMStudio.IndexingReasoningEffort
 		indexingClient = llm.NewClient(&idxCfg)
 		logger.Info().
 			Str("url", idxCfg.URL).

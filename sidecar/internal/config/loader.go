@@ -130,6 +130,12 @@ func setDefaults(v *viper.Viper) {
 	// (viper only env-binds keys it already knows). Default false = send the
 	// kwarg (vLLM/Qwen path); set true for hosted backends that reject it.
 	v.SetDefault("lm_studio.no_chat_template_kwargs", false)
+	// Empty/false defaults so AutomaticEnv binds the Infomaniak-compat knobs.
+	v.SetDefault("lm_studio.max_completion_tokens", false)
+	v.SetDefault("lm_studio.reasoning_effort", "")
+	v.SetDefault("lm_studio.indexing_reasoning_effort", "")
+	v.SetDefault("lm_studio.rerank_url", "")
+	v.SetDefault("lm_studio.rerank_model", "")
 
 	// Store defaults
 	v.SetDefault("store.path", DefaultStorePath)

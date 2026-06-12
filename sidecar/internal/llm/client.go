@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,36 @@ type Client struct {
 	// (set from config for hosted backends that reject the field — e.g. Gemma on
 	// Infomaniak). Default false keeps the vLLM/Qwen enable_thinking:false path.
 	omitChatTemplateKwargs bool
+	// useMaxCompletionTokens emits max_completion_tokens instead of max_tokens
+	// (the Infomaniak / newer-OpenAI schema). Default false = max_tokens (Sparky).
+	useMaxCompletionTokens bool
+	// reasoningEffort, when non-empty, is sent as `reasoning_effort` on every chat
+	// request (e.g. "none" to disable thinking on a reasoning model). Per-client, so
+	// the chat model can omit it (gemma 400s) while the indexing model sets "none".
+	reasoningEffort string
+	// rerankURL/rerankModel enable a dedicated reranker (Cohere-shaped /rerank). When
+	// both are set, Rerank() posts to rerankURL; otherwise callers fall back to LLM
+	// reranking. Auth reuses apiKey (Bearer).
+	rerankURL   string
+	rerankModel string
+}
+
+// prepareRequest applies the backend-compatibility transforms to a chat request
+// just before it goes on the wire: strip chat_template_kwargs, convert
+// max_tokens→max_completion_tokens, and inject reasoning_effort — all driven by
+// the per-client config flags. A no-op for the default (Sparky/vLLM) profile.
+func (c *Client) prepareRequest(req ChatRequest) ChatRequest {
+	if c.omitChatTemplateKwargs {
+		req.ChatTemplateKwargs = nil
+	}
+	if c.useMaxCompletionTokens && req.MaxTokens > 0 && req.MaxCompletionTokens == 0 {
+		req.MaxCompletionTokens = req.MaxTokens
+		req.MaxTokens = 0
+	}
+	if c.reasoningEffort != "" && req.ReasoningEffort == "" {
+		req.ReasoningEffort = c.reasoningEffort
+	}
+	return req
 }
 
 // UsageRecorder receives token usage observed by the client. Implementations
@@ -310,6 +341,15 @@ type ChatRequest struct {
 	Stream      bool      `json:"stream"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	// MaxCompletionTokens is the newer-OpenAI / Infomaniak spelling of MaxTokens.
+	// Callers set MaxTokens; the client converts to this field when the backend
+	// only accepts max_completion_tokens (see Client.useMaxCompletionTokens).
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+	// ReasoningEffort ("none"|"low"|"medium"|"high") is the OpenAI-standard control
+	// for reasoning models — "none" disables thinking. Set by the client from config
+	// for backends that use it (Infomaniak) instead of chat_template_kwargs. Omitted
+	// when empty.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// Tools is the list of tools the LLM may call, shaped as the OpenAI
 	// `tools[]` array (`{type: "function", function: {name, description,
 	// parameters}}`). Pass nil to disable tool calling — the field is
@@ -412,6 +452,10 @@ func NewClient(cfg *config.LMStudioConfig) *Client {
 		embeddingBatchSize:     cfg.EmbeddingBatchSize,
 		apiKey:                 cfg.APIKey,
 		omitChatTemplateKwargs: cfg.NoChatTemplateKwargs,
+		useMaxCompletionTokens: cfg.MaxCompletionTokens,
+		reasoningEffort:        cfg.ReasoningEffort,
+		rerankURL:              strings.TrimSuffix(cfg.RerankURL, "/"),
+		rerankModel:            cfg.RerankModel,
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
@@ -487,9 +531,7 @@ func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.
 	if c.usageRecorder != nil && req.StreamOptions == nil {
 		req.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
-	if c.omitChatTemplateKwargs {
-		req.ChatTemplateKwargs = nil // hosted backend rejects the field
-	}
+	req = c.prepareRequest(req)
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -568,9 +610,7 @@ func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.
 // Chat sends a non-streaming chat request and returns the complete response.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	req.Stream = false
-	if c.omitChatTemplateKwargs {
-		req.ChatTemplateKwargs = nil // hosted backend rejects the field
-	}
+	req = c.prepareRequest(req)
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -778,4 +818,73 @@ func isRetryableStatus(statusCode int) bool {
 		statusCode == http.StatusServiceUnavailable ||
 		statusCode == http.StatusGatewayTimeout ||
 		statusCode == http.StatusBadGateway
+}
+
+// RerankResult is one reranked document: its original index + relevance score.
+type RerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+}
+
+// RerankConfigured reports whether a dedicated reranker endpoint is set.
+func (c *Client) RerankConfigured() bool {
+	return c.rerankURL != "" && c.rerankModel != ""
+}
+
+// Rerank scores documents against the query via the dedicated reranker (the
+// Cohere-shaped /rerank endpoint, e.g. Infomaniak serving bge-reranker-v2-m3).
+// Returns document indices ordered most-relevant-first; topN<=0 returns all.
+// Bearer auth reuses apiKey. A purpose-built cross-encoder: cheaper + better than
+// LLM-as-judge, and it keeps reranking off the chat-token budget.
+func (c *Client) Rerank(ctx context.Context, query string, documents []string, topN int) ([]int, error) {
+	if !c.RerankConfigured() {
+		return nil, fmt.Errorf("reranker not configured")
+	}
+	if len(documents) == 0 {
+		return nil, nil
+	}
+	payload := map[string]any{"model": c.rerankModel, "query": query, "documents": documents}
+	if topN > 0 {
+		payload["top_n"] = topN
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.rerankURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.setAuthHeader(httpReq)
+	hc := c.httpClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("rerank failed (status %d): %s", resp.StatusCode, string(b))
+	}
+	var out struct {
+		Results []RerankResult `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	// Cohere returns results sorted by relevance desc; don't rely on it.
+	sort.SliceStable(out.Results, func(i, j int) bool {
+		return out.Results[i].RelevanceScore > out.Results[j].RelevanceScore
+	})
+	idxs := make([]int, 0, len(out.Results))
+	for _, r := range out.Results {
+		if r.Index >= 0 && r.Index < len(documents) {
+			idxs = append(idxs, r.Index)
+		}
+	}
+	return idxs, nil
 }
