@@ -20,11 +20,21 @@ import (
 // DailyBrief produces a single LLM-generated digest of recent knowledge-base
 // activity. Designed to run once per day at a configurable local-time hour.
 type DailyBrief struct {
-	store  *store.DB
-	llm    *llm.Client
-	broker *events.Broker
-	cfg    config.DailyBriefConfig
-	logger zerolog.Logger
+	store    *store.DB
+	llm      *llm.Client
+	indexing *llm.Client // small model for decision-claim extraction (G4); falls back to llm
+	broker   *events.Broker
+	cfg      config.DailyBriefConfig
+	logger   zerolog.Logger
+}
+
+// SetIndexingClient sets the small/cheap model used for decision-claim extraction
+// (G4 contradiction guardrail). Off the chat budget; falls back to the main client
+// when unset. Nil-safe.
+func (d *DailyBrief) SetIndexingClient(c *llm.Client) {
+	if d != nil {
+		d.indexing = c
+	}
 }
 
 // NewDailyBrief builds a brief task. Returns nil when any required dependency

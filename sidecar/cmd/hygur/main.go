@@ -908,6 +908,7 @@ func main() {
 	// trigger is always available (the macOS app drives "Run brief now"
 	// and "Brief this project" through it).
 	dailyBrief := scheduler.NewDailyBrief(db, llmClient, broker, cfg.DailyBrief, logger)
+	dailyBrief.SetIndexingClient(indexingClient) // G4 decision-claim extraction on the small model (nil-safe)
 	if cfg.DailyBrief.Enabled {
 		dailyBrief.Start(ctx)
 	}

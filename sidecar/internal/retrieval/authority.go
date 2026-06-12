@@ -81,11 +81,12 @@ func (us *UnifiedSearcher) annotateAuthority(ctx context.Context, results []Unif
 	us.annotateConflictValidity(ctx, results)
 }
 
-// annotateConflictValidity overlays superseded/conflicted onto CAPTURE-tier
-// results that are members of a cached reconciled conflict. M1b scope:
-// capture↔capture (the conflict cache is built over claims in mail/notes);
-// decision-vs-capture is a later guardrail. Fail-open; never touches a confirmed
-// decision.
+// annotateConflictValidity overlays superseded/conflicted onto any result that is
+// a member of a cached reconciled conflict — capture↔capture (M1b) and, once G4
+// decision↔capture conflicts are cached, the implicated decision itself (a
+// confirmed decision contradicted by a fresh capture must SURFACE, not keep its
+// boost). Capture↔capture conflicts never list a decision as a member, so a
+// decision is only ever touched when it is genuinely contradicted. Fail-open.
 func (us *UnifiedSearcher) annotateConflictValidity(ctx context.Context, results []UnifiedResult) {
 	js, _, _, found, err := us.store.GetContradictionCache(ctx, "")
 	if err != nil || !found || js == "" {
@@ -100,9 +101,6 @@ func (us *UnifiedSearcher) annotateConflictValidity(ctx context.Context, results
 		return
 	}
 	for i := range results {
-		if results[i].Tier != TierCapture {
-			continue
-		}
 		if v, ok := cv[results[i].ContentID]; ok {
 			results[i].Validity = v
 		}

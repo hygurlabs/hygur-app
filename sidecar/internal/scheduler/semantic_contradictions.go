@@ -83,7 +83,13 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 	if err != nil {
 		return nil, 0, err
 	}
-	candidates := contradict.DetectClaimConflicts(items, contradictionSince())
+	since := contradictionSince()
+	candidates := contradict.DetectClaimConflicts(items, since)
+	// G4: anchor standing decisions as cross-thread (entity, attribute) candidates so
+	// a fresh capture contradicting a confirmed decision surfaces through the SAME
+	// reconcile pipeline (and a "supersedes" verdict means the decision is overtaken).
+	decItems, decidedAt := d.standingDecisionItems(ctx, projectID)
+	candidates = append(candidates, contradict.DetectDecisionConflicts(decItems, decidedAt, items, since)...)
 	reconciled := d.reconcileCached(ctx, candidates)
 	if reconciled == nil {
 		reconciled = []contradict.ReconciledConflict{}
@@ -152,4 +158,52 @@ func (d *DailyBrief) contradictionItems(ctx context.Context, projectID string) (
 		}
 	}
 	return items, nil
+}
+
+// standingDecisionItems loads the standing decisions in scope as knowledge_items,
+// ensuring each carries extracted claims (extracted once on the small indexing
+// model, then cached in metadata), plus a content_id → decided-on map. These feed
+// DetectDecisionConflicts (G4). Fail-open: a decision that can't be loaded or
+// extracted is skipped. projectID "" = all standing decisions.
+func (d *DailyBrief) standingDecisionItems(ctx context.Context, projectID string) ([]*store.KnowledgeItem, map[string]string) {
+	decs, err := d.store.ListDecisions(ctx, projectID, store.DecisionStanding)
+	if err != nil || len(decs) == 0 {
+		return nil, nil
+	}
+	idx := d.indexing
+	if idx == nil {
+		idx = d.llm // the small model is preferred but not required
+	}
+	items := make([]*store.KnowledgeItem, 0, len(decs))
+	decidedAt := make(map[string]string, len(decs))
+	for _, dec := range decs {
+		it, gerr := d.store.GetKnowledgeItem(ctx, dec.ID)
+		if gerr != nil || it == nil {
+			continue
+		}
+		decidedAt[it.ContentID] = dec.DecidedOn
+		// Ensure the decision's own claim is extracted + cached (off the chat budget).
+		if !hasExtractedClaims(it.Metadata) && idx != nil {
+			text := strings.TrimSpace(it.Title + "\n" + it.NormalizedText)
+			if claims, eerr := contradict.ExtractClaims(ctx, idx, text); eerr == nil && len(claims) > 0 {
+				if it.Metadata == nil {
+					it.Metadata = map[string]any{}
+				}
+				it.Metadata["extracted_claims"] = claims
+				if uerr := d.store.UpdateKnowledgeItem(ctx, it); uerr != nil {
+					d.logger.Debug().Err(uerr).Str("decision", it.ContentID).Msg("persist decision claims")
+				}
+			}
+		}
+		items = append(items, it)
+	}
+	return items, decidedAt
+}
+
+func hasExtractedClaims(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	_, ok := m["extracted_claims"]
+	return ok
 }
