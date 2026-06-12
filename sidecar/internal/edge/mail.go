@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -59,6 +60,62 @@ type MailStats struct {
 // `backfill` messages; a folder present pulls only messages newer than its
 // watermark. The map is updated in place and returned so the caller persists it.
 // Per-thread/message errors are counted, not fatal.
+// spamFolderNames are the well-known spam/junk mailbox names. The MailConnector
+// can't enumerate folders, so the spam cross-reference matches by name. Override
+// via HYGUR_SPAM_FOLDERS (comma-separated) if a provider names them differently.
+var spamFolderNames = []string{"Spam", "Junk"}
+
+const spamScanLimit = 3000 // cap the up-front Spam-folder listing
+
+// isSpamMailbox reports whether a mailbox name is a spam/junk folder.
+func isSpamMailbox(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "spam") || strings.Contains(n, "junk")
+}
+
+// isCatchAllMailbox reports whether a mailbox is a catch-all that bundles spam in
+// with everything else (Proton's "All Mail", or the provider default "").
+func isCatchAllMailbox(name string) bool {
+	return name == "" || strings.EqualFold(name, "All Mail")
+}
+
+// spamThreadIDs gathers the Spam/Junk thread ids ONLY when a catch-all mailbox is
+// being synced (Proton surfaces spam inside "All Mail"). Fail-open: a missing or
+// mis-named spam folder just yields an empty set, so legitimate mail is never
+// dropped by mistake — the guard can only ever omit real spam, never good mail.
+func (ms *MailSync) spamThreadIDs(ctx context.Context, conn mail.MailConnector, mailboxes []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	catchAll := false
+	for _, mb := range mailboxes {
+		if isCatchAllMailbox(mb) {
+			catchAll = true
+			break
+		}
+	}
+	if !catchAll {
+		return out
+	}
+	names := spamFolderNames
+	if env := strings.TrimSpace(os.Getenv("HYGUR_SPAM_FOLDERS")); env != "" {
+		names = nil
+		for _, p := range strings.Split(env, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				names = append(names, p)
+			}
+		}
+	}
+	for _, name := range names {
+		th, err := conn.ListThreads(ctx, mail.ListOptions{MailboxID: name, Limit: spamScanLimit})
+		if err != nil {
+			continue // folder absent / not selectable → skip, no-op
+		}
+		for i := range th {
+			out[th[i].ID] = struct{}{}
+		}
+	}
+	return out
+}
+
 func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes []string, state FolderState, backfill int) (MailStats, FolderState, error) {
 	st := MailStats{}
 	if state == nil {
@@ -68,9 +125,16 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 		mailboxes = []string{""} // provider default (all)
 	}
 
+	// Spam guard: when a catch-all ("All Mail") is synced, gather the Spam/Junk
+	// thread ids up front and skip them below — Proton flattens spam into All Mail.
+	spamThreads := ms.spamThreadIDs(ctx, conn, mailboxes)
+
 	for _, mbox := range mailboxes {
 		if err := ctx.Err(); err != nil {
 			return st, state, err
+		}
+		if isSpamMailbox(mbox) {
+			continue // never ingest a spam/junk folder, even if it was selected
 		}
 		wm, known := state[mbox]
 		opts := mail.ListOptions{MailboxID: mbox}
@@ -87,6 +151,9 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 		}
 		newest := wm
 		for i := range threads {
+			if _, bad := spamThreads[threads[i].ID]; bad {
+				continue // cross-referenced from the Spam folder — skip
+			}
 			st.Threads++
 			msgs, err := conn.GetMessagesByThread(ctx, &threads[i])
 			if err != nil {
