@@ -152,11 +152,23 @@ export interface Decision {
 /** The daily composed "state of your world" (GET /digest) — assembles already-
  *  computed signals: where things stand, open contradictions, decisions to
  *  confirm, tasks due soon. */
+/** A recurring subject with a predicted next occurrence (Conséquence/prospection). */
+export interface Recurrence {
+  subject: string;
+  title: string;
+  count: number;
+  period_days: number;
+  last_at: string; // RFC3339
+  next_at: string; // RFC3339 — predicted next
+  source_ids: string[];
+}
+
 export interface Digest {
   synopsis: string;
   contradictions: ReconciledConflict[];
   proposed_decisions: Decision[];
   due_tasks: Task[];
+  upcoming?: Recurrence[];
 }
 
 /** One cited side of a reconciled claim conflict (W6 REDUCE). */

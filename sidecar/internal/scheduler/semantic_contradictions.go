@@ -223,3 +223,28 @@ func hasExtractedClaims(m map[string]any) bool {
 	_, ok := m["extracted_claims"]
 	return ok
 }
+
+// UpcomingRecurrences is the prospection surface (Conséquence P-1): recurring
+// subjects whose predicted next occurrence falls within the next withinDays (and
+// not more than a week overdue). Deterministic (DetectRecurrence over mail+notes);
+// the digest renders it as "what's coming". Nil-safe.
+func (d *DailyBrief) UpcomingRecurrences(ctx context.Context, withinDays int) []contradict.Recurrence {
+	if d == nil || d.store == nil {
+		return nil
+	}
+	items, err := d.contradictionItems(ctx, "")
+	if err != nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	from, horizon := now.AddDate(0, 0, -7), now.AddDate(0, 0, withinDays)
+	var out []contradict.Recurrence
+	for _, r := range contradict.DetectRecurrence(items, 3) {
+		t, perr := time.Parse(time.RFC3339, r.NextAt)
+		if perr != nil || t.Before(from) || t.After(horizon) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}

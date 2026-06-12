@@ -440,6 +440,7 @@ func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
 		"contradictions":     contradictions,
 		"proposed_decisions": proposed,
 		"due_tasks":          dueTasks,
+		"upcoming":           h.brief.UpcomingRecurrences(ctx, 45),
 	})
 }
 
