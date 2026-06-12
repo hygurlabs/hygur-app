@@ -297,8 +297,8 @@ export const api = {
       project_id?: string;
       tag_ids?: string[];
     },
-  ) => patchJSON(`/decisions/${encodeURIComponent(id)}`, patch),
-  deleteDecision: (id: string) => del(`/decisions/${encodeURIComponent(id)}`),
+  ) => patchJSON(`/decisions/${cidPath(id)}`, patch),
+  deleteDecision: (id: string) => del(`/decisions/${cidPath(id)}`),
   scanDecisions: () => postJSON<{ started: boolean }>("/decisions/scan", {}),
 
   // Daily composed digest — the "state of your world" surface.

@@ -32,14 +32,14 @@ const (
 // decisionSystemPrompt is generic and bounded — no domain enumerations or profile
 // assumptions — so it generalises across any document. The verbatim quote is the
 // anti-hallucination gate enforced in code afterwards.
-const decisionSystemPrompt = `You extract the decisions and commitments the author makes in a document, so they can be tracked and revisited. A decision is a choice the author has settled or a commitment they have made: to do something, to proceed a certain way, to stop or change course, or to commit to a date, amount, or arrangement.
+const decisionSystemPrompt = `These records belong to one person — the owner. You extract only the decisions and commitments the OWNER has themselves made: a choice they have settled, or a commitment they have personally agreed to (to do something, to proceed a certain way, to stop or change course, to agree to a date, an amount, or an arrangement). Ignore decisions, plans, policies, or arrangements made by other people or organisations, even when they concern the owner or are addressed to them.
 
-Return ONLY a JSON array of the few clearest such decisions actually present. Each element:
+Return ONLY a JSON array of the few clearest such decisions actually present, each stated ONCE — never restate the same commitment in different words. Each element:
 {"statement": "...", "quote": "..."}
-- statement: a short, self-contained sentence stating the decision in plain terms, as the author would recognise it.
+- statement: one short, self-contained sentence in the owner's own first person, as they would recognise their own decision.
 - quote: the exact span of the document that states or commits to it, copied character-for-character.
 
-Extract only decisions explicitly made in this document; never infer intent, and ignore mere discussion, questions, or options not chosen. Ignore presentational and boilerplate text. Omit any decision you cannot quote verbatim. If there are none, return []. Output the JSON array and nothing else. The document may be in any language.`
+Extract only decisions explicitly made; never infer intent; ignore mere discussion, questions, or options not chosen. Ignore presentational and boilerplate text. Omit any decision you cannot quote verbatim. If there are none, return []. Output the JSON array and nothing else. The document may be in any language.`
 
 type decisionCandidate struct {
 	Statement string `json:"statement"`
