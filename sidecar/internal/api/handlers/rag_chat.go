@@ -79,6 +79,10 @@ type RAGSource struct {
 	// Drives attribution in synthesis so a third party's claim never reads as the
 	// user's own position/decision (the Porto case).
 	OwnerOrigin string `json:"owner_origin,omitempty"`
+	// Tier/Validity — the authority stratum (A-1 multi-lens): confirmed/candidate/
+	// capture · current/superseded/conflicted. Labels each source by its lens.
+	Tier     string `json:"tier,omitempty"`
+	Validity string `json:"validity,omitempty"`
 }
 
 // RAGContext holds the retrieved context for a RAG request.
@@ -1313,6 +1317,8 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 			MailSubject: r.MailSubject,
 			Date:        r.Date,
 			OwnerOrigin: string(r.OwnerOrigin),
+			Tier:        string(r.Tier),
+			Validity:    string(r.Validity),
 		})
 		totalChars += excerptChars
 	}
@@ -1353,6 +1359,29 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 }
 
 // buildMessagesWithContext injects RAG context into the message list.
+// sourceStratum returns the authority lens label for a RAG source (A-1 multi-lens),
+// or "" for the baseline (the user's own current capture). Validity (superseded /
+// contested) takes precedence over tier, so a stale or contested item is never shown
+// as authoritative.
+func sourceStratum(s RAGSource) string {
+	switch s.Validity {
+	case string(retrieval.ValiditySuperseded):
+		return "superseded"
+	case string(retrieval.ValidityConflicted):
+		return "contested"
+	}
+	switch s.Tier {
+	case string(retrieval.TierConfirmed):
+		return "your decision"
+	case string(retrieval.TierCandidate):
+		return "proposed decision"
+	}
+	if s.OwnerOrigin == string(retrieval.OriginExternal) {
+		return "external"
+	}
+	return ""
+}
+
 func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragContext *RAGContext) []llm.Message {
 	if len(ragContext.Sources) == 0 {
 		return messages
@@ -1378,8 +1407,8 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 		if source.Date != "" {
 			header += " (date : " + source.Date + ")"
 		}
-		if source.OwnerOrigin == string(retrieval.OriginExternal) {
-			header += " [external]"
+		if tag := sourceStratum(source); tag != "" {
+			header += " [" + tag + "]"
 		}
 		contextBuilder.WriteString(header + "\n")
 		contextBuilder.WriteString(source.Excerpt)
@@ -1387,7 +1416,7 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 	}
 
 	contextBuilder.WriteString("---\nCite les sources avec [Document N], [Email N] ou [Note N] quand tu utilises ces informations.")
-	contextBuilder.WriteString("\nSources marked [external] come from a third party: attribute their claims to that source — never present them as the user's own position or decision.")
+	contextBuilder.WriteString("\nEach source is tagged by authority: a decision you confirmed [your decision] outranks your own captures, which outrank [external] third-party sources; [superseded] and [contested] sources are weaker. When tagged sources disagree on the same point, keep them distinct — state what you decided, what external sources assert, and what is unconfirmed — and attribute each to its tag rather than blending them into one answer.")
 
 	contextString := contextBuilder.String()
 
