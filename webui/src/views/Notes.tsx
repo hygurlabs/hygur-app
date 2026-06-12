@@ -1,6 +1,19 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, ArrowLeft, Trash2 } from "lucide-react";
+import {
+  Plus,
+  ArrowLeft,
+  Trash2,
+  Bold,
+  Italic,
+  Heading2,
+  List,
+  ListOrdered,
+  Quote,
+  Code,
+  Link as LinkIcon,
+  Rows3,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../lib/api";
@@ -18,15 +31,47 @@ import {
   TextInput,
 } from "../components/ui";
 
+// Static toolbar config (module scope so render builds no ref-capturing
+// closures). The component maps a key → formatting action.
+const NOTE_TOOLBAR = [
+  { key: "bold", icon: Bold, label: "Gras" },
+  { key: "italic", icon: Italic, label: "Italique" },
+  { key: "h2", icon: Heading2, label: "Titre" },
+  { key: "ul", icon: List, label: "Liste" },
+  { key: "ol", icon: ListOrdered, label: "Liste numérotée" },
+  { key: "quote", icon: Quote, label: "Citation" },
+  { key: "code", icon: Code, label: "Code" },
+  { key: "link", icon: LinkIcon, label: "Lien" },
+] as const;
+
 export function Notes() {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [editing, setEditing] = useState<Note | null>(null);
+  // Compact list mode (one line per note), remembered across sessions.
+  const [compact, setCompact] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("hygur.notes.compact") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setCompactPersisted = (next: boolean) => {
+    setCompact(next);
+    try {
+      localStorage.setItem("hygur.notes.compact", next ? "1" : "0");
+    } catch {
+      /* private mode / disabled storage — keep the in-memory value */
+    }
+  };
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["notes"],
     queryFn: () => api.notes(),
   });
+  const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
+  const projectName = (id?: string | null) =>
+    id ? projectsQ.data?.find((p) => p.id === id)?.name : undefined;
 
   const create = useMutation({
     mutationFn: (t: string) => api.createNote(t, `# ${t}\n\n`),
@@ -57,6 +102,8 @@ export function Notes() {
     title: n.title,
     meta: fmtDate(n.updated_at),
     excerpt: (n.content ?? "").replace(/[#*`>_]/g, "").slice(0, 180),
+    projectName: projectName(n.project_id),
+    tags: (n.tags ?? []).map((t) => ({ name: t.name, color: t.color })),
     onClick: () => setEditing(n),
   }));
 
@@ -97,10 +144,37 @@ export function Notes() {
         />
       )}
 
+      {!isLoading && rows.length > 0 && (
+        <div className="mb-2 flex justify-end">
+          <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
+            {(
+              [
+                [false, "Détaillé", List],
+                [true, "Compact", Rows3],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <button
+                key={label}
+                onClick={() => setCompactPersisted(value)}
+                title={label}
+                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors ${
+                  compact === value
+                    ? "bg-accent-weak font-medium text-accent"
+                    : "text-muted hover:text-text"
+                }`}
+              >
+                <Icon size={14} strokeWidth={1.9} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <Skeleton rows={4} />
       ) : rows.length > 0 ? (
-        <RecordList rows={rows} />
+        <RecordList rows={rows} compact={compact} />
       ) : (
         <EmptyState
           title="No notes yet"
@@ -128,8 +202,76 @@ function NoteEditor({
   const [tagNames, setTagNames] = useState<string[]>(
     (note.tags ?? []).map((t) => t.name),
   );
-  const [tab, setTab] = useState<"edit" | "preview">("edit");
+  const [view, setView] = useState<"split" | "write" | "preview">("split");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Restores the textarea selection after a state-driven value change so the
+  // cursor lands where the user expects post-formatting.
+  function selectAfterRender(start: number, end: number) {
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(start, end);
+    });
+  }
+
+  // Wraps the current selection (or a placeholder) with Markdown delimiters.
+  function surround(before: string, after = before, placeholder = "texte") {
+    const ta = taRef.current;
+    if (!ta) return;
+    const { selectionStart: s, selectionEnd: e } = ta;
+    const sel = content.slice(s, e) || placeholder;
+    setContent(content.slice(0, s) + before + sel + after + content.slice(e));
+    selectAfterRender(s + before.length, s + before.length + sel.length);
+  }
+
+  // Prefixes each selected line (headings, lists, quotes).
+  function prefixLines(prefix: string) {
+    const ta = taRef.current;
+    if (!ta) return;
+    const { selectionStart: s, selectionEnd: e } = ta;
+    const lineStart = content.lastIndexOf("\n", s - 1) + 1;
+    const block = content.slice(lineStart, e) || "texte";
+    const replaced = block.replace(/^/gm, prefix);
+    setContent(content.slice(0, lineStart) + replaced + content.slice(e));
+    selectAfterRender(lineStart, lineStart + replaced.length);
+  }
+
+  function insertLink() {
+    const ta = taRef.current;
+    if (!ta) return;
+    const { selectionStart: s, selectionEnd: e } = ta;
+    const sel = content.slice(s, e) || "texte";
+    const snippet = `[${sel}](url)`;
+    setContent(content.slice(0, s) + snippet + content.slice(e));
+    const urlStart = s + sel.length + 3; // after "[sel]("
+    selectAfterRender(urlStart, urlStart + 3);
+  }
+
+  // Dispatches a toolbar action by key. Defined here (not as inline closures in
+  // the rendered array) so render never builds ref-capturing functions.
+  function applyFormat(key: string) {
+    switch (key) {
+      case "bold":
+        return surround("**");
+      case "italic":
+        return surround("*");
+      case "h2":
+        return prefixLines("## ");
+      case "ul":
+        return prefixLines("- ");
+      case "ol":
+        return prefixLines("1. ");
+      case "quote":
+        return prefixLines("> ");
+      case "code":
+        return surround("`", "`", "code");
+      case "link":
+        return insertLink();
+    }
+  }
 
   const qc = useQueryClient();
   const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
@@ -211,34 +353,75 @@ function NoteEditor({
         className="mb-4 w-full bg-transparent font-display text-[24px] font-semibold leading-tight tracking-tight outline-none placeholder:text-faint"
       />
 
-      <div className="mb-3 inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
-        {(["edit", "preview"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`rounded-md px-3 py-1 capitalize transition-colors ${
-              tab === t ? "bg-accent-weak font-medium text-accent" : "text-muted hover:text-text"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        {/* Formatting toolbar — hidden in preview-only mode. */}
+        <div
+          className={`flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5 ${
+            view === "preview" ? "pointer-events-none opacity-40" : ""
+          }`}
+        >
+          {NOTE_TOOLBAR.map(({ key, icon: Icon, label }) => (
+            <button
+              key={key}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()} // keep textarea selection
+              onClick={() => applyFormat(key)}
+              title={label}
+              aria-label={label}
+              className="grid size-7 place-items-center rounded-md text-muted transition-colors hover:bg-surface2 hover:text-text"
+            >
+              <Icon size={15} strokeWidth={1.9} />
+            </button>
+          ))}
+        </div>
+
+        <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
+          {(
+            [
+              ["split", "Split"],
+              ["write", "Éditeur"],
+              ["preview", "Aperçu"],
+            ] as const
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`rounded-md px-3 py-1 transition-colors ${
+                view === v
+                  ? "bg-accent-weak font-medium text-accent"
+                  : "text-muted hover:text-text"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {tab === "edit" ? (
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder="Write in Markdown…"
-          className="min-h-[50vh] w-full resize-y rounded-xl border border-border bg-surface px-4 py-3 font-mono text-[13.5px] leading-relaxed text-text outline-none transition-colors focus:border-accent"
-        />
-      ) : (
-        <div className="prose-answer min-h-[50vh] rounded-xl border border-border bg-surface px-5 py-4 text-[14.5px] leading-relaxed">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {content || "_(nothing to preview)_"}
-          </ReactMarkdown>
-        </div>
-      )}
+      <div
+        className={
+          view === "split"
+            ? "grid min-h-[50vh] grid-cols-1 gap-3 lg:grid-cols-2"
+            : "min-h-[50vh]"
+        }
+      >
+        {view !== "preview" && (
+          <textarea
+            ref={taRef}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="Write in Markdown…"
+            className="min-h-[50vh] w-full resize-y rounded-xl border border-border bg-surface px-4 py-3 font-mono text-[13.5px] leading-relaxed text-text outline-none transition-colors focus:border-accent"
+          />
+        )}
+        {view !== "write" && (
+          <div className="prose-answer min-h-[50vh] overflow-auto rounded-xl border border-border bg-surface px-5 py-4 text-[14.5px] leading-relaxed">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {content || "_(rien à prévisualiser)_"}
+            </ReactMarkdown>
+          </div>
+        )}
+      </div>
 
       {/* Project + tags at the bottom — attach the note and tag it. */}
       <div className="mt-5 border-t border-border pt-4">

@@ -6,35 +6,50 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { X, MessageSquareText } from "lucide-react";
+import { X, MessageSquareText, ListPlus, Reply, Copy, Check } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ItemMeta } from "./ItemMeta";
+import { api } from "../lib/api";
 
 export interface DetailData {
   title: string;
   meta: string[];
   body: string;
-  /** When set, the panel shows an "Ask in chat" action that attaches this
-   *  document to a new question in the Ask view. */
+  /** When set, the panel shows "Ask in chat" + "Create task" (and "Draft reply"
+   *  for mail) and loads the item's project/tags. */
   contentId?: string;
+  /** Item source type — enables the mail-only "Draft reply" action. */
+  sourceType?: string;
   /** Optional actions rendered in the panel header (e.g. Edit, Delete). */
   actions?: ReactNode;
 }
 
 const OpenContext = createContext<(d: DetailData) => void>(() => {});
 
-/** Any view can call `useDetail()(…)` to slide the reader panel in. Centralising
- *  it here keeps a single panel instance + one scrim, avoiding z-index sprawl. */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with its provider (HMR-only rule; splitting it is needless churn)
 export function useDetail() {
   return useContext(OpenContext);
 }
 
+const isMail = (st?: string) => st === "mail" || st === "email";
+
 export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const [data, setData] = useState<DetailData | null>(null);
-  const open = useCallback((d: DetailData) => setData(d), []);
+  const [taskDone, setTaskDone] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const open = useCallback((d: DetailData) => {
+    setData(d);
+    setTaskDone(false);
+    setDraft(null);
+    setDrafting(false);
+    setCopied(false);
+  }, []);
   const close = useCallback(() => setData(null), []);
 
   const askInChat = useCallback(() => {
@@ -46,6 +61,31 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     setData(null);
     navigate(`/?${params.toString()}`);
   }, [data, navigate]);
+
+  const createTask = useCallback(async () => {
+    if (!data) return;
+    try {
+      await api.createTask({
+        title: data.title || "Untitled",
+      });
+      setTaskDone(true);
+    } catch {
+      /* surfaced by the disabled→retry affordance; keep panel usable */
+    }
+  }, [data]);
+
+  const draftReply = useCallback(async () => {
+    if (!data?.contentId) return;
+    setDrafting(true);
+    try {
+      const r = await api.draftReply(data.contentId);
+      setDraft(r.draft || "(no draft)");
+    } catch {
+      setDraft("Couldn't draft a reply right now.");
+    } finally {
+      setDrafting(false);
+    }
+  }, [data]);
 
   useEffect(() => {
     if (!data) return;
@@ -96,14 +136,39 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {data.contentId && (
-                  <button
-                    onClick={askInChat}
-                    title="Ask Hygur about this"
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent"
-                  >
-                    <MessageSquareText size={14} strokeWidth={1.75} />
-                    Ask
-                  </button>
+                  <>
+                    <button
+                      onClick={askInChat}
+                      title="Ask Hygur about this"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent"
+                    >
+                      <MessageSquareText size={14} strokeWidth={1.75} />
+                      Ask
+                    </button>
+                    {isMail(data.sourceType) && (
+                      <button
+                        onClick={draftReply}
+                        disabled={drafting}
+                        title="Draft a reply"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+                      >
+                        <Reply size={14} strokeWidth={1.75} />
+                        {drafting ? "Drafting…" : "Reply"}
+                      </button>
+                    )}
+                    <button
+                      onClick={createTask}
+                      title="Create a task from this"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent"
+                    >
+                      {taskDone ? (
+                        <Check size={14} strokeWidth={2} className="text-accent" />
+                      ) : (
+                        <ListPlus size={14} strokeWidth={1.75} />
+                      )}
+                      {taskDone ? "Added" : "Task"}
+                    </button>
+                  </>
                 )}
                 {data.actions}
                 <button
@@ -116,12 +181,41 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
               </div>
             </div>
             <div className="overflow-auto px-5 py-5">
+              {data.contentId && <ItemMeta contentId={data.contentId} />}
+
+              {draft !== null && (
+                <div className="mb-5 rounded-xl border border-accent/30 bg-accent-weak/30 px-4 py-3">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-accent">
+                      Draft reply
+                    </span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard?.writeText(draft).then(
+                          () => {
+                            setCopied(true);
+                            window.setTimeout(() => setCopied(false), 1500);
+                          },
+                          () => {},
+                        );
+                      }}
+                      className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-accent"
+                    >
+                      {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={1.75} />}
+                      {copied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-text">
+                    {draft}
+                  </p>
+                </div>
+              )}
+
               <div className="prose-answer text-[14px] leading-relaxed text-text">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {data.body || "_(empty)_"}
                 </ReactMarkdown>
               </div>
-              {data.contentId && <ItemMeta contentId={data.contentId} />}
             </div>
           </>
         )}

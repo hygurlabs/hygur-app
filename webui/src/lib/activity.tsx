@@ -7,6 +7,35 @@ import {
   type ReactNode,
 } from "react";
 import { subscribeEvents, type HygurEvent } from "./events";
+import { native } from "./native";
+
+/** Sidecar event → native banner, gated by the matching notification toggle
+ *  (mirrors the old SwiftUI NotificationsService). Banners go through
+ *  native.notify, which uses the OS bridge natively or the Web Notifications
+ *  API in Tauri/browser. */
+const NOTIFY: Record<string, { key: string; title: string }> = {
+  mail_digest: { key: "notify.priorityMail", title: "Important mail" },
+  brief: { key: "notify.dailyBrief", title: "Daily brief" },
+  agenda_alert: { key: "notify.agendaAlerts", title: "Deadline" },
+  // Pre-meeting / pre-deadline RAG brief — fires on cloud (server-side scheduler)
+  // and desktop. Shares the agenda toggle on native.
+  meeting_briefing: { key: "notify.agendaAlerts", title: "Meeting brief" },
+};
+
+function maybeNotify(e: HygurEvent): void {
+  const n = NOTIFY[e.type];
+  if (!n) return;
+  // Native shells gate on the per-category toggle (set in onboarding/settings).
+  // Web/Tauri have no such UI — there the browser's own notification permission
+  // IS the opt-in (native.notify requests it on first use), so fire directly.
+  if (!native.available) {
+    void native.notify(`Hygur — ${n.title}`, e.message ?? "");
+    return;
+  }
+  void native.prefs.getBool(n.key).then((on) => {
+    if (on) void native.notify(`Hygur — ${n.title}`, e.message ?? "");
+  });
+}
 
 export interface SyncProgress {
   processed: number;
@@ -39,6 +68,7 @@ function readProgress(e: HygurEvent): SyncProgress | undefined {
 
 /** Reports whether a background sync/indexation is currently running, so the UI
  *  can surface a live indicator. Fed by the sidecar `/events` SSE stream. */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with its provider (HMR-only rule; splitting it is needless churn)
 export function useActivity(): Activity {
   return useContext(ActivityContext);
 }
@@ -80,6 +110,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     };
 
     void subscribeEvents((e) => {
+      maybeNotify(e); // fire a native banner for priority events (pref-gated)
+
       const status = (e.status ?? "").toLowerCase();
       const terminal =
         e.type === "ingest_complete" ||

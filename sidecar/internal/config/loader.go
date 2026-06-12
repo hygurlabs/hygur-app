@@ -106,9 +106,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.write_timeout", DefaultWriteTimeout)
 	v.SetDefault("server.shutdown_timeout", DefaultShutdownTimeout)
 
+	// Auth defaults — local single-token by default (embedded/loopback mode).
+	// The empty defaults for the key fields are required so viper's AutomaticEnv
+	// actually binds HYGUR_AUTH_PUBLIC_KEY / HYGUR_AUTH_PRIVATE_KEY on Unmarshal
+	// (viper only env-binds keys it already knows via a default or BindEnv).
+	v.SetDefault("auth.mode", "local")
+	v.SetDefault("auth.public_key", "")
+	v.SetDefault("auth.private_key", "")
+
 	// LM Studio defaults
 	v.SetDefault("lm_studio.url", DefaultLMStudioURL)
-	// Empty default so viper's AutomaticEnv binds HYGUR_LMSTUDIO_API_KEY (it only
+	// Empty default so viper's AutomaticEnv binds HYGUR_LM_STUDIO_API_KEY (it only
 	// env-binds keys it already knows). The key is a secret: when set via env it
 	// is the operator path (server/cloud); otherwise it comes from the credential
 	// store at startup. It is never persisted to config.yaml.
@@ -118,6 +126,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("lm_studio.embedding_max_tokens", DefaultEmbeddingMaxTokens)
 	v.SetDefault("lm_studio.timeout", DefaultLMStudioTimeout)
 	v.SetDefault("lm_studio.max_retries", DefaultMaxRetries)
+	// Empty default so AutomaticEnv binds HYGUR_LM_STUDIO_NO_CHAT_TEMPLATE_KWARGS
+	// (viper only env-binds keys it already knows). Default false = send the
+	// kwarg (vLLM/Qwen path); set true for hosted backends that reject it.
+	v.SetDefault("lm_studio.no_chat_template_kwargs", false)
+	// Empty/false defaults so AutomaticEnv binds the Infomaniak-compat knobs.
+	v.SetDefault("lm_studio.max_completion_tokens", false)
+	v.SetDefault("lm_studio.reasoning_effort", "")
+	v.SetDefault("lm_studio.indexing_reasoning_effort", "")
+	v.SetDefault("lm_studio.rerank_url", "")
+	v.SetDefault("lm_studio.rerank_model", "")
 
 	// Store defaults
 	v.SetDefault("store.path", DefaultStorePath)
@@ -246,6 +264,17 @@ func validate(cfg *Config) error {
 
 	if cfg.LMStudio.MaxRetries < 0 {
 		return fmt.Errorf("%w: lm_studio.max_retries must be non-negative", ErrInvalidConfig)
+	}
+
+	switch cfg.Auth.Mode {
+	case "", "local":
+		// loopback single-token — no key required.
+	case "remote":
+		if cfg.Auth.PublicKey == "" {
+			return fmt.Errorf("%w: auth.public_key is required when auth.mode is \"remote\"", ErrInvalidConfig)
+		}
+	default:
+		return fmt.Errorf("%w: auth.mode must be \"local\" or \"remote\", got %q", ErrInvalidConfig, cfg.Auth.Mode)
 	}
 
 	return nil

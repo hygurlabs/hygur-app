@@ -79,6 +79,38 @@ func TestTier1_Amount_EuropeanFormat(t *testing.T) {
 	}
 }
 
+func TestTier1_Amount_RejectsReferenceNumbers(t *testing.T) {
+	// Long bare digit-runs next to a currency token are reference / account /
+	// phone numbers, not amounts (the Follow-up false positive: "365138779 EUR").
+	rejected := []string{
+		"Référence client 365138779 EUR",
+		"Votre numéro 12345678 EUR de contrat",
+	}
+	for _, text := range rejected {
+		t.Run("reject/"+text, func(t *testing.T) {
+			if got := ExtractTier1(text); len(got.Amounts) != 0 {
+				t.Errorf("expected 0 amounts (reference number), got %v", got.Amounts)
+			}
+		})
+	}
+
+	// Real amounts must still be extracted: with separators/decimals at any
+	// size, and bare integers up to 7 digits.
+	kept := []struct{ text, want string }{
+		{"Solde de 1 234 567,89 €", "1234567.89"},
+		{"Total 1234567 EUR", "1234567"},
+		{"Montant 1200 EUR", "1200"},
+	}
+	for _, tc := range kept {
+		t.Run("keep/"+tc.text, func(t *testing.T) {
+			got := ExtractTier1(tc.text)
+			if len(got.Amounts) != 1 || got.Amounts[0].Value != tc.want {
+				t.Errorf("got %v, want single amount %q", got.Amounts, tc.want)
+			}
+		})
+	}
+}
+
 func TestTier1_Amount_NonBreakingSpace(t *testing.T) {
 	// French typography emits U+00A0 (NBSP) as the thousands separator.
 	// Regression: prior to Unicode-space normalization, "7 421,85" was

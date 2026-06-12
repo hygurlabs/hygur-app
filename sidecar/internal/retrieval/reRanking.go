@@ -66,6 +66,12 @@ func (us *UnifiedSearcher) Rerank(ctx context.Context, query string, results []U
 		docChunks = temp
 	}
 
+	// Dedicated reranker (cross-encoder) when configured — cheaper + better than
+	// the LLM-as-judge path below, and it keeps reranking off the chat-token budget.
+	if us.llm != nil && us.llm.RerankConfigured() {
+		return us.rerankDedicated(ctx, query, docChunks)
+	}
+
 	var sb strings.Builder
 	sb.WriteString("You are a relevance ranking assistant. You will receive a query and several text chunks. Rank them by relevance to the query.\n\n")
 	fmt.Fprintf(&sb, "Query: %s\n\n", query)
@@ -194,4 +200,35 @@ func ReOrderBy(results []UnifiedResult, orderedContentIDs []string) []UnifiedRes
 	}
 
 	return ordered
+}
+
+// rerankDedicated reranks via the configured dedicated reranker (Cohere-shaped
+// /rerank, e.g. Infomaniak's bge-reranker-v2-m3): one document per content id
+// (title + best chunk), returning content ids most-relevant-first. The cid order
+// is stabilised (map iteration is random) so the reranker's index→cid mapping is
+// deterministic.
+func (us *UnifiedSearcher) rerankDedicated(ctx context.Context, query string, docChunks map[string][]UnifiedResult) ([]string, error) {
+	cids := make([]string, 0, len(docChunks))
+	for cid := range docChunks {
+		cids = append(cids, cid)
+	}
+	sort.Strings(cids)
+	texts := make([]string, len(cids))
+	for i, cid := range cids {
+		c := docChunks[cid][0]
+		texts[i] = strings.TrimSpace(c.Title + "\n" + c.Excerpt)
+	}
+	rctx, cancel := context.WithTimeout(ctx, rerankTimeout)
+	defer cancel()
+	order, err := us.llm.Rerank(rctx, query, texts, 0)
+	if err != nil {
+		return nil, fmt.Errorf("dedicated rerank failed: %w", err)
+	}
+	out := make([]string, 0, len(order))
+	for _, i := range order {
+		if i >= 0 && i < len(cids) {
+			out = append(out, cids[i])
+		}
+	}
+	return out, nil
 }

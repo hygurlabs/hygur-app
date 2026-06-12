@@ -135,7 +135,7 @@ const extractorSystemPrompt = `You extract durable user-specific facts from a co
 Rules:
 - Each item: {"type": "fact" | "preference" | "action", "content": "<≤140 chars>", "expires_at"?: "YYYY-MM-DD"}
 - "fact": durable identity / relationship / config (e.g. "Comptable: Pierre Dupont chez Acme Compta").
-- "preference": stated user preference (e.g. "Préfère les réponses en français").
+- "preference": stated user preference (e.g. "Prefers concise answers").
 - "action": something the user committed to doing with a deadline (set expires_at to the deadline).
 - Skip greetings, acknowledgements, jokes, transient task details, anything ephemeral.
 - Skip information that is not specifically about the user or their world.
@@ -292,7 +292,7 @@ const sessionExtractorSystemPrompt = `You distill durable user-specific facts fr
 Rules:
 - Each item: {"type": "fact" | "preference" | "action", "content": "<≤140 chars>", "expires_at"?: "YYYY-MM-DD"}
 - "fact": durable identity / relationship / config (e.g. "Comptable: Pierre Dupont chez Acme Compta").
-- "preference": stated user preference (e.g. "Préfère les réponses en français").
+- "preference": stated user preference (e.g. "Prefers concise answers").
 - "action": something the user committed to doing with a deadline (set expires_at to the deadline).
 - Skip greetings, acknowledgements, jokes, transient task details, anything ephemeral.
 - Skip information that is not specifically about the user or their world.

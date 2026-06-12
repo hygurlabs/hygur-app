@@ -16,6 +16,7 @@ import { api } from "../lib/api";
 import { native } from "../lib/native";
 import type { SidecarConfig } from "../lib/types";
 import { Button, TextInput } from "../components/ui";
+import logo from "../assets/logo.png";
 
 /** Navigation/lifecycle handed to every step by the wizard container. */
 export interface StepContext {
@@ -30,18 +31,25 @@ export interface StepContext {
 
 function StepHeader({
   icon,
+  image,
   title,
   subtitle,
 }: {
-  icon: ReactNode;
+  icon?: ReactNode;
+  /** When set, shows this image (e.g. the app logo) instead of the icon box. */
+  image?: string;
   title: string;
   subtitle?: string;
 }) {
   return (
     <div className="mb-7 flex flex-col items-center text-center">
-      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-accent-weak text-accent">
-        {icon}
-      </div>
+      {image ? (
+        <img src={image} alt="" className="mb-4 size-20 rounded-[22%] shadow-sm" />
+      ) : (
+        <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-accent-weak text-accent">
+          {icon}
+        </div>
+      )}
       <h1 className="font-display text-[26px] font-semibold leading-tight tracking-tight">
         {title}
       </h1>
@@ -87,11 +95,39 @@ function Card({ children }: { children: ReactNode }) {
 
 // MARK: - Welcome
 
-export function StepWelcome() {
+export function StepWelcome({ cloud = false }: { cloud?: boolean }) {
+  if (cloud) {
+    return (
+      <div>
+        <StepHeader
+          image={logo}
+          title="Welcome to Hygur"
+          subtitle="Your private workspace — a searchable memory of your documents, mail and notes, answered by AI with citations. Your data is encrypted and isolated to your account."
+        />
+        <Card>
+          <InfoRow
+            icon={<ShieldCheck size={18} strokeWidth={1.7} />}
+            title="Private &amp; encrypted"
+            detail="Your workspace is encrypted and kept separate from every other account — only you can read it."
+          />
+          <InfoRow
+            icon={<Sparkles size={18} strokeWidth={1.7} />}
+            title="Answers you can trust"
+            detail="Hygur answers from your own sources and cites them, so you can check every fact."
+          />
+          <InfoRow
+            icon={<PlugZap size={18} strokeWidth={1.7} />}
+            title="Connect what matters"
+            detail="Index your mail, calendar and documents so Hygur answers with your own context."
+          />
+        </Card>
+      </div>
+    );
+  }
   return (
     <div>
       <StepHeader
-        icon={<Sparkles size={26} strokeWidth={1.6} />}
+        image={logo}
         title="Welcome to Hygur"
         subtitle="Your local digital twin — a private memory of your documents, mail and notes, powered by your own LLM. Everything runs on this Mac. No cloud, no account."
       />
@@ -263,13 +299,12 @@ async function waitForInference(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const r = await fetch("/health", { cache: "no-store" });
-      if (r.ok) {
-        const h = (await r.json()) as { inference?: string };
-        if (h.inference === "connected") return true;
-      }
+      // Use the API client so this honours the configured base URL — a raw
+      // fetch("/health") would hit tauri://localhost in the packaged client.
+      const h = (await api.health()) as { inference?: string };
+      if (h?.inference === "connected") return true;
     } catch {
-      /* sidecar is restarting — keep polling */
+      /* sidecar is restarting / transient — keep polling */
     }
     await sleep(700);
   }
@@ -466,29 +501,41 @@ function ModelStatusBanner({ status }: { status: ModelStatus }) {
 
 // MARK: - Accounts (skippable)
 
-export function StepAccounts({ ctx }: { ctx: StepContext }) {
+export function StepAccounts({ ctx, cloud = false }: { ctx: StepContext; cloud?: boolean }) {
   return (
     <div>
       <StepHeader
         icon={<PlugZap size={26} strokeWidth={1.6} />}
-        title="Connect your accounts"
+        title="Connect your sources"
         subtitle="Hygur answers with your own context once you connect a few sources. This is optional — you can set it up now or anytime from the Connectors tab."
       />
       <Card>
         <InfoRow
           icon={<Mail size={18} strokeWidth={1.7} />}
           title="Mail"
-          detail="Gmail, any IMAP provider, or the macOS Mail.app (read-only) — indexed locally."
+          detail={
+            cloud
+              ? "Gmail or any IMAP provider — indexed into your private workspace."
+              : "Gmail, any IMAP provider, or the macOS Mail.app (read-only) — indexed locally."
+          }
         />
         <InfoRow
           icon={<CalendarDays size={18} strokeWidth={1.7} />}
           title="Calendar"
-          detail="Your macOS calendars feed the agenda and meeting briefings."
+          detail={
+            cloud
+              ? "Connect a calendar to surface upcoming events and meeting briefings."
+              : "Your macOS calendars feed the agenda and meeting briefings."
+          }
         />
         <InfoRow
           icon={<FolderOpen size={18} strokeWidth={1.7} />}
-          title="Files & folders"
-          detail="Point Hygur at a folder of PDFs, notes and documents to make them searchable."
+          title={cloud ? "Files & documents" : "Files & folders"}
+          detail={
+            cloud
+              ? "Add PDFs, notes and documents to make them searchable."
+              : "Point Hygur at a folder of PDFs, notes and documents to make them searchable."
+          }
         />
       </Card>
       <div className="mt-5 flex justify-center">
@@ -536,13 +583,12 @@ function Toggle({
 
 export function StepNotifications() {
   const [state, setState] = useState<Record<string, boolean>>({});
-  const [loaded, setLoaded] = useState(false);
+  // No native bridge → nothing to load; start "loaded" so the effect never has to
+  // setState synchronously.
+  const [loaded, setLoaded] = useState(() => !native.available);
 
   useEffect(() => {
-    if (!native.available) {
-      setLoaded(true);
-      return;
-    }
+    if (!native.available) return;
     let cancelled = false;
     void Promise.all(
       NOTIF_TOGGLES.map((t) => native.prefs.getBool(t.key).then((v) => [t.key, v] as const)),
@@ -598,24 +644,36 @@ export function StepNotifications() {
 
 // MARK: - Ready
 
-export function StepReady() {
+export function StepReady({ cloud = false }: { cloud?: boolean }) {
   return (
     <div>
       <StepHeader
         icon={<CheckCircle2 size={26} strokeWidth={1.6} />}
         title="You're all set"
-        subtitle="Ask anything in plain language. Hygur searches your indexed sources and answers with citations — entirely on this Mac."
+        subtitle={
+          cloud
+            ? "Ask anything in plain language. Hygur searches your connected sources and answers with citations."
+            : "Ask anything in plain language. Hygur searches your indexed sources and answers with citations — entirely on this Mac."
+        }
       />
       <Card>
         <InfoRow
           icon={<Sparkles size={18} strokeWidth={1.7} />}
           title="Ask Hygur"
-          detail="Type a question, or summon it anywhere with ⌘⇧H."
+          detail={
+            cloud
+              ? "Type a question and Hygur answers from your sources, with citations."
+              : "Type a question, or summon it anywhere with ⌘⇧H."
+          }
         />
         <InfoRow
           icon={<PlugZap size={18} strokeWidth={1.7} />}
           title="Add more later"
-          detail="Connectors, models and notifications are all editable from the sidebar and Settings."
+          detail={
+            cloud
+              ? "Connectors and notifications are editable from the sidebar and Settings."
+              : "Connectors, models and notifications are all editable from the sidebar and Settings."
+          }
         />
       </Card>
     </div>

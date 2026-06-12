@@ -39,6 +39,17 @@ ON CONFLICT(day, category) DO UPDATE SET
 	return err
 }
 
+// ResetTokenUsage clears all recorded token usage (the running daily totals).
+// Pricing settings in app_settings are untouched. Returns the rows removed.
+func (d *DB) ResetTokenUsage(ctx context.Context) (int64, error) {
+	res, err := d.db.ExecContext(ctx, `DELETE FROM token_usage`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // TokenUsageSince returns per-category token sums for all days on or after
 // startDay (inclusive, formatted 'YYYY-MM-DD').
 func (d *DB) TokenUsageSince(ctx context.Context, startDay string) ([]CategoryUsage, error) {
@@ -61,6 +72,77 @@ GROUP BY category`, startDay)
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// DayCategoryUsage is one day's raw token counts for a category — per-day rows
+// (unlike TokenUsageSince, which sums across days), so callers can compute a
+// run-rate / month-end forecast.
+type DayCategoryUsage struct {
+	Day       string `json:"day"`
+	Category  string `json:"category"`
+	TokensIn  int    `json:"tokens_in"`
+	TokensOut int    `json:"tokens_out"`
+}
+
+// TokenUsageDailySince returns raw per-day, per-category token rows on or after
+// startDay ('YYYY-MM-DD'), ordered by day — the granularity the admin cost
+// dashboard needs for run-rate (TokenUsageSince collapses the days).
+func (d *DB) TokenUsageDailySince(ctx context.Context, startDay string) ([]DayCategoryUsage, error) {
+	rows, err := d.db.QueryContext(ctx, `
+SELECT day, category, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0)
+FROM token_usage
+WHERE day >= ?
+ORDER BY day, category`, startDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DayCategoryUsage
+	for rows.Next() {
+		var u DayCategoryUsage
+		if err := rows.Scan(&u.Day, &u.Category, &u.TokensIn, &u.TokensOut); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ChatTokensThisMonth returns total chat (LLM) tokens — prompt + completion —
+// recorded since the first day of the current calendar month. Embedding/indexing
+// (ingestion) tokens are excluded: they're a separate, much cheaper budget. This
+// drives the per-tenant monthly LLM cap that protects margin under per-token
+// inference pricing.
+func (d *DB) ChatTokensThisMonth(ctx context.Context) (int, error) {
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	cats, err := d.TokenUsageSince(ctx, start)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range cats {
+		if c.Category == TokenCategoryChat {
+			return c.TokensIn + c.TokensOut, nil
+		}
+	}
+	return 0, nil
+}
+
+// ChatTokensToday returns total chat (LLM) tokens — prompt + completion —
+// recorded today (local calendar date). Drives the per-tenant DAILY cap: a fast
+// fuse against a runaway loop that complements the slower monthly cap.
+func (d *DB) ChatTokensToday(ctx context.Context) (int, error) {
+	day := time.Now().Format("2006-01-02")
+	cats, err := d.TokenUsageSince(ctx, day)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range cats {
+		if c.Category == TokenCategoryChat {
+			return c.TokensIn + c.TokensOut, nil
+		}
+	}
+	return 0, nil
 }
 
 // Pricing holds the per-1M-token prices used to estimate cost. Chat is billed

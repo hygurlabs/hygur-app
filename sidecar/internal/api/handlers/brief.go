@@ -3,23 +3,24 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"time"
 
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/scheduler"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
 
 // BriefHandler exposes on-demand triggers for the daily brief task plus the
-// meeting-briefing endpoint and the unified briefings listing.
+// unified briefings listing.
 type BriefHandler struct {
-	brief   *scheduler.DailyBrief
-	meeting *scheduler.MeetingBriefer
-	store   *store.DB
-	logger  zerolog.Logger
+	brief  *scheduler.DailyBrief
+	store  *store.DB
+	logger zerolog.Logger
 }
 
 // NewBriefHandler builds a brief handler. The brief argument may be nil
@@ -31,9 +32,6 @@ func NewBriefHandler(brief *scheduler.DailyBrief, logger zerolog.Logger) *BriefH
 		logger: logger.With().Str("handler", "brief").Logger(),
 	}
 }
-
-// SetMeetingBriefer wires the meeting briefer used by POST /brief/meeting.
-func (h *BriefHandler) SetMeetingBriefer(m *scheduler.MeetingBriefer) { h.meeting = m }
 
 // SetStore wires the store used by GET /briefings to list stored briefs.
 func (h *BriefHandler) SetStore(db *store.DB) { h.store = db }
@@ -109,63 +107,6 @@ func (h *BriefHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// meetingBriefRequest is the JSON body for POST /brief/meeting, sent by the
-// macOS app ~30 min before a calendar event.
-type meetingBriefRequest struct {
-	EventID   string   `json:"event_id"`
-	Title     string   `json:"title"`
-	Attendees []string `json:"attendees,omitempty"`
-	Notes     string   `json:"notes,omitempty"`
-	Location  string   `json:"location,omitempty"`
-	Start     string   `json:"start"` // RFC3339
-}
-
-// Meeting handles POST /brief/meeting — generate a briefing for one calendar
-// event synchronously and return it. When the KB has no relevant context the
-// response carries relevant=false and no notification is emitted.
-func (h *BriefHandler) Meeting(w http.ResponseWriter, r *http.Request) {
-	if h.meeting == nil {
-		writeBriefError(w, http.StatusServiceUnavailable, "MEETING_BRIEF_DISABLED", "Meeting briefing is not configured.")
-		return
-	}
-	var req meetingBriefRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeBriefError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
-		return
-	}
-	if req.Title == "" {
-		writeBriefError(w, http.StatusBadRequest, "VALIDATION_ERROR", "title is required")
-		return
-	}
-	when := time.Now()
-	if req.Start != "" {
-		if t, err := time.Parse(time.RFC3339, req.Start); err == nil {
-			when = t
-		}
-	}
-	key := req.EventID
-	if key == "" {
-		key = req.Title
-	}
-	result, err := h.meeting.Generate(r.Context(), scheduler.MeetingInput{
-		Kind:      "calendar",
-		Key:       key,
-		Title:     req.Title,
-		Attendees: req.Attendees,
-		Notes:     req.Notes,
-		Location:  req.Location,
-		When:      when,
-	})
-	if err != nil {
-		h.logger.Warn().Err(err).Str("title", req.Title).Msg("meeting brief failed")
-		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate briefing")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(result)
-}
-
 // BriefingDTO is one entry in the unified briefings list (daily + meeting).
 type BriefingDTO struct {
 	ContentID string `json:"content_id"`
@@ -218,6 +159,320 @@ func (h *BriefHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"briefings": out})
+}
+
+// CalendarSummary handles GET /agenda/calendar-summary — a short LLM synthesis of
+// upcoming calendar events for the Calendar view header. Returns an empty summary
+// (200) when nothing is upcoming or the brief task isn't configured, so the UI
+// degrades gracefully.
+func (h *BriefHandler) CalendarSummary(w http.ResponseWriter, r *http.Request) {
+	var res scheduler.CalendarSummaryResult
+	if h.brief != nil {
+		if got, err := h.brief.CalendarSummary(r.Context()); err != nil {
+			h.logger.Warn().Err(err).Msg("calendar summary failed")
+		} else {
+			res = got
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+// FollowUp handles GET /knowledge/followup — a grounded LLM digest (salient
+// topics + real, cited contradictions) for the Follow-up view. Returns an empty
+// digest (200) when there's nothing factual to report or the brief task isn't
+// configured, so the UI degrades gracefully.
+func (h *BriefHandler) FollowUp(w http.ResponseWriter, r *http.Request) {
+	res := scheduler.FollowUpDigest{}
+	if h.brief != nil {
+		if got, err := h.brief.FollowUp(r.Context(), r.URL.Query().Get("project_id")); err != nil {
+			h.logger.Warn().Err(err).Msg("follow-up digest failed")
+		} else {
+			res = got
+		}
+	}
+	if res.Topics == nil {
+		res.Topics = []scheduler.DigestEntry{}
+	}
+	if res.Contradictions == nil {
+		res.Contradictions = []scheduler.DigestEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+// FollowUpReport handles GET /knowledge/followup/report — a short, grounded
+// natural-language report streamed over SSE (`data: {"delta":"…"}` … then
+// `data: {"done":true}`), so the UI can render it as it's written. Cached ~1h.
+func (h *BriefHandler) FollowUpReport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable nginx buffering
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		fmt.Fprintf(w, "data: %s\n\n", `{"error":"streaming not supported"}`)
+		return
+	}
+
+	if h.brief != nil {
+		err := h.brief.StreamFollowUpReport(r.Context(), r.URL.Query().Get("project_id"), func(delta string) error {
+			b, mErr := json.Marshal(map[string]string{"delta": delta})
+			if mErr != nil {
+				return mErr
+			}
+			if _, wErr := fmt.Fprintf(w, "data: %s\n\n", b); wErr != nil {
+				return wErr
+			}
+			flusher.Flush()
+			return nil
+		})
+		if err != nil && r.Context().Err() == nil {
+			h.logger.Warn().Err(err).Msg("follow-up report stream failed")
+		}
+	}
+	fmt.Fprintf(w, "data: %s\n\n", `{"done":true}`)
+	flusher.Flush()
+}
+
+// AgendaEvents returns calendar events whose date falls in [from,to], ordered
+// by date — so the Calendar view shows the actual upcoming events rather than
+// the most-recently-synced batch (the generic item list is ordered by
+// updated_at, which buries upcoming events behind a recent backfill of old
+// ones). GET /agenda/events?from=&to=&limit= (RFC3339; defaults ±1 year).
+func (h *BriefHandler) AgendaEvents(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	now := time.Now()
+	from, to := now.AddDate(-1, 0, 0), now.AddDate(1, 0, 0)
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			from = t
+		}
+	}
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			to = t
+		}
+	}
+	limit := 500
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+
+	items, err := h.store.ListEventsInWindow(r.Context(), from, to, limit)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("agenda events query failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list events")
+		return
+	}
+
+	type evt struct {
+		ContentID      string         `json:"content_id"`
+		SourceType     string         `json:"source_type"`
+		Title          string         `json:"title"`
+		NormalizedText string         `json:"normalized_text"`
+		Metadata       map[string]any `json:"metadata,omitempty"`
+		Date           string         `json:"date,omitempty"`
+	}
+	out := make([]evt, 0, len(items))
+	for _, it := range items {
+		date := ""
+		if cd := store.GetCanonicalDate(it); !cd.IsZero() {
+			date = cd.UTC().Format(time.RFC3339)
+		}
+		out = append(out, evt{it.ContentID, it.SourceType, it.Title, it.NormalizedText, it.Metadata, date})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"events": out})
+}
+
+// DraftReply handles POST /knowledge/{content_id}/draft-reply — an on-demand,
+// grounded reply draft for a mail item (not cached). Returns {"draft": "..."}.
+func (h *BriefHandler) DraftReply(w http.ResponseWriter, r *http.Request) {
+	if h.brief == nil || h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	item, err := h.store.GetKnowledgeItem(r.Context(), contentIDParam(r))
+	if err != nil || item == nil {
+		writeBriefError(w, http.StatusNotFound, "NOT_FOUND", "item not found")
+		return
+	}
+	draft, err := h.brief.DraftReply(r.Context(), item)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("draft reply failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to draft reply")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"draft": draft})
+}
+
+// Claims handles GET /knowledge/{content_id}/claims — W6 stage-1 preview: runs
+// LLM claim extraction (verbatim-quote gated) on the item and returns the claims,
+// so claim quality can be eyeballed on real data before the cached backfill.
+func (h *BriefHandler) Claims(w http.ResponseWriter, r *http.Request) {
+	if h.brief == nil || h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	item, err := h.store.GetKnowledgeItem(r.Context(), contentIDParam(r))
+	if err != nil || item == nil {
+		writeBriefError(w, http.StatusNotFound, "NOT_FOUND", "item not found")
+		return
+	}
+	claims, err := h.brief.ExtractClaims(r.Context(), item)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("claim extraction failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to extract claims")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"claims": claims, "count": len(claims)})
+}
+
+// ClaimContradictions handles GET /knowledge/claim-contradictions?project_id= —
+// the W6 REDUCE surface: cross-source claim divergences reconciled by the LLM into
+// conflict / supersedes, each cited. Cached ~1h per scope.
+func (h *BriefHandler) ClaimContradictions(w http.ResponseWriter, r *http.Request) {
+	if h.brief == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	conflicts, scanned, err := h.brief.SemanticContradictions(r.Context(), r.URL.Query().Get("project_id"))
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("semantic contradictions failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to reconcile contradictions")
+		return
+	}
+	// Apply the user's dismissals fresh each request (not baked into the ~1h
+	// reconciliation cache, so a dismiss takes effect immediately). Default hides
+	// dismissed ones; ?include_dismissed=1 returns them flagged (the manage view).
+	includeDismissed := r.URL.Query().Get("include_dismissed") == "1"
+	var dismissed map[string]bool
+	if h.store != nil {
+		if d, derr := h.store.DismissedContradictions(r.Context()); derr == nil {
+			dismissed = d
+		}
+	}
+	out := make([]contradict.ReconciledConflict, 0, len(conflicts))
+	for _, c := range conflicts {
+		isDismissed := dismissed[c.Key]
+		if isDismissed && !includeDismissed {
+			continue
+		}
+		c.Dismissed = isDismissed
+		out = append(out, c)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"contradictions": out, "scanned": scanned})
+}
+
+// Digest handles GET /digest — the daily "state of your world" surface
+// (Direction C). It ASSEMBLES already-computed signals into one proactive view:
+// where things stand (the life synopsis), open contradictions, decisions awaiting
+// confirmation, and tasks due soon. Cheap reads + the durable contradiction cache
+// — no mega-prompt; this is composition, not generation.
+func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	ctx := r.Context()
+	const (
+		maxContradictions = 5
+		maxDecisions      = 8
+		maxTasks          = 10
+	)
+
+	// Where things stand: the rolling life synopsis (compact, grounded).
+	var synopsis string
+	if ch, err := h.store.GetChronicleChapter(ctx, "life"); err == nil && ch != nil {
+		synopsis = ch.Synopsis
+	}
+
+	// Open contradictions (non-dismissed). Uses the cached/durable reconcile path.
+	contradictions := make([]contradict.ReconciledConflict, 0, maxContradictions)
+	if h.brief != nil {
+		if conflicts, _, err := h.brief.SemanticContradictions(ctx, ""); err == nil {
+			dismissed, _ := h.store.DismissedContradictions(ctx)
+			for _, c := range conflicts {
+				if dismissed[c.Key] {
+					continue
+				}
+				contradictions = append(contradictions, c)
+				if len(contradictions) >= maxContradictions {
+					break
+				}
+			}
+		} else {
+			h.logger.Debug().Err(err).Msg("digest: contradictions unavailable")
+		}
+	}
+
+	// Decisions awaiting confirmation.
+	proposed := []*store.Decision{}
+	if ds, err := h.store.ListDecisions(ctx, "", "proposed"); err == nil {
+		if len(ds) > maxDecisions {
+			ds = ds[:maxDecisions]
+		}
+		proposed = ds
+	}
+
+	// Tasks due within the next week (open, dated, soonest first).
+	dueTasks := []*store.Task{}
+	cutoff := time.Now().AddDate(0, 0, 7).UTC().Format(time.RFC3339)
+	if ts, err := h.store.TasksDueBefore(ctx, cutoff); err == nil {
+		if len(ts) > maxTasks {
+			ts = ts[:maxTasks]
+		}
+		dueTasks = ts
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"synopsis":           synopsis,
+		"contradictions":     contradictions,
+		"proposed_decisions": proposed,
+		"due_tasks":          dueTasks,
+	})
+}
+
+// dismissContradictionRequest is the body of POST /knowledge/contradictions/dismiss.
+type dismissContradictionRequest struct {
+	Key  string `json:"key"`
+	Undo bool   `json:"undo"` // true → restore a previously dismissed contradiction
+}
+
+// DismissContradiction handles POST /knowledge/contradictions/dismiss — records
+// (or, with undo, clears) a dismissed contradiction key. 204 on success.
+func (h *BriefHandler) DismissContradiction(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
+		return
+	}
+	var req dismissContradictionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		writeBriefError(w, http.StatusBadRequest, "BAD_REQUEST", "a contradiction key is required")
+		return
+	}
+	var err error
+	if req.Undo {
+		err = h.store.UndismissContradiction(r.Context(), req.Key)
+	} else {
+		err = h.store.DismissContradiction(r.Context(), req.Key)
+	}
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("dismiss contradiction failed")
+		writeBriefError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to update dismissal")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeBriefError(w http.ResponseWriter, status int, code, message string) {

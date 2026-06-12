@@ -67,6 +67,19 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* iOS Safari zooms the page in whenever a focused form control has a computed
+   font-size below 16px — so tapping the composer or any input forces the user
+   to pinch-zoom back out. Pin controls to 16px on phone widths (overrides the
+   text-sm / text-[13px] utilities, hence !important). Desktop keeps the smaller,
+   denser type. */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* Restrained view-enter — one quiet fade-up, disabled for reduced motion. */
 @keyframes view-enter {
   from {

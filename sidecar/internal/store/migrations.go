@@ -199,6 +199,202 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 `,
 	},
+	// Migration 12 adds chat_message_attachments: the image/audio media of a
+	// user turn, so a reopened conversation re-displays the image and replays
+	// the audio. data is NULL once an audio recording is purged by the size cap
+	// (the row stays so the UI shows a clean "no longer available" placeholder).
+	// Idempotent on fresh installs (schemaSQL v1 declares the table too).
+	{
+		Version: 12,
+		Name:    "chat_message_attachments",
+		SQL: `
+CREATE TABLE IF NOT EXISTS chat_message_attachments (
+    message_id TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    format TEXT NOT NULL DEFAULT '',
+    data BLOB,
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_type ON chat_message_attachments(type, created_at);
+`,
+	},
+	{
+		Version: 13,
+		Name:    "tasks",
+		SQL: `
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    due_date TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT '',
+    source_content_id TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+`,
+	},
+	// Migration 14 records contradictions the user has dismissed ("seen it,
+	// hide it"). Keyed by a stable hash of the conflict (cluster + entity +
+	// attribute + value set) so it survives recomputation. Per-tenant DB → no
+	// tenant column.
+	{
+		Version: 14,
+		Name:    "dismissed_contradictions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS dismissed_contradictions (
+    key          TEXT PRIMARY KEY,
+    dismissed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
+	// Migration 15 turns tasks into note-like knowledge_items: a task is a
+	// knowledge_item (source_type='task') carrying a Markdown body, tags
+	// (item_tags) and a project (project_links) like a note, plus task state in
+	// task_attrs (status, due_date). Existing rows from the standalone `tasks`
+	// table are migrated into the new model, then that table is dropped (the
+	// off-box backup is the rollback). project_links are recreated only when the
+	// referenced project still exists, to respect the FK.
+	{
+		Version: 15,
+		Name:    "tasks_as_knowledge_items",
+		SQL: `
+CREATE TABLE IF NOT EXISTS task_attrs (
+    content_id   TEXT PRIMARY KEY REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'open',
+    due_date     TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_task_attrs_due ON task_attrs(due_date);
+CREATE INDEX IF NOT EXISTS idx_task_attrs_status ON task_attrs(status);
+
+INSERT OR IGNORE INTO knowledge_items (content_id, source_type, title, normalized_text, version_id, created_at, updated_at)
+    SELECT id, 'task', title, '', 'v1', created_at, updated_at FROM tasks;
+INSERT OR IGNORE INTO task_attrs (content_id, status, due_date, created_at, updated_at)
+    SELECT id, status, due_date, created_at, updated_at FROM tasks;
+INSERT OR IGNORE INTO project_links (link_id, project_id, content_id)
+    SELECT lower(hex(randomblob(16))), project_id, id
+    FROM tasks
+    WHERE project_id != '' AND project_id IN (SELECT project_id FROM projects);
+DROP TABLE tasks;
+`,
+	},
+	// Migration 16 — Chronicle: per-chapter narrative state. The acts (the nightly
+	// prose blocks) live as knowledge_items (source_type=chronicle_act); this table
+	// holds the rolling synopsis (continuity), the watermark (last chronicled
+	// ingestion time, so traces are never re-narrated), status and project link.
+	{
+		Version: 16,
+		Name:    "chronicle_chapters",
+		SQL: `
+CREATE TABLE IF NOT EXISTS chronicle_chapters (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open',
+    synopsis    TEXT NOT NULL DEFAULT '',
+    watermark   TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
+	// Migration 17 — Chronicle reopen: a staged, free-text note set when the user
+	// reopens a closed chapter. The next nightly write folds it into the resumption
+	// narration (grounded by the user's own words + corroborating traces), then clears it.
+	{
+		Version: 17,
+		Name:    "chronicle_pending_note",
+		SQL:     `ALTER TABLE chronicle_chapters ADD COLUMN pending_note TEXT NOT NULL DEFAULT '';`,
+	},
+	// Migration 18 — Decisions: the user's decisions/commitments as first-class,
+	// note-like knowledge_items (source_type='decision') carrying a Markdown
+	// rationale, tags and a project like a note, plus decision state in
+	// decision_attrs (status, the date it was decided, the source item ids that
+	// ground it). status: 'proposed' (detected by the nightly scan, awaiting the
+	// user's confirmation), 'standing' (active), 'superseded' (no longer holds).
+	// dedup_key (hash of source ref + statement) makes the nightly scan idempotent
+	// — the same decision is never re-proposed.
+	{
+		Version: 18,
+		Name:    "decisions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS decision_attrs (
+    content_id   TEXT PRIMARY KEY REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'standing',
+    decided_on   TEXT NOT NULL DEFAULT '',
+    source_refs  TEXT NOT NULL DEFAULT '[]',
+    dedup_key    TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_decision_attrs_status ON decision_attrs(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_attrs_dedup ON decision_attrs(dedup_key) WHERE dedup_key != '';
+`,
+	},
+	// Migration 19 — durable cache of reconciled contradictions (W6). The
+	// reconciliation is LLM-backed and was only cached in-memory (lost on restart,
+	// per-process). Persisting the latest result per scope makes it readable
+	// instantly + cheaply by Ask (brain-context injection) and the daily digest,
+	// without recomputing. One JSON blob per scope ("" = all mail+notes).
+	{
+		Version: 19,
+		Name:    "contradiction_cache",
+		SQL: `
+CREATE TABLE IF NOT EXISTS contradiction_cache (
+    scope         TEXT PRIMARY KEY,
+    conflicts     TEXT NOT NULL DEFAULT '[]',
+    scanned       INTEGER NOT NULL DEFAULT 0,
+    computed_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
+	// Migration 20 — "Quand Hygur rêve" Phase 0: the per-item ACCESS signal, the
+	// pivot of memory consolidation (docs/DREAM_PLAN.md). Stamped when an item is
+	// CITED in an answer (the "useful" signal, not a raw vector match). Separate
+	// table (not columns on knowledge_items) so a citation never rewrites the hot
+	// item row (with its big normalized_text). No FK: content_ids that aren't
+	// knowledge_items (e.g. synthetic thread ids) must not abort the batch; orphan
+	// rows are tiny and reaped during consolidation. OBSERVE-ONLY for now —
+	// nothing reads this yet; we measure before tiering.
+	{
+		Version: 20,
+		Name:    "item_access",
+		SQL: `
+CREATE TABLE IF NOT EXISTS item_access (
+    content_id        TEXT PRIMARY KEY,
+    hit_count         INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at  DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_item_access_last ON item_access(last_accessed_at);
+`,
+	},
+	// Migration 21 — per-cluster reconcile verdict cache. The W6 contradiction
+	// Reconcile (LLM, one call per cluster) was the steady-state chat-token hog:
+	// every cold recompute re-judged EVERY cluster. The cluster Key encodes the
+	// exact claim set (cluster+entity+attribute+values), so a verdict is valid for
+	// that Key forever. Cache every verdict INCLUDING 'none', so a recompute only
+	// calls the LLM for clusters whose claims actually changed (new Keys).
+	{
+		Version: 21,
+		Name:    "reconcile_verdicts",
+		SQL: `
+CREATE TABLE IF NOT EXISTS reconcile_verdicts (
+    cluster_key  TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
@@ -386,15 +582,30 @@ func applySectionsAndFTSV9Migration(tx *sql.Tx) error {
 		}
 	}
 
-	// 4. Backfill the FTS index from any chunks predating the triggers (no-op
-	//    on a fresh DB; idempotent via NOT EXISTS on re-run).
-	if _, err := tx.Exec(`
-		INSERT INTO chunks_fts(chunk_id, content_id, text)
-		SELECT c.chunk_id, c.content_id, c.text
-		FROM chunks c
-		WHERE NOT EXISTS (SELECT 1 FROM chunks_fts f WHERE f.chunk_id = c.chunk_id)
-	`); err != nil {
-		return fmt.Errorf("backfill fts5: %w", err)
+	// 4. Backfill the FTS index from any chunks predating the triggers. The
+	//    anti-join probes chunks_fts by chunk_id, which is UNINDEXED in FTS5, so
+	//    it falls back to a full FTS scan PER chunk → O(n²). ensureRAGSchema re-runs
+	//    this on EVERY boot, so guard it with a cheap count: skip when the index is
+	//    already in sync (the steady state). Only an out-of-sync DB — the table was
+	//    just created, or a version-mismatch skipped v9 — pays the one-time backfill.
+	//    (Without the guard, boot time grew quadratically with the chunk count:
+	//    ~10s at 2.7k chunks, ~106s at 5.2k.)
+	var nChunks, nFTS int
+	if err := tx.QueryRow(`SELECT count(*) FROM chunks`).Scan(&nChunks); err != nil {
+		return fmt.Errorf("count chunks: %w", err)
+	}
+	if err := tx.QueryRow(`SELECT count(*) FROM chunks_fts`).Scan(&nFTS); err != nil {
+		return fmt.Errorf("count chunks_fts: %w", err)
+	}
+	if nFTS < nChunks {
+		if _, err := tx.Exec(`
+			INSERT INTO chunks_fts(chunk_id, content_id, text)
+			SELECT c.chunk_id, c.content_id, c.text
+			FROM chunks c
+			WHERE NOT EXISTS (SELECT 1 FROM chunks_fts f WHERE f.chunk_id = c.chunk_id)
+		`); err != nil {
+			return fmt.Errorf("backfill fts5: %w", err)
+		}
 	}
 	return nil
 }

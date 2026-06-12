@@ -37,9 +37,9 @@ func NewDailyBrief(store *store.DB, llmClient *llm.Client, broker *events.Broker
 		cfg.MaxItems = 80
 	}
 	if cfg.LookbackHours <= 0 {
-		// 7 days catches yesterday-evening mail without making the morning
-		// brief feel stale on Mondays.
-		cfg.LookbackHours = 168
+		// Daily = delta: the brief reports what moved since yesterday, not a
+		// rolling 7-day re-summary. Matches the config loader default (48h).
+		cfg.LookbackHours = 48
 	}
 	if cfg.HourLocal == "" {
 		cfg.HourLocal = "08:00"
@@ -176,7 +176,14 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 	}
 
 	enriched := d.enrichItems(ctx, items)
-	prompt := buildBriefPrompt(enriched, opts, projectName)
+	// Personal daily brief → ground it in the user's open task deadlines
+	// (overdue + due soon). Project/scoped briefs keep their own focus.
+	var dueTasks []*store.Task
+	if opts.ProjectID == "" && d.store != nil {
+		cutoff := time.Now().AddDate(0, 0, followupDueHorizonDays).UTC().Format(time.RFC3339)
+		dueTasks, _ = d.store.TasksDueBefore(ctx, cutoff)
+	}
+	prompt := buildBriefPrompt(enriched, opts, projectName, dueTasks)
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
 			// Reasoning-capable backends (LM Studio + Nemotron/Qwen) emit
@@ -184,7 +191,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			// guidance they burn the entire token budget in `reasoning`
 			// and return `content: null` — the empty-brief regression. The
 			// system prompt asks the model to keep reasoning short.
-			{Role: "system", Content: "Tu es l'assistant d'un indépendant. Tu produis un brief court et hiérarchisé qui met d'abord en avant ce qui compte vraiment : actions à mener, décisions à prendre, échéances proches. Tu ignores le bruit. Garde tout raisonnement interne très bref et réponds en Markdown dans la langue de l'utilisateur."},
+			{Role: "system", Content: "You are a personal assistant. You produce a short, prioritised brief that puts what truly matters first: actions to take, decisions to make, upcoming deadlines. You ignore noise. Keep internal reasoning very brief and reply in Markdown, in English."},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -230,6 +237,13 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			Error:     true,
 		}))
 		return nil
+	}
+
+	// Sources rendered deterministically from the items actually used (W1.2):
+	// never the model's prose, so the brief can't cite inputs it didn't see.
+	// Replace any Sources section the model emitted despite the instruction.
+	if src := deterministicSources(enriched); src != "" {
+		briefText = strings.TrimRight(stripSourcesSection(briefText), "\n") + "\n\n" + src
 	}
 
 	contentID, perr := d.persistBrief(ctx, briefKey, title, briefText, opts)
@@ -329,17 +343,37 @@ func (d *DailyBrief) gatherItems(ctx context.Context, opts RunOptions) ([]*store
 	}
 	items, err := d.store.ListKnowledgeItemsSince(
 		ctx, since,
-		[]string{"email", "note", "file", "pdf", "markdown", "md", "txt"},
+		// Mail (both source-type variants) + notes/docs + calendar events (W3).
+		// store.MailAndSourceTypes guarantees no mail variant is forgotten.
+		store.MailAndSourceTypes("note", "file", "pdf", "markdown", "md", "txt", "event"),
 		rawLimit,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("list items since: %w", err)
 	}
 	items = d.dropStaleByCanonicalDate(items)
+	items = dropUndatedMail(items)
 	if len(items) > d.cfg.MaxItems {
 		items = items[:d.cfg.MaxItems]
 	}
 	return items, "", nil
+}
+
+// dropUndatedMail removes mail whose canonical (sent) date is absent: for such
+// items ListKnowledgeItemsSince matched on created_at, which is only the
+// ingestion timestamp — so a years-old mail that arrived without a parseable
+// Date header would otherwise leak into the recency window. Non-mail items keep
+// created_at as a legitimate date and are untouched. Applied to the lookback
+// (recent) path only; project briefs intentionally include all linked items.
+func dropUndatedMail(items []*store.KnowledgeItem) []*store.KnowledgeItem {
+	out := items[:0]
+	for _, it := range items {
+		if store.IsMailSourceType(it.SourceType) && store.GetCanonicalDate(it).IsZero() {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 // dropStaleByCanonicalDate removes items whose mail_date / canonical_date is
@@ -398,20 +432,20 @@ func customBriefTitle(dateLabel string, opts RunOptions) string {
 		if len(r) > 50 {
 			s = strings.TrimSpace(string(r[:50])) + "…"
 		}
-		return "Briefing : " + s
+		return "Briefing: " + s
 	}
-	return "Briefing personnalisé — " + dateLabel
+	return "Custom briefing — " + dateLabel
 }
 
 func emptyPlaceholder(opts RunOptions, projectName string) string {
 	if projectName != "" {
-		return "Pas d'activité enregistrée sur le projet « " + projectName + " »."
+		return "No activity recorded on project \"" + projectName + "\"."
 	}
 	hours := opts.LookbackHours
 	if hours == 0 {
 		hours = 24
 	}
-	return "Pas d'activité dans les dernières " + strconv.Itoa(hours) + "h."
+	return "No activity in the last " + strconv.Itoa(hours) + "h."
 }
 
 // persistBrief stores the brief as a knowledge_item with source_type="brief".
@@ -504,100 +538,110 @@ func (d *DailyBrief) enrichItems(ctx context.Context, items []*store.KnowledgeIt
 // We close with a "Sources" section listing the tags and project names
 // the brief drew from, so the user can audit the inputs without leaving
 // the brief.
-func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) string {
+func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string, dueTasks []*store.Task) string {
 	var sb strings.Builder
 	if opts.Instructions != "" {
-		sb.WriteString("Focus demandé par l'utilisateur : ")
+		sb.WriteString("User-requested focus: ")
 		sb.WriteString(opts.Instructions)
-		sb.WriteString("\nPriorise ce focus dans le brief ci-dessous.\n\n")
+		sb.WriteString("\nPrioritise this focus in the brief below.\n\n")
 	}
 	if projectName != "" {
-		sb.WriteString("Voici les éléments liés au projet « ")
+		sb.WriteString("Here are the items related to the project \"")
 		sb.WriteString(projectName)
-		sb.WriteString(" » dans la base personnelle de l'utilisateur. ")
-		sb.WriteString("Génère un brief opérationnel et exécutif en français, structuré exactement ainsi :\n\n")
-		sb.WriteString("## Synthèse exécutive\n")
-		sb.WriteString("3-5 puces : où en est le projet, décisions prises / en attente, risques bloquants, échéances proches.\n\n")
-		sb.WriteString("## Plan d'action\n")
-		sb.WriteString("- **À faire ce matin :** tâches concrètes, courtes, livrables clairs.\n")
-		sb.WriteString("- **À faire cet après-midi :** suite logique, suivis, validations.\n")
-		sb.WriteString("- **Cette semaine :** échéances et travaux de fond.\n\n")
-		sb.WriteString("## Emails à traiter\n")
-		sb.WriteString("Liste les emails du contexte qui attendent une réponse, sous la forme « De [expéditeur] — [sujet] → [action recommandée] ».\n\n")
-		sb.WriteString("## À ajouter dans la task list\n")
-		sb.WriteString("Tâches à créer (verbe d'action en début), avec échéance et montant si présents.\n\n")
-		sb.WriteString("## Sources\n")
-		sb.WriteString("Tags et projets utilisés pour ce brief, séparés par des virgules.\n")
+		sb.WriteString("\" in the user's personal knowledge base. ")
+		sb.WriteString("Generate an operational and executive brief in English, structured exactly as follows:\n\n")
+		sb.WriteString("## Executive summary\n")
+		sb.WriteString("3-5 bullets: where the project stands, decisions made / pending, blocking risks, upcoming deadlines.\n\n")
+		sb.WriteString("## Action plan\n")
+		sb.WriteString("- **This morning:** concrete, short tasks with clear deliverables.\n")
+		sb.WriteString("- **This afternoon:** logical follow-ups, validations.\n")
+		sb.WriteString("- **This week:** deadlines and deeper work.\n\n")
+		sb.WriteString("## Emails to handle\n")
+		sb.WriteString("List the emails in the context awaiting a reply, as \"From [sender] — [subject] → [recommended action]\".\n\n")
+		sb.WriteString("## To add to the task list\n")
+		sb.WriteString("Tasks to create (action verb first), with deadline and amount if present.\n\n")
 	} else {
 		hours := opts.LookbackHours
 		if hours == 0 {
-			hours = 168
+			hours = 48
 		}
 		if hours <= 72 {
-			sb.WriteString("Voici l'activité des dernières ")
+			sb.WriteString("Here is what moved in the last ")
 			sb.WriteString(strconv.Itoa(hours))
 			sb.WriteString(" h ")
 		} else {
-			sb.WriteString("Voici l'activité des ")
+			sb.WriteString("Here is what moved in the last ")
 			sb.WriteString(strconv.Itoa(hours / 24))
-			sb.WriteString(" derniers jours ")
+			sb.WriteString(" days ")
 		}
-		sb.WriteString("dans la base personnelle de l'utilisateur (emails, notes, documents). ")
-		sb.WriteString("Génère un brief opérationnel en français qui commence par l'essentiel. Structure :\n\n")
-		sb.WriteString("## Points importants\n")
-		sb.WriteString("Les 3 à 6 éléments qui comptent vraiment sur la période : ce qui demande une action, une décision, ou approche d'une échéance. Une puce par élément, avec l'enjeu et l'action recommandée si pertinent. Si vraiment rien de notable, écris une seule puce : « RAS — rien de critique sur la période. »\n\n")
-		sb.WriteString("## À traiter maintenant\n")
-		sb.WriteString("- Paiements / factures : montant, échéance, à qui.\n")
-		sb.WriteString("- Emails attendant une réponse : « De [expéditeur] — [sujet] → [action recommandée] ».\n")
-		sb.WriteString("- Échéances administratives, fiscales ou juridiques proches.\n\n")
-		sb.WriteString("## Tâches à créer\n")
-		sb.WriteString("Actions à ajouter à la todo (verbe d'action en tête), avec échéance et montant quand ils sont présents.\n\n")
-		sb.WriteString("## Sources\n")
-		sb.WriteString("Tags et projets impliqués dans ce brief, séparés par des virgules.\n")
+		sb.WriteString("in the user's personal knowledge base (emails, notes, documents). ")
+		sb.WriteString("This is a daily check-in: focus on the DELTA — what is new or needs follow-up — not an exhaustive summary. Structure:\n\n")
+		sb.WriteString("## Key points\n")
+		sb.WriteString("The 3 to 6 items that truly matter over the period: what needs an action, a decision, or is approaching a deadline. One bullet per item, with the stake and the recommended action when relevant. If there is genuinely nothing notable, write a single bullet: \"Nothing critical over the period.\"\n\n")
+		sb.WriteString("## Open loops\n")
+		sb.WriteString("Exchanges still pending, visible in the context: an email left unanswered, a request the user hasn't replied to yet, a commitment made but not confirmed. Format \"[date] — [contact / subject] → awaiting [what]\". Only what genuinely shows up in the items; if nothing is pending, omit the section entirely.\n\n")
+		sb.WriteString("## To handle now\n")
+		sb.WriteString("- Payments / invoices: amount, deadline, to whom.\n")
+		sb.WriteString("- Upcoming administrative, tax or legal deadlines.\n\n")
+		sb.WriteString("## Tasks to create\n")
+		sb.WriteString("Actions to add to the todo (action verb first), with deadline and amount when present.\n\n")
 	}
-	sb.WriteString("\nRègles :\n")
-	sb.WriteString("- Priorise : ce qui est urgent ou actionnable d'abord ; le bruit, jamais.\n")
-	sb.WriteString("- N'invente rien. Chaque puce doit pouvoir s'appuyer sur un élément du contexte ci-dessous.\n")
-	sb.WriteString("- Ignore newsletters, accusés de réception, notifications automatiques et vieille correspondance.\n")
-	sb.WriteString("- Omets entièrement une section qui n'a aucun contenu pertinent : pas de section vide, pas de remplissage.\n")
-	sb.WriteString("- Output : Markdown brut, sans préambule, sans bloc de code.\n\n")
-	sb.WriteString("Contexte (")
-	sb.WriteString(strconv.Itoa(len(items)))
-	sb.WriteString(" items) :\n")
+	sb.WriteString("\nRules:\n")
+	sb.WriteString("- Prioritise what's urgent or actionable; ignore noise — newsletters, auto-notifications, and spam/marketing/phishing — and never turn it into a task.\n")
+	sb.WriteString("- Use only what the context says; never invent or distort. Omit any section with no content.\n")
+	sb.WriteString("- Don't add a \"Sources\" section (it's appended automatically). Output raw Markdown, no preamble.\n\n")
 
-	tagSet := map[string]struct{}{}
-	projSet := map[string]struct{}{}
+	// The user's own open tasks with deadlines — ground the deadline/action
+	// sections in what's already tracked, and don't re-suggest creating them.
+	if len(dueTasks) > 0 {
+		sb.WriteString("The user's open tasks with deadlines (already tracked — fold these into the deadlines/actions, do not recreate them):\n")
+		for _, t := range dueTasks {
+			due := t.DueDate
+			if len(due) >= 10 {
+				due = due[:10]
+			}
+			sb.WriteString(fmt.Sprintf("- due %s — %s\n", due, t.Title))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Context (")
+	sb.WriteString(strconv.Itoa(len(items)))
+	sb.WriteString(" items):\n")
+
 	for i, it := range items {
 		sb.WriteString(fmt.Sprintf("- [%s] %s", it.SourceType, it.Title))
 		// canonical date helps the model assess freshness and detect stale items.
+		// Weekday included so the model never has to derive it (small models err).
 		if cd := store.GetCanonicalDate(it.KnowledgeItem); !cd.IsZero() {
 			sb.WriteString(" (")
-			sb.WriteString(cd.Format("2006-01-02"))
+			sb.WriteString(cd.Format("2006-01-02 Mon"))
 			sb.WriteByte(')')
 		}
-		if from, ok := it.Metadata["mail_from"].(string); ok && from != "" {
+		// Sender: direct-IMAP uses "mail_from"; edge/Proton uses "from".
+		from, _ := it.Metadata["mail_from"].(string)
+		if from == "" {
+			from, _ = it.Metadata["from"].(string)
+		}
+		if from != "" {
 			sb.WriteString(" — from ")
 			sb.WriteString(from)
 		}
 		if amount := firstStringFromMetadata(it.Metadata, "extracted_amounts"); amount != "" {
-			sb.WriteString(" · montant=")
+			sb.WriteString(" · amount=")
 			sb.WriteString(amount)
 		}
 		if due := firstStringFromMetadata(it.Metadata, "extracted_due_dates"); due != "" {
-			sb.WriteString(" · échéance=")
+			sb.WriteString(" · due=")
 			sb.WriteString(due)
 		}
 		if it.projectName != "" {
-			sb.WriteString(" · projet=")
+			sb.WriteString(" · project=")
 			sb.WriteString(it.projectName)
-			projSet[it.projectName] = struct{}{}
 		}
 		if len(it.tags) > 0 {
 			sb.WriteString(" · tags=")
 			sb.WriteString(strings.Join(it.tags, ","))
-			for _, t := range it.tags {
-				tagSet[t] = struct{}{}
-			}
 		}
 		// Capped excerpt for context. 600 chars gives the model enough to
 		// surface the actionable bits without ballooning the prompt.
@@ -613,32 +657,66 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string) st
 			break
 		}
 	}
+	return sb.String()
+}
 
-	// Append a deterministic Sources hint the model can echo verbatim.
-	if len(tagSet) > 0 || len(projSet) > 0 {
-		sb.WriteString("\nIndices Sources (à reprendre/affiner dans la dernière section) :\n")
-		if len(projSet) > 0 {
-			projs := make([]string, 0, len(projSet))
-			for p := range projSet {
-				projs = append(projs, p)
-			}
-			sort.Strings(projs)
-			sb.WriteString("- Projets : ")
-			sb.WriteString(strings.Join(projs, ", "))
-			sb.WriteByte('\n')
+// deterministicSources renders the "## Sources" section in code from the items
+// actually used — the projects + tags present — so it can't be hallucinated or
+// reworded by the model. Returns "" when there's nothing to cite.
+func deterministicSources(items []briefItem) string {
+	projSet := map[string]struct{}{}
+	tagSet := map[string]struct{}{}
+	for _, it := range items {
+		if it.projectName != "" {
+			projSet[it.projectName] = struct{}{}
 		}
-		if len(tagSet) > 0 {
-			tags := make([]string, 0, len(tagSet))
-			for t := range tagSet {
-				tags = append(tags, t)
-			}
-			sort.Strings(tags)
-			sb.WriteString("- Tags : ")
-			sb.WriteString(strings.Join(tags, ", "))
-			sb.WriteByte('\n')
+		for _, t := range it.tags {
+			tagSet[t] = struct{}{}
 		}
 	}
+	if len(projSet) == 0 && len(tagSet) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## Sources\n")
+	if len(projSet) > 0 {
+		sb.WriteString("- Projects: ")
+		sb.WriteString(strings.Join(sortedSet(projSet), ", "))
+		sb.WriteByte('\n')
+	}
+	if len(tagSet) > 0 {
+		sb.WriteString("- Tags: ")
+		sb.WriteString(strings.Join(sortedSet(tagSet), ", "))
+		sb.WriteByte('\n')
+	}
 	return sb.String()
+}
+
+func sortedSet(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// stripSourcesSection removes a "## Sources" heading and its body (up to the
+// next "## " heading or EOF) so the deterministic section can replace any the
+// model emitted despite being told not to.
+func stripSourcesSection(md string) string {
+	lines := strings.Split(md, "\n")
+	out := make([]string, 0, len(lines))
+	skipping := false
+	for _, ln := range lines {
+		if t := strings.TrimSpace(ln); strings.HasPrefix(t, "## ") {
+			skipping = strings.EqualFold(t, "## Sources")
+		}
+		if !skipping {
+			out = append(out, ln)
+		}
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
 // firstStringFromMetadata pulls the first element from a metadata field
@@ -663,10 +741,10 @@ func firstStringFromMetadata(meta map[string]any, key string) string {
 // fallbackBrief produces a deterministic placeholder when the LLM is down.
 func fallbackBrief(items []*store.KnowledgeItem) string {
 	var sb strings.Builder
-	sb.WriteString("**Brief indisponible — LLM hors ligne.**\n\nActivité brute :\n")
+	sb.WriteString("**Brief unavailable — LLM offline.**\n\nRaw activity:\n")
 	for i, it := range items {
 		if i >= 10 {
-			sb.WriteString(fmt.Sprintf("- … et %d autres\n", len(items)-10))
+			sb.WriteString(fmt.Sprintf("- … and %d more\n", len(items)-10))
 			break
 		}
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", it.SourceType, it.Title))

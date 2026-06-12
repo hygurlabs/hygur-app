@@ -414,7 +414,7 @@ func TestBuildSummaryPrompt_NoParticipants(t *testing.T) {
 
 	prompt := buildSummaryPrompt(thread, "content")
 
-	if !strings.Contains(prompt, "(aucun participant)") {
+	if !strings.Contains(prompt, "(no participant)") {
 		t.Error("Prompt should indicate no participants")
 	}
 }

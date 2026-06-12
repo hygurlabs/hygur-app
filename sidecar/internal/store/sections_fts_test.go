@@ -59,7 +59,7 @@ func TestEnsureRAGSchemaOnHigherVersionDB(t *testing.T) {
 	if _, err := db.db.Exec("DROP TABLE IF EXISTS sections"); err != nil {
 		t.Fatalf("drop sections: %v", err)
 	}
-	if _, err := db.db.Exec("INSERT INTO schema_version (version) VALUES (16)"); err != nil {
+	if _, err := db.db.Exec("INSERT INTO schema_version (version) VALUES (999)"); err != nil {
 		t.Fatalf("bump version: %v", err)
 	}
 

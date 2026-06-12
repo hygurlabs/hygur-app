@@ -473,30 +473,30 @@ func (b *TimelineBuilder) titleAll(ctx context.Context, chapters []TimelineChapt
 }
 
 const timelineTitleSystemPrompt = `/no_think
-Tu donnes un titre court (≤ 60 caractères) à un groupe d'évènements liés.
-Format: une seule ligne descriptive, sans guillemets, sans markdown.
-Tu utilises les noms d'entités fournis. Tu n'inventes rien.`
+You give a short title (<= 60 characters) to a group of related events.
+Format: a single descriptive line, no quotes, no markdown.
+Use the entity names provided. Invent nothing.`
 
 func (b *TimelineBuilder) titleViaLLM(ctx context.Context, ch TimelineChapter) (string, error) {
 	llmCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 
 	var sb strings.Builder
-	sb.WriteString("Période: ")
+	sb.WriteString("Period: ")
 	sb.WriteString(ch.TimeStart.Format("2006-01-02"))
 	sb.WriteString(" → ")
 	sb.WriteString(ch.TimeEnd.Format("2006-01-02"))
-	sb.WriteString("\nEntités dominantes: ")
+	sb.WriteString("\nDominant entities: ")
 	if len(ch.DominantEntities) == 0 {
-		sb.WriteString("(aucune)")
+		sb.WriteString("(none)")
 	} else {
 		sb.WriteString(strings.Join(ch.DominantEntities, ", "))
 	}
-	sb.WriteString("\nÉvènements:")
+	sb.WriteString("\nEvents:")
 	maxDetails := 5
 	for i, e := range ch.Events {
 		if i >= maxDetails {
-			sb.WriteString(fmt.Sprintf("\n- (+%d autres)", len(ch.Events)-maxDetails))
+			sb.WriteString(fmt.Sprintf("\n- (+%d more)", len(ch.Events)-maxDetails))
 			break
 		}
 		sb.WriteString("\n- ")

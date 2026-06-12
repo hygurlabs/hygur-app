@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
+import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
+import { isDesktop, getDesktopConfig, type DesktopConfig } from "../lib/desktop";
+import { ModePicker } from "../onboarding/ModePicker";
 import type {
   SidecarConfig,
+  SidecarConfigPatch,
   TokenPeriodUsage,
   TokenPricing,
   TokenUsageResponse,
@@ -30,6 +34,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/** One labelled progress bar for the token-budget gauge. */
+function GaugeRow({
+  label,
+  used,
+  budget,
+  pct,
+  over,
+  color,
+}: {
+  label: string;
+  used: number;
+  budget: number;
+  pct: number;
+  over: boolean;
+  color: string;
+}) {
+  const f = (n: number) => n.toLocaleString("fr-FR");
+  return (
+    <div className="mb-2.5 last:mb-0">
+      <div className="mb-1 flex items-baseline justify-between text-[12px]">
+        <span className="font-medium">{label}</span>
+        <span className={`tabular-nums ${over ? "font-semibold text-danger" : "text-muted"}`}>
+          {f(used)} / {f(budget)}
+          {over && " — over budget"}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-border">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function Row({
   label,
   hint,
@@ -40,7 +77,7 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
+    <div className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0">
         <p className="text-[14px]">{label}</p>
         {hint && <p className="mt-0.5 text-[12.5px] text-muted">{hint}</p>}
@@ -78,6 +115,165 @@ function Toggle({
   );
 }
 
+// MARK: - Connection (local sidecar vs remote endpoint + key)
+
+function ConnectionSection() {
+  const initial = getConnection();
+  const [endpoint, setEndpoint] = useState(initial.endpoint);
+  const [key, setKey] = useState(initial.key);
+  const remote = isRemote();
+
+  const connect = () => {
+    setConnection(endpoint, key);
+    // Reload so every query refetches against the new base origin.
+    window.location.reload();
+  };
+  const disconnect = () => {
+    clearConnection();
+    window.location.reload();
+  };
+
+  return (
+    <Section title="Connection">
+      <Row
+        label="Mode"
+        hint={
+          remote
+            ? `Remote — ${initial.endpoint}`
+            : "Local — served by the sidecar on this machine"
+        }
+      >
+        {remote && (
+          <Button variant="ghost" onClick={disconnect}>
+            Disconnect
+          </Button>
+        )}
+      </Row>
+      <Row label="Server endpoint" hint="Empty = local sidecar. e.g. https://app.hygur.eu">
+        <TextInput
+          value={endpoint}
+          spellCheck={false}
+          autoCapitalize="off"
+          placeholder="https://app.hygur.eu"
+          onChange={(e) => setEndpoint(e.target.value)}
+          className="w-64"
+        />
+      </Row>
+      <Row label="API key" hint="Sent as X-Hygur-Token. Stored on this device only.">
+        <TextInput
+          type="password"
+          value={key}
+          spellCheck={false}
+          autoCapitalize="off"
+          onChange={(e) => setKey(e.target.value)}
+          className="w-64"
+        />
+      </Row>
+      <Row label="Apply">
+        <Button onClick={connect} disabled={!endpoint.trim()}>
+          {remote ? "Update & reconnect" : "Connect"}
+        </Button>
+      </Row>
+    </Section>
+  );
+}
+
+// MARK: - Engine mode (desktop only: local full engine vs cloud thin client)
+
+function EngineModeSection() {
+  const [cfg, setCfg] = useState<DesktopConfig | null>(null);
+  const [picker, setPicker] = useState(false);
+
+  const reload = () => {
+    void getDesktopConfig()
+      .then(setCfg)
+      .catch(() => {});
+  };
+  useEffect(() => {
+    if (isDesktop()) reload();
+  }, []);
+
+  if (!isDesktop()) return null;
+  if (picker) {
+    // A proxy-mode change reloads the page; otherwise we just close + refresh.
+    return (
+      <ModePicker
+        onDone={() => {
+          setPicker(false);
+          reload();
+        }}
+        onCancel={() => setPicker(false)}
+      />
+    );
+  }
+
+  const cloud = cfg?.mode === "cloud";
+  return (
+    <Section title="Engine mode">
+      <Row
+        label="Mode"
+        hint={
+          cloud
+            ? `Hygur Cloud — ${cfg?.server || "not set"}`
+            : "Local — full engine on this Mac"
+        }
+      >
+        <Button variant="ghost" onClick={() => setPicker(true)}>
+          {cloud ? "Reconfigure" : "Switch…"}
+        </Button>
+      </Row>
+    </Section>
+  );
+}
+
+/** Billing panel (cloud customers). Reads the subscription status from the control
+ *  plane and links to the Stripe customer portal. Self-hides when there's no
+ *  billing account (the operator's hand-provisioned instance, self-host, or a
+ *  browser with no device token) — its query just errors and the section vanishes. */
+function BillingSection() {
+  const q = useQuery({
+    queryKey: ["billing-status"],
+    queryFn: () => api.billingStatus(),
+    retry: false,
+  });
+  if (q.isError || !q.data) return null;
+  const b = q.data;
+  const label =
+    b.status === "active"
+      ? "Active"
+      : b.status === "trialing"
+        ? "Trial"
+        : b.status === "past_due"
+          ? "Payment due"
+          : b.status === "canceled"
+            ? "Canceled"
+            : b.status;
+  const until = b.valid_until
+    ? ` · ${b.active ? "renews" : "ends"} ${new Date(b.valid_until).toLocaleDateString()}`
+    : "";
+  return (
+    <Section title="Billing">
+      <Row label="Plan" hint={`Hygur Cloud — Personal${until}`}>
+        <span className={`text-[13px] font-medium ${b.active ? "text-green-600" : "text-danger"}`}>
+          {label}
+        </span>
+      </Row>
+      {b.portal_url && (
+        <Row label="Subscription" hint="Update payment method, download invoices, or cancel.">
+          <a
+            href={b.portal_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+          >
+            Manage
+          </a>
+        </Row>
+      )}
+    </Section>
+  );
+}
+
 export function Settings() {
   const qc = useQueryClient();
   const { data, isLoading, error, refetch } = useQuery({
@@ -89,25 +285,18 @@ export function Settings() {
   // The API key is never returned by GET (only api_key_set), so it has its own
   // write-only draft: empty = leave the stored key untouched.
   const [apiKey, setApiKey] = useState("");
-  useEffect(() => {
-    if (data) setDraft(data);
-  }, [data]);
+  // Keep the editable draft in sync with the latest server config (re-syncs on
+  // refetch, e.g. after a save). Done during render — React Query hands a fresh
+  // `data` object per fetch, so this converges and avoids setState-in-effect.
+  const [syncedFrom, setSyncedFrom] = useState<SidecarConfig | null>(null);
+  if (data && data !== syncedFrom) {
+    setSyncedFrom(data);
+    setDraft(data);
+  }
 
   const save = useMutation({
-    mutationFn: (cfg: SidecarConfig) =>
-      api.patchConfig({
-        lm_studio: {
-          url: cfg.lm_studio.url,
-          embedding_url: cfg.lm_studio.embedding_url,
-          indexing_url: cfg.lm_studio.indexing_url,
-          model_default: cfg.lm_studio.model_default,
-          model_indexing: cfg.lm_studio.model_indexing,
-          embedding_model: cfg.lm_studio.embedding_model,
-          embedding_max_tokens: cfg.lm_studio.embedding_max_tokens,
-          embedding_batch_size: cfg.lm_studio.embedding_batch_size,
-          // Only send the key when the user typed one; empty leaves it untouched.
-          ...(apiKey.trim() !== "" ? { api_key: apiKey.trim() } : {}),
-        },
+    mutationFn: (cfg: SidecarConfig) => {
+      const patch: SidecarConfigPatch = {
         logging: { level: cfg.logging.level },
         daily_brief: {
           enabled: cfg.daily_brief.enabled,
@@ -120,7 +309,25 @@ export function Settings() {
           temporal_scoring_mode: cfg.retrieval.temporal_scoring_mode,
         },
         mail: { reconcile_deletions: cfg.mail.reconcile_deletions },
-      }),
+      };
+      // Managed cloud tenant: the AI runtime is operator-controlled — never send
+      // it (the sidecar would reject it with 403 and break the whole save).
+      if (!cfg.managed) {
+        patch.lm_studio = {
+          url: cfg.lm_studio.url,
+          embedding_url: cfg.lm_studio.embedding_url,
+          indexing_url: cfg.lm_studio.indexing_url,
+          model_default: cfg.lm_studio.model_default,
+          model_indexing: cfg.lm_studio.model_indexing,
+          embedding_model: cfg.lm_studio.embedding_model,
+          embedding_max_tokens: cfg.lm_studio.embedding_max_tokens,
+          embedding_batch_size: cfg.lm_studio.embedding_batch_size,
+          // Only send the key when the user typed one; empty leaves it untouched.
+          ...(apiKey.trim() !== "" ? { api_key: apiKey.trim() } : {}),
+        };
+      }
+      return api.patchConfig(patch);
+    },
     onSuccess: () => {
       setApiKey("");
       qc.invalidateQueries({ queryKey: ["config"] });
@@ -143,11 +350,15 @@ export function Settings() {
     );
   }
 
-  // Typed nested setters keep the JSX terse.
+  // Typed nested setters keep the JSX terse. `section` is always one of the
+  // object-valued config groups (never the `managed` flag), so the spread is safe.
   const set = <K extends keyof SidecarConfig>(
     section: K,
     patch: Partial<SidecarConfig[K]>,
-  ) => setDraft((d) => (d ? { ...d, [section]: { ...d[section], ...patch } } : d));
+  ) =>
+    setDraft((d) =>
+      d ? { ...d, [section]: { ...(d[section] as object), ...patch } } : d,
+    );
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(data) || apiKey.trim() !== "";
 
@@ -167,6 +378,15 @@ export function Settings() {
         <ErrorBanner message={`Couldn't save: ${(save.error as Error).message}`} />
       )}
 
+      {/* Connection (endpoint + device key) is an advanced/self-host control; in a
+          managed cloud tenant the connection is handled for the user — hide it. */}
+      {!draft.managed && <ConnectionSection />}
+      <EngineModeSection />
+      <BillingSection />
+
+      {/* In a managed cloud tenant the AI runtime is operator-controlled and
+          redacted server-side — hide the editor entirely. */}
+      {!draft.managed && (
       <Section title="AI runtime">
         <Row label="Inference URL" hint="OpenAI-compatible chat endpoint (LM Studio, vLLM…)">
           <TextInput
@@ -252,6 +472,7 @@ export function Settings() {
           />
         </Row>
       </Section>
+      )}
 
       <Section title="Briefings">
         <Row label="Daily brief" hint="Generate a morning digest of recent activity">
@@ -279,6 +500,8 @@ export function Settings() {
         </Row>
       </Section>
 
+      {/* Retrieval tuning is a power-user/debug knob — hide on a managed tenant. */}
+      {!draft.managed && (
       <Section title="Retrieval">
         <Row label="LLM intent classifier" hint="Slower, sometimes sharper routing">
           <Toggle
@@ -305,6 +528,7 @@ export function Settings() {
           </select>
         </Row>
       </Section>
+      )}
 
       <Section title="Mail">
         <Row
@@ -318,6 +542,8 @@ export function Settings() {
         </Row>
       </Section>
 
+      {/* Log level is a debug control — hide on a managed tenant. */}
+      {!draft.managed && (
       <Section title="Logging">
         <Row label="Log level">
           <select
@@ -333,11 +559,266 @@ export function Settings() {
           </select>
         </Row>
       </Section>
+      )}
 
       <TokenUsageSection />
+      {/* Local at-rest encryption + DB backup/restore are admin operations; on a
+          managed cloud tenant the server owns them — hide for standard users. */}
+      {!draft.managed && <EncryptionSection />}
+      {!draft.managed && <BackupSection />}
+      {/* Encrypted data export (GDPR portability) — available everywhere, incl.
+          managed cloud tenants where it's the user's own way to take their data. */}
+      <ExportSection />
       <NotificationsSection />
       <PermissionsSection />
     </Page>
+  );
+}
+
+// MARK: - Local encryption
+
+function EncryptionSection() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["encryption-status"],
+    queryFn: () => api.getEncryptionStatus(),
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [staged, setStaged] = useState(false);
+
+  const enabled = data?.enabled ?? false;
+  const envManaged = data?.env_managed ?? false;
+
+  async function onEnable() {
+    const ok = window.confirm(
+      "Chiffrer la base locale ? La clé est stockée dans le keychain de l'OS. " +
+        "La base est migrée au prochain démarrage de Hygur (l'originale est conservée). " +
+        "Si tu perds la clé, les données sont irrécupérables. Continuer ?",
+    );
+    if (!ok) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await api.enableEncryption();
+      if (r.restart_required) setStaged(true);
+      qc.invalidateQueries({ queryKey: ["encryption-status"] });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="Local encryption">
+      {error && (
+        <div className="px-4 pt-3">
+          <ErrorBanner message={error} />
+        </div>
+      )}
+      <Row
+        label={enabled ? "Database encrypted" : "Encrypt the local database"}
+        hint={
+          enabled
+            ? envManaged
+              ? "Encrypted at rest; the key is managed by the server."
+              : "Encrypted at rest (SQLCipher); the key is in your OS keychain."
+            : "Encrypt the knowledge base at rest. The key is stored in your OS keychain; migration runs on the next restart and keeps a backup."
+        }
+      >
+        {isLoading ? (
+          <span className="text-[12.5px] text-muted">…</span>
+        ) : enabled ? (
+          <span className="text-[12.5px] font-medium text-accent">Encrypted ✓</span>
+        ) : (
+          <Button onClick={() => void onEnable()} disabled={busy}>
+            {busy ? "Enabling…" : "Encrypt…"}
+          </Button>
+        )}
+      </Row>
+      {staged && (
+        <div className="px-4 py-3 text-[12.5px] text-accent">
+          Encryption enabled — restart Hygur to migrate your database.
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// MARK: - Database backup / restore
+
+function BackupSection() {
+  const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [staged, setStaged] = useState(false);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function onBackup() {
+    setError(null);
+    setSavedPath(null);
+    setBusy("backup");
+    try {
+      // The desktop webview can't trigger a browser download, so locally the
+      // sidecar (same machine) writes the file and reports where. A remote
+      // server has no access to your disk → stream + save in the browser.
+      if (isRemote()) {
+        await api.downloadBackup();
+      } else {
+        const { path } = await api.saveBackupLocal();
+        setSavedPath(path);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRestoreFile(f: File | undefined) {
+    if (!f) return;
+    const ok = window.confirm(
+      "Restaurer cette sauvegarde ? La base actuelle sera remplacée au prochain démarrage de Hygur (l'actuelle est conservée en .pre-restore.bak). Continuer ?",
+    );
+    if (!ok) {
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setError(null);
+    setStaged(false);
+    setBusy("restore");
+    try {
+      await api.restoreBackup(f);
+      setStaged(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <Section title="Database backup">
+      {error && (
+        <div className="px-4 pt-3">
+          <ErrorBanner message={error} />
+        </div>
+      )}
+      <Row
+        label="Save a backup"
+        hint={
+          isRemote()
+            ? "Downloads a consistent snapshot of your database (encryption preserved)."
+            : "Writes a consistent snapshot (encryption preserved) to your Downloads folder."
+        }
+      >
+        <Button onClick={() => void onBackup()} disabled={busy !== null}>
+          {busy === "backup" ? "Preparing…" : isRemote() ? "Download" : "Save backup"}
+        </Button>
+      </Row>
+      <Row
+        label="Restore from a backup"
+        hint="Replaces the database on the next restart; the current one is kept as a backup."
+      >
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".db"
+          className="hidden"
+          onChange={(e) => void onRestoreFile(e.target.files?.[0])}
+        />
+        <Button
+          variant="ghost"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy !== null}
+        >
+          {busy === "restore" ? "Uploading…" : "Restore…"}
+        </Button>
+      </Row>
+      {savedPath && (
+        <div className="px-4 py-3 text-[12.5px] text-accent">
+          Backup saved to <span className="font-mono">{savedPath}</span>
+        </div>
+      )}
+      {staged && (
+        <div className="px-4 py-3 text-[12.5px] text-accent">
+          Backup staged — restart Hygur to apply it.
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// MARK: - Encrypted data export (GDPR portability)
+
+// Exports the notes & briefs Hygur produced, in an archive encrypted with a
+// passphrase YOU choose (never sent anywhere reusable — it's the zip key). The
+// server streams it directly; nothing is stored server-side. Decrypt with any
+// tool, e.g. `openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:… -in file.zip.enc`.
+function ExportSection() {
+  const [passphrase, setPassphrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  async function onExport() {
+    setError(null);
+    setDone(false);
+    setBusy(true);
+    try {
+      await api.exportData(passphrase);
+      setDone(true);
+      setPassphrase("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tooShort = passphrase.length > 0 && passphrase.length < 8;
+
+  return (
+    <Section title="Export your data">
+      {error && (
+        <div className="px-4 pt-3">
+          <ErrorBanner message={error} />
+        </div>
+      )}
+      <Row
+        label="Download an encrypted export"
+        hint="A zip of the notes and briefs Hygur produced (your emails and files stay on your device). Encrypted with the passphrase you set below — keep it safe, it's the only way to open the archive."
+      >
+        <div className="flex flex-col items-end gap-1.5">
+          <input
+            type="password"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            placeholder="Passphrase (min. 8 chars)"
+            autoComplete="new-password"
+            className="w-56 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm outline-none transition-colors focus:border-accent"
+          />
+          <Button
+            onClick={() => void onExport()}
+            disabled={busy || passphrase.length < 8}
+          >
+            {busy ? "Preparing…" : "Export"}
+          </Button>
+        </div>
+      </Row>
+      {tooShort && (
+        <div className="px-4 pb-3 text-[12.5px] text-muted">
+          Use at least 8 characters.
+        </div>
+      )}
+      {done && (
+        <div className="px-4 py-3 text-[12.5px] text-accent">
+          Export downloaded. Decrypt it with your passphrase (see the hint).
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -376,10 +857,12 @@ function TokenUsageSection() {
     queryFn: api.getTokenUsage,
   });
   // Local draft of the price fields, seeded once from the server values.
+  // Seeding during render (not in an effect) is React's sanctioned pattern for
+  // deriving initial state from async data — it converges once price is set.
   const [price, setPrice] = useState<TokenPricing | null>(null);
-  useEffect(() => {
-    if (data?.pricing) setPrice((p) => p ?? data.pricing);
-  }, [data]);
+  if (price === null && data?.pricing) {
+    setPrice(data.pricing);
+  }
 
   const save = useMutation({
     mutationFn: (p: TokenPricing) => api.setTokenPricing(p),
@@ -412,8 +895,34 @@ function TokenUsageSection() {
   ];
   const dirty = JSON.stringify(price) !== JSON.stringify(data.pricing);
 
+  // Monthly inference caps (hardcoded) and the weekly slice we watch against.
+  // Both directions sit in one weekly gauge so we can judge whether 8M IN / 2M
+  // OUT per month leaves enough gross margin at the current price.
+  const MONTHLY_IN = 8_000_000;
+  const MONTHLY_OUT = 2_000_000;
+  const weekBudget = (monthly: number) => Math.round((monthly * 7) / 30);
+  const wk = data.periods.this_week;
+  const gauge = (used: number, budget: number) => {
+    const pct = budget > 0 ? Math.min(used / budget, 1) : 0;
+    const over = budget > 0 && used > budget;
+    const color = over ? "bg-danger" : pct >= 0.75 ? "bg-amber-500" : "bg-green-500";
+    return { pct, over, color };
+  };
+  const inG = gauge(wk.total_in, weekBudget(MONTHLY_IN));
+  const outG = gauge(wk.total_out, weekBudget(MONTHLY_OUT));
+
   return (
     <Section title="Token usage & cost">
+      <div className="px-4 pb-1 pt-3">
+        <div className="mb-1 flex items-baseline justify-between">
+          <span className="text-[12px] font-medium">This week's budget</span>
+          <span className="text-[11px] text-faint">
+            caps: {fmtTok(MONTHLY_IN)} IN · {fmtTok(MONTHLY_OUT)} OUT / month
+          </span>
+        </div>
+        <GaugeRow label="Input" used={wk.total_in} budget={weekBudget(MONTHLY_IN)} {...inG} />
+        <GaugeRow label="Output" used={wk.total_out} budget={weekBudget(MONTHLY_OUT)} {...outG} />
+      </div>
       <div className="overflow-x-auto px-4 py-3">
         <table className="w-full text-[13px]">
           <thead>

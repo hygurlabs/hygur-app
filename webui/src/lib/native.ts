@@ -60,13 +60,91 @@ declare global {
   }
 }
 
+// ── Web Speech dictation fallback (Tauri WebKit / Chrome / Safari) ───────────
+// Used when there's no native bridge so the mic works in Tauri and the browser.
+interface SpeechAlt {
+  transcript: string;
+}
+interface SpeechResult {
+  isFinal: boolean;
+  0: SpeechAlt;
+}
+interface SpeechResultList {
+  length: number;
+  [i: number]: SpeechResult;
+}
+interface SpeechEvent {
+  resultIndex: number;
+  results: SpeechResultList;
+}
+interface WebSpeechRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+type SpeechRecognitionCtor = new () => WebSpeechRecognition;
+
+const webDictation = (() => {
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  if (!Ctor) return null;
+  let rec: WebSpeechRecognition | null = null;
+  let listener: DictationListener | null = null;
+  let finalText = "";
+  return {
+    start(): Promise<boolean> {
+      try {
+        finalText = "";
+        rec = new Ctor();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = navigator.language || "en-US";
+        rec.onresult = (e: SpeechEvent) => {
+          let interim = "";
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const r = e.results[i];
+            if (r.isFinal) finalText += r[0].transcript;
+            else interim += r[0].transcript;
+          }
+          listener?.(`${finalText}${interim}`.trim(), false);
+        };
+        rec.onend = () => listener?.(finalText.trim(), true);
+        rec.onerror = () => listener?.(finalText.trim(), true);
+        rec.start();
+        return Promise.resolve(true);
+      } catch {
+        return Promise.resolve(false);
+      }
+    },
+    stop(): Promise<string> {
+      try {
+        rec?.stop();
+      } catch {
+        /* ignore */
+      }
+      return Promise.resolve(finalText.trim());
+    },
+    setListener(fn: DictationListener | null) {
+      listener = fn;
+    },
+  };
+})();
+
 export const native = {
   get available(): boolean {
     return Boolean(window.HygurNative?.available);
   },
-  /** On-device STT availability (the bridge exposes the engine). */
+  /** STT availability: the native bridge, or the Web Speech API in Tauri/browser. */
   get dictationAvailable(): boolean {
-    return Boolean(window.HygurNative?.dictation);
+    return Boolean(window.HygurNative?.dictation) || webDictation !== null;
   },
   calendar: {
     authorize: (): Promise<boolean> =>
@@ -82,23 +160,47 @@ export const native = {
   },
   dictation: {
     start: (): Promise<boolean> =>
-      window.HygurNative?.dictation.start() ?? Promise.resolve(false),
+      window.HygurNative?.dictation.start() ??
+      webDictation?.start() ??
+      Promise.resolve(false),
     stop: (): Promise<string> =>
-      window.HygurNative?.dictation.stop() ?? Promise.resolve(""),
+      window.HygurNative?.dictation.stop() ??
+      webDictation?.stop() ??
+      Promise.resolve(""),
     /** Subscribe to live partials. Returns an unsubscribe function. */
     listen: (fn: DictationListener): (() => void) => {
-      if (!window.HygurNative) return () => {};
-      window.HygurNative.onDictation = fn;
-      return () => {
-        if (window.HygurNative) window.HygurNative.onDictation = null;
-      };
+      if (window.HygurNative) {
+        window.HygurNative.onDictation = fn;
+        return () => {
+          if (window.HygurNative) window.HygurNative.onDictation = null;
+        };
+      }
+      if (webDictation) {
+        webDictation.setListener(fn);
+        return () => webDictation.setListener(null);
+      }
+      return () => {};
     },
   },
   prefs: {
-    getBool: (key: string): Promise<boolean> =>
-      window.HygurNative?.prefs.getBool(key) ?? Promise.resolve(false),
-    setBool: (key: string, value: boolean): Promise<unknown> =>
-      window.HygurNative?.prefs.setBool(key, value) ?? Promise.resolve(),
+    getBool: (key: string): Promise<boolean> => {
+      if (window.HygurNative) return window.HygurNative.prefs.getBool(key);
+      // Web/Tauri fallback: persist in localStorage so toggles survive reloads.
+      try {
+        return Promise.resolve(localStorage.getItem(`pref.${key}`) === "1");
+      } catch {
+        return Promise.resolve(false);
+      }
+    },
+    setBool: (key: string, value: boolean): Promise<unknown> => {
+      if (window.HygurNative) return window.HygurNative.prefs.setBool(key, value);
+      try {
+        localStorage.setItem(`pref.${key}`, value ? "1" : "0");
+      } catch {
+        /* storage unavailable — pref won't persist, but the UI still toggles */
+      }
+      return Promise.resolve();
+    },
   },
   perms: {
     status: (): Promise<Record<string, string>> =>
@@ -110,8 +212,30 @@ export const native = {
     window.open(url, "_blank", "noopener");
     return Promise.resolve();
   },
-  notify: (title: string, body: string): Promise<unknown> =>
-    window.HygurNative?.notify(title, body) ?? Promise.resolve(),
+  /** Native shells post a system banner; web/Tauri fall back to the Web
+   *  Notifications API (requesting permission on first use). */
+  notify: (title: string, body: string): Promise<unknown> => {
+    if (window.HygurNative) return window.HygurNative.notify(title, body);
+    try {
+      if (typeof Notification === "undefined") return Promise.resolve();
+      const show = () => {
+        try {
+          new Notification(title, { body });
+        } catch {
+          /* construction can throw on some platforms — ignore */
+        }
+      };
+      if (Notification.permission === "granted") show();
+      else if (Notification.permission !== "denied") {
+        void Notification.requestPermission().then((p) => {
+          if (p === "granted") show();
+        });
+      }
+    } catch {
+      /* Notifications unavailable — silent */
+    }
+    return Promise.resolve();
+  },
   /** Saves a text file. Native shells show a save panel; a plain browser
    *  triggers a blob download. */
   download: (filename: string, mime: string, content: string): Promise<boolean> => {

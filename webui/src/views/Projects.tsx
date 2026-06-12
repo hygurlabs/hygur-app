@@ -119,6 +119,9 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteBody, setNoteBody] = useState("");
   const hydrated = useRef(false);
   useEffect(() => {
     if (project && !hydrated.current) {
@@ -149,17 +152,39 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["projects"] });
     },
   });
+  // Create a note and link it to this project in one step.
+  const addNote = useMutation({
+    mutationFn: async () => {
+      const note = await api.createNote(noteTitle.trim() || "New note", noteBody.trim());
+      await api.linkItemToProject(note.id, id);
+    },
+    onSuccess: () => {
+      setNoteOpen(false);
+      setNoteTitle("");
+      setNoteBody("");
+      qc.invalidateQueries({ queryKey: ["project-items", id] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
+    },
+  });
 
   async function openItem(contentId: string, title: string, sourceType: string) {
     try {
       const item = await api.knowledgeItem(contentId);
       openDetail({
         title: item.title || title,
+        contentId,
+        sourceType: item.source_type,
         meta: [srcLabel(item.source_type)],
         body: item.normalized_text ?? "",
       });
     } catch {
-      openDetail({ title, meta: [srcLabel(sourceType)], body: "_(could not load this item)_" });
+      openDetail({
+        title,
+        contentId,
+        sourceType,
+        meta: [srcLabel(sourceType)],
+        body: "_(could not load this item)_",
+      });
     }
   }
 
@@ -230,9 +255,53 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
         />
       </div>
 
-      <p className="mb-1 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-        Linked items
-      </p>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <p className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
+          Linked items
+        </p>
+        <button
+          onClick={() => setNoteOpen((v) => !v)}
+          className="inline-flex items-center gap-1 text-[12.5px] font-medium text-accent transition-colors hover:underline"
+        >
+          <Plus size={14} strokeWidth={2} /> New note
+        </button>
+      </div>
+      {noteOpen && (
+        <div className="mb-3 rounded-lg border border-border bg-surface p-3">
+          <input
+            value={noteTitle}
+            onChange={(e) => setNoteTitle(e.target.value)}
+            placeholder="Note title"
+            autoFocus
+            className="mb-2 w-full bg-transparent text-[14px] font-medium outline-none placeholder:text-faint"
+          />
+          <textarea
+            value={noteBody}
+            onChange={(e) => setNoteBody(e.target.value)}
+            placeholder="Write your note…"
+            rows={3}
+            className="w-full resize-y bg-transparent text-[13.5px] leading-relaxed outline-none placeholder:text-faint"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              onClick={() => addNote.mutate()}
+              disabled={addNote.isPending || (!noteTitle.trim() && !noteBody.trim())}
+            >
+              {addNote.isPending ? "Creating…" : "Create note"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setNoteOpen(false);
+                setNoteTitle("");
+                setNoteBody("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
       {itemsQ.isLoading ? (
         <Skeleton rows={3} />
       ) : items.length === 0 ? (

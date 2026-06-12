@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,16 +24,17 @@ import (
 	"github.com/hygur/sidecar/internal/api/handlers"
 	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
-	filesconnector "github.com/hygur/sidecar/internal/connectors/files"
 	caldavconnector "github.com/hygur/sidecar/internal/connectors/caldav"
+	filesconnector "github.com/hygur/sidecar/internal/connectors/files"
 	imapconnector "github.com/hygur/sidecar/internal/connectors/imap"
 	mailconnector "github.com/hygur/sidecar/internal/connectors/mail"
 	notesconnector "github.com/hygur/sidecar/internal/connectors/notes"
+	"github.com/hygur/sidecar/internal/edge"
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/health"
 	"github.com/hygur/sidecar/internal/ingest"
-	"github.com/hygur/sidecar/internal/interactions"
 	"github.com/hygur/sidecar/internal/ingest/parsers"
+	"github.com/hygur/sidecar/internal/interactions"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/mail/gmail"
@@ -40,6 +42,7 @@ import (
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/scheduler"
+	"github.com/hygur/sidecar/internal/secret"
 	"github.com/hygur/sidecar/internal/session"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/hygur/sidecar/internal/tools"
@@ -57,6 +60,37 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == parsers.PDFExtractSubcommand {
 		parsers.RunPDFExtractSubprocess() // never returns
 		return
+	}
+
+	// Operator/dev CLI for remote auth (self-hosting). These exit before any
+	// server startup (no port bind, no DB).
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "gen-auth-key":
+			runGenAuthKey()
+			return
+		case "issue-token":
+			runIssueToken(os.Args[2:])
+			return
+		case "dek":
+			runDEK(os.Args[2:])
+			return
+		case "edge":
+			runEdge(os.Args[2:])
+			return
+		case "backup-db":
+			runBackupDB(os.Args[2:])
+			return
+		case "rekey":
+			runRekey(os.Args[2:])
+			return
+		case "usage":
+			runUsage(os.Args[2:])
+			return
+		case "mail-breakdown":
+			runMailBreakdown(os.Args[2:])
+			return
+		}
 	}
 
 	// Set up signal handling for graceful shutdown
@@ -208,6 +242,10 @@ func main() {
 		if cfg.LMStudio.ModelIndexing != "" {
 			idxCfg.ModelDefault = cfg.LMStudio.ModelIndexing
 		}
+		// The indexing model gets its OWN reasoning_effort (e.g. "none" to disable
+		// thinking on a reasoning-capable Tier-2 model like Nemotron-Nano), distinct
+		// from the chat model (which may reject the field).
+		idxCfg.ReasoningEffort = cfg.LMStudio.IndexingReasoningEffort
 		indexingClient = llm.NewClient(&idxCfg)
 		logger.Info().
 			Str("url", idxCfg.URL).
@@ -229,13 +267,49 @@ func main() {
 			Msg("LM Studio connection verified")
 	}
 
-	// Initialize SQLite store
-	db, err := store.NewDB(cfg.Store.Path)
+	// Initialize SQLite store via the per-identity Manager — the single seam
+	// that maps an identity to its database file (file-per-identity isolation,
+	// see store.Manager). Today there is one identity, so Default() returns the
+	// primary hygur.db and every consumer is wired to it exactly as before;
+	// multi-user routing onto per-identity handles is P5.
+	//
+	// Apply a staged restore (uploaded via POST /admin/db/restore) before the
+	// store opens — swaps the snapshot in, keeping the current DB as a backup.
+	if applied, rErr := store.ApplyPendingRestore(cfg.Store.Path); rErr != nil {
+		logger.Error().Err(rErr).Str("path", cfg.Store.Path).Msg("failed to apply staged restore")
+	} else if applied {
+		logger.Info().Str("path", cfg.Store.Path).Msg("applied staged database restore")
+	}
+
+	// At-rest encryption key resolution: HYGUR_DB_KEY (cloud / tenant DEK) takes
+	// precedence; otherwise the local desktop key from the OS keychain (set via
+	// the WebUI "Encrypt local database" action). Empty = plaintext; a first keyed
+	// run auto-migrates an existing plaintext DB (store.Open).
+	keyStore := secret.Keychain{}
+	dbKey := os.Getenv("HYGUR_DB_KEY")
+	dbKeyEnvManaged := dbKey != ""
+	if dbKey == "" {
+		if k, ok := keyStore.DBKey(); ok {
+			dbKey = k
+		}
+	}
+	storeManager := store.NewManagerWithKey(cfg.Store.Path, dbKey)
+	db, err := storeManager.Default()
 	if err != nil {
 		logger.Fatal().Err(err).Str("path", cfg.Store.Path).Msg("failed to initialize database")
 	}
-	defer db.Close()
-	logger.Info().Str("path", cfg.Store.Path).Msg("database initialized")
+	defer storeManager.Close()
+	keySource := "none"
+	if dbKeyEnvManaged {
+		keySource = "env" // cloud / tenant DEK
+	} else if dbKey != "" {
+		keySource = "keychain" // local opt-in
+	}
+	logger.Info().
+		Str("path", cfg.Store.Path).
+		Bool("encrypted", dbKey != "").
+		Str("key_source", keySource).
+		Msg("database initialized")
 
 	// Token-usage accounting: every chat/embedding/indexing completion records
 	// its token counts into SQLite so the Settings cost view persists across
@@ -300,9 +374,12 @@ func main() {
 	// source_path stays valid after the request.
 	knowledgeHandler.SetUploadDir(filepath.Join(dataDir, "uploads"))
 	projectHandler := handlers.NewProjectHandler(db, logger)
+	taskHandler := handlers.NewTaskHandler(db, logger)
 
 	// Create mail components
 	embeddingService := llm.NewEmbeddingService(llmClient, db)
+	// Tasks are note-like knowledge_items — index their bodies like notes.
+	taskHandler.SetEmbeddingService(embeddingService)
 	threadNormalizer := mail.NewThreadNormalizer()
 	emailIndexer := mail.NewEmailIndexer(db, threadNormalizer, embeddingService, logger)
 	emailIndexer.SetNotifyRecencyDays(cfg.Mail.NotifyRecencyDays)
@@ -341,6 +418,8 @@ func main() {
 
 	// Create notes tool early — needed by both NotesHandler and plugin manager.
 	createNoteTool := tools.NewCreateNoteToolWithEmbeddings(db, embeddingService)
+	// Auto-classify newly created notes into the tag taxonomy (same as mail).
+	createNoteTool.SetIngestor(ingestor)
 
 	// Calendar tool — schema-only on the sidecar side. The actual EventKit
 	// write is performed by the macOS app after explicit user confirmation,
@@ -491,6 +570,11 @@ func main() {
 	configHandler := handlers.NewConfigHandler(cfg, configPath, logger)
 	// Secret config fields (LLM API key) are persisted to the credential store.
 	configHandler.SetCredentialStore(credStore)
+	// Managed cloud tenant (set on the Hygur Cloud pod): redact + lock the
+	// AI-runtime endpoints so the client never sees our upstream Infomaniak ones.
+	managedDeployment := strings.EqualFold(os.Getenv("HYGUR_MANAGED"), "true") ||
+		os.Getenv("HYGUR_MANAGED") == "1"
+	configHandler.SetManaged(managedDeployment)
 	// Apply runtime-relevant config changes from PATCH /config without a restart.
 	configHandler.SetOnChange(func(c *config.Config) {
 		for _, mc := range mailProviders {
@@ -580,18 +664,154 @@ func main() {
 	)
 	toolRegistry.MustRegister(searchKBTool)
 	toolRegistry.MustRegister(createCalendarEventTool)
+
+	// Web access (opt-in): register web_search + fetch_url only when a search
+	// endpoint is configured. Web access means data leaves the machine, so it is
+	// off by default. Injection defences: fetch_url is SSRF-guarded; once either
+	// tool runs, the chat loop drops side-effecting tools (tainted context).
+	if webSearchURL := strings.TrimSpace(os.Getenv("HYGUR_WEB_SEARCH_URL")); webSearchURL != "" {
+		toolRegistry.MustRegister(tools.NewWebSearchTool(webSearchURL, os.Getenv("HYGUR_WEB_SEARCH_KEY"), 5))
+		toolRegistry.MustRegister(tools.NewFetchURLTool(6000))
+		logger.Info().Str("endpoint", webSearchURL).Msg("web tools enabled (web_search + fetch_url)")
+	}
+
 	ragChatHandler.SetToolRegistry(toolRegistry)
 
 	// Persistent chat transcripts — the handler saves each turn (user +
 	// assistant + cited sources) so conversations can be reopened later.
 	ragChatHandler.SetChatStore(db)
 
+	// Per-tenant monthly LLM-token cap (cloud margin guard). Unset/0 = unlimited,
+	// the local default; a managed tenant sets it in its StatefulSet env.
+	if v := strings.TrimSpace(os.Getenv("HYGUR_CHAT_TOKEN_CAP_MONTHLY")); v != "" {
+		if cap, err := strconv.Atoi(v); err == nil && cap > 0 {
+			ragChatHandler.SetChatTokenCap(cap)
+			logger.Info().Int("cap", cap).Msg("monthly chat-token cap enabled")
+		} else {
+			logger.Warn().Str("value", v).Msg("ignoring invalid HYGUR_CHAT_TOKEN_CAP_MONTHLY")
+		}
+	}
+	// Per-tenant DAILY cap — the fast fuse (catches a runaway loop within a day).
+	if v := strings.TrimSpace(os.Getenv("HYGUR_CHAT_TOKEN_CAP_DAILY")); v != "" {
+		if cap, err := strconv.Atoi(v); err == nil && cap > 0 {
+			ragChatHandler.SetDailyTokenCap(cap)
+			logger.Info().Int("cap", cap).Msg("daily chat-token cap enabled")
+		} else {
+			logger.Warn().Str("value", v).Msg("ignoring invalid HYGUR_CHAT_TOKEN_CAP_DAILY")
+		}
+	}
+
+	// Per-tenant fast fuses against a runaway client loop (req/min + concurrent
+	// generations), complementing the monthly token cap. Unset/0 = off (local).
+	{
+		rpm, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("HYGUR_CHAT_RPM_PER_TENANT")))
+		conc, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("HYGUR_CHAT_CONCURRENCY_PER_TENANT")))
+		if rpm > 0 || conc > 0 {
+			ragChatHandler.SetRateLimits(rpm, conc)
+			logger.Info().Int("rpm", rpm).Int("concurrency", conc).Msg("chat rate limits enabled")
+		}
+	}
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)
+	// Remote auth mode: verify per-device EdDSA JWTs instead of the loopback
+	// static token. Fail fast on a bad key — silently falling back to local
+	// would mean serving with weaker auth than the operator asked for.
+	if cfg.Auth.Mode == "remote" {
+		pub, err := auth.ParseEd25519PublicKeyPEM(cfg.Auth.PublicKey)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("auth.mode=remote but auth.public_key is invalid")
+		}
+		revoked := make(map[string]bool, len(cfg.Auth.RevokedJTIs))
+		for _, jti := range cfg.Auth.RevokedJTIs {
+			revoked[jti] = true
+		}
+		// Pod-per-tenant: pin to HYGUR_TENANT_ID so a token from another tenant is
+		// rejected even with a valid signature (defence in depth vs subdomain routing).
+		tenant := strings.TrimSpace(os.Getenv("HYGUR_TENANT_ID"))
+		server.SetAuthenticator(auth.JWTAuth{PublicKey: pub, Revoked: revoked, Tenant: tenant})
+		logger.Info().
+			Int("revoked", len(revoked)).
+			Str("tenant", tenant).
+			Msg("remote auth enabled (per-device JWT)")
+	}
+	// DNS-rebinding guard: enabled in local mode (loopback-only) or whenever
+	// HYGUR_ALLOWED_HOSTS is set (the tenant FQDN in cloud). Off for an
+	// unconfigured remote server so existing self-hosted deployments don't break.
+	var allowedHosts []string
+	for _, h := range strings.Split(os.Getenv("HYGUR_ALLOWED_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			allowedHosts = append(allowedHosts, h)
+		}
+	}
+	server.SetHostGuard(cfg.Auth.Mode == "local" || len(allowedHosts) > 0, allowedHosts)
+	server.SetManaged(managedDeployment) // don't ship the loopback token into the cloud SPA
+	// Cross-origin web shells allowed to call this API (CORS): the Hygur Cloud web
+	// app is served on a separate host (e.g. cloud.hygur.ai) and calls the tenant
+	// cross-origin. Loopback + Tauri origins are always allowed regardless.
+	var allowedOrigins []string
+	for _, o := range strings.Split(os.Getenv("HYGUR_ALLOWED_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			allowedOrigins = append(allowedOrigins, o)
+		}
+	}
+	server.SetAllowedOrigins(allowedOrigins)
+	// Cloud-backed thin-client mode (desktop "cloud" mode): the local loopback
+	// sidecar proxies data/AI routes to the tenant with the device token injected,
+	// keeping the webview same-origin so the Tauri commands keep working. Two
+	// activation paths — env wins (for tests / headless): HYGUR_CLOUD_UPSTREAM
+	// (+ HYGUR_CLOUD_TOKEN), or the desktop single-config file
+	// ~/.hygur-edge/config.json with "mode":"cloud", whose Server/Token then back
+	// BOTH the proxy and the in-process edge push (one binary + one config does
+	// everything). Off on the tenant pod itself (no config file, no env).
+	cloudUpstream := strings.TrimSpace(os.Getenv("HYGUR_CLOUD_UPSTREAM"))
+	cloudToken := strings.TrimSpace(os.Getenv("HYGUR_CLOUD_TOKEN"))
+	edgeCfgPath := edge.DefaultConfigPath()
+	edgeCfg, _ := edge.LoadConfig(edgeCfgPath)
+	edgeCloud := edgeCfg != nil && edgeCfg.Mode == "cloud"
+	if cloudUpstream == "" && edgeCloud {
+		cloudUpstream = strings.TrimSpace(edgeCfg.Server)
+		cloudToken = strings.TrimSpace(edgeCfg.Token)
+	}
+	if cloudUpstream != "" {
+		if err := server.SetCloudProxy(cloudUpstream, cloudToken); err != nil {
+			logger.Fatal().Err(err).Msg("cloud mode requested but upstream invalid")
+		}
+		logger.Info().Str("upstream", cloudUpstream).Msg("cloud-backed mode: data/AI routes proxied to tenant")
+		// One process: push local sources (Files/Proton) to the tenant from the
+		// same config instead of a separate `hygur edge` process. The runner also
+		// backs the local /edge/* routes (folder listing, status, sync) the WebUI's
+		// Proton card uses — wired even before sources are configured so "Load
+		// folders" works once credentials are entered.
+		runner := edge.NewRunner(edgeCfgPath)
+		server.SetEdgeRunner(runner)
+		if edgeCloud && (edgeCfg.Folder != "" || edgeCfg.ProtonUser != "") {
+			go runner.RunLoop(ctx)
+			logger.Info().Msg("edge push loop started in-process")
+		}
+	}
+	// Desktop SPA Content-Security-Policy connect-src sources: the resolved cloud
+	// tenant upstream (so cloud mode tightens to the exact tenant host instead of
+	// the *.hygur.ai wildcard), the console origin (refresh / logout / passkey /
+	// billing — HYGUR_CONSOLE_ORIGIN, default https://console.hygur.ai) and any
+	// HYGUR_ALLOWED_ORIGINS (self-host manual-remote from the packaged desktop).
+	// 'self' + the Tauri IPC sources are added unconditionally in buildCSP; if none
+	// of these resolve it falls back to the wildcard.
+	var cspSources []string
+	if cloudUpstream != "" {
+		cspSources = append(cspSources, cloudUpstream)
+	}
+	consoleOrigin := strings.TrimSpace(os.Getenv("HYGUR_CONSOLE_ORIGIN"))
+	if consoleOrigin == "" {
+		consoleOrigin = "https://console.hygur.ai"
+	}
+	cspSources = append(cspSources, consoleOrigin)
+	cspSources = append(cspSources, allowedOrigins...)
+	server.SetCSPConnectSources(cspSources)
 	server.SetLLMClient(llmClient)
 	server.SetKnowledgeHandler(knowledgeHandler)
 	server.SetProjectHandler(projectHandler)
+	server.SetTaskHandler(taskHandler)
 	server.SetMailHandler(mailHandler)
 	server.SetNotesHandler(notesHandler)
 	server.SetSessionsHandler(handlers.NewSessionsHandler(db, logger))
@@ -605,6 +825,9 @@ func main() {
 	server.SetMarketplaceHandler(marketplaceHandler)
 	server.SetConfigHandler(configHandler)
 	server.SetUsageHandler(handlers.NewUsageHandler(db, logger))
+	server.SetBackupHandler(handlers.NewBackupHandler(db, cfg.Store.Path, dbKey, logger))
+	server.SetExportHandler(handlers.NewExportHandler(db, logger))
+	server.SetEncryptionHandler(handlers.NewEncryptionHandler(keyStore, dbKeyEnvManaged, logger))
 
 	// Phase 1 (pair mode) — interaction logging + learning gauge.
 	interactionLogger := interactions.NewLogger(db)
@@ -690,17 +913,88 @@ func main() {
 	briefHandler := handlers.NewBriefHandler(dailyBrief, logger)
 	server.SetBriefHandler(briefHandler)
 
-	// Meeting briefings — short RAG briefings ahead of events/deadlines.
-	//  - Calendar events: the macOS app calls POST /brief/meeting ~30 min before
-	//    each event (it owns EventKit); the briefer generates + emits the SSE.
-	//  - Mail-extracted deadlines: the scheduler below briefs them the morning
-	//    they fall due. Both paths emit a `meeting_briefing` event the app turns
-	//    into a notification, and persist a `meeting_brief` knowledge item that
-	//    the Briefings view lists.
+	// W4: project-suggestion backfill — runs once in the background at boot
+	// (idempotent: skips items already linked or already classified), so a
+	// freshly-provisioned tenant gets project suggestions without manual action.
+	// Classification is parallelized inside SuggestProjects.
+	go func() {
+		bctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Second): // let the server come up first
+		}
+		if n, err := ingestor.SuggestProjects(bctx); err != nil {
+			logger.Warn().Err(err).Msg("project-suggestion backfill failed")
+		} else if n > 0 {
+			logger.Info().Int("processed", n).Msg("project-suggestion backfill complete")
+		}
+	}()
+
+	// One-shot Tier-1 re-extraction (regex only, no LLM) gated by env: refreshes
+	// the extracted_* metadata from the current rules — e.g. to purge
+	// reference-number false-positive amounts ("365138779 EUR") after the
+	// extractor fix. Authoritative merge deletes values the extractor no longer
+	// produces. Idempotent (a stable re-extract just re-confirms and skips), so
+	// it's safe to leave enabled; unset HYGUR_REINDEX_TIER1 to skip.
+	if os.Getenv("HYGUR_REINDEX_TIER1") == "1" {
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
+			rctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			if stats, err := mail.ReindexEntitiesTier1(rctx, db, logger, 200); err != nil {
+				logger.Warn().Err(err).Msg("tier1 reindex failed")
+			} else {
+				logger.Info().
+					Int("total", stats.Total).
+					Int("updated", stats.Updated).
+					Int("skipped", stats.Skipped).
+					Msg("tier1 reindex complete")
+			}
+		}()
+	}
+
+	// One-shot token-usage reset gated by env: clears the running daily totals
+	// (pricing settings untouched). Set HYGUR_RESET_TOKEN_USAGE=1, restart, then
+	// unset. A quick DELETE, so it runs synchronously here.
+	if os.Getenv("HYGUR_RESET_TOKEN_USAGE") == "1" {
+		if n, err := db.ResetTokenUsage(ctx); err != nil {
+			logger.Warn().Err(err).Msg("token usage reset failed")
+		} else {
+			logger.Info().Int64("rows_deleted", n).Msg("token usage reset")
+		}
+	}
+
+	// Meeting briefings — short RAG briefings ahead of events/deadlines, emitted
+	// server-side by the scheduler: upcoming calendar events (source_type=event)
+	// and mail-extracted deadlines due today. Each emits a `meeting_briefing`
+	// event (→ notification) + persists a `meeting_brief` item for the Briefings
+	// view. (The old per-event POST /brief/meeting native path is retired.)
 	meetingBriefer := scheduler.NewMeetingBriefer(db, llmClient, unifiedSearcher, broker, logger)
-	briefHandler.SetMeetingBriefer(meetingBriefer)
 	briefHandler.SetStore(db)
 	scheduler.NewMeetingBriefScheduler(meetingBriefer, db, agendaExtractor, 8, logger).Start(ctx)
+
+	// Chronicle (v1) — Hygur writes one grounded narrative act per night into the
+	// always-open "life" chapter (continuity via synopsis + watermark). A manual
+	// trigger (POST /chronicle/run) regenerates today's act for testing.
+	chronicleWriter := scheduler.NewChronicleWriter(db, llmClient, logger)
+	server.SetChronicleHandler(handlers.NewChronicleHandler(db, chronicleWriter, logger))
+	scheduler.NewChronicleScheduler(chronicleWriter, 22, logger).Start(ctx)
+
+	// Decisions — Hygur proposes the decisions it detects in the user's own
+	// records (nightly scan at 23:00 + a manual "Scan now"), for the user to
+	// confirm, making decisions first-class objects. Manual logging works even
+	// without the scanner; only the grounded scan needs the LLM.
+	decisionScanner := scheduler.NewDecisionScanner(db, llmClient, logger)
+	decisionHandler := handlers.NewDecisionHandler(db, decisionScanner, logger)
+	decisionHandler.SetEmbeddingService(embeddingService)
+	server.SetDecisionHandler(decisionHandler)
+	scheduler.NewDecisionScheduler(decisionScanner, 23, logger).Start(ctx)
 
 	// Agenda scheduler — runs daily at 08:00, emits agenda_alert events for
 	// high-priority items due within the next 48 h.

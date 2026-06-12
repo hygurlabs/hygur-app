@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"mime"
 	"net/mail"
 	"strings"
 	"sync"
@@ -619,20 +620,20 @@ func (c *GmailConnector) extractBody(payload *gmail.MessagePart) (plainText, htm
 
 	// Handle simple message
 	if payload.MimeType == "text/plain" && payload.Body != nil && payload.Body.Data != "" {
-		plainText = decodeBase64URL(payload.Body.Data)
+		plainText = mailpkg.DecodeCharset(decodeBase64URLBytes(payload.Body.Data), partCharset(payload))
 		return plainText, ""
 	}
 	if payload.MimeType == "text/html" && payload.Body != nil && payload.Body.Data != "" {
-		htmlText = decodeBase64URL(payload.Body.Data)
+		htmlText = mailpkg.DecodeCharset(decodeBase64URLBytes(payload.Body.Data), partCharset(payload))
 		return "", htmlText
 	}
 
 	// Handle multipart message
 	for _, part := range payload.Parts {
 		if part.MimeType == "text/plain" && part.Body != nil && part.Body.Data != "" {
-			plainText = decodeBase64URL(part.Body.Data)
+			plainText = mailpkg.DecodeCharset(decodeBase64URLBytes(part.Body.Data), partCharset(part))
 		} else if part.MimeType == "text/html" && part.Body != nil && part.Body.Data != "" {
-			htmlText = decodeBase64URL(part.Body.Data)
+			htmlText = mailpkg.DecodeCharset(decodeBase64URLBytes(part.Body.Data), partCharset(part))
 		} else if strings.HasPrefix(part.MimeType, "multipart/") {
 			// Recursively search nested multipart
 			pt, ht := c.extractBody(part)
@@ -807,15 +808,37 @@ func extractEmailAddresses(value string) []string {
 
 // decodeBase64URL decodes a base64url encoded string.
 func decodeBase64URL(data string) string {
+	return string(decodeBase64URLBytes(data))
+}
+
+// decodeBase64URLBytes decodes a base64url (or standard base64) string to raw
+// bytes, so the caller can apply charset decoding before stringifying.
+func decodeBase64URLBytes(data string) []byte {
 	decoded, err := base64.URLEncoding.DecodeString(data)
 	if err != nil {
-		// Try standard base64
 		decoded, err = base64.StdEncoding.DecodeString(data)
 		if err != nil {
-			return ""
+			return nil
 		}
 	}
-	return string(decoded)
+	return decoded
+}
+
+// partCharset returns the charset declared in a part's Content-Type header
+// (empty when absent), so a non-UTF-8 body (e.g. ISO-8859-1 / Windows-1252)
+// is decoded correctly instead of leaking raw 8-bit bytes into the index.
+func partCharset(part *gmail.MessagePart) string {
+	if part == nil {
+		return ""
+	}
+	for _, h := range part.Headers {
+		if strings.EqualFold(h.Name, "Content-Type") {
+			if _, params, err := mime.ParseMediaType(h.Value); err == nil {
+				return params["charset"]
+			}
+		}
+	}
+	return ""
 }
 
 // ListLabels retrieves all labels from the Gmail account.

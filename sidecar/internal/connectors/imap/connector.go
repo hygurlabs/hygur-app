@@ -27,6 +27,7 @@ import (
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/llm"
+	mailpkg "github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -800,25 +801,31 @@ func (c *Connector) buildKnowledgeItem(buf *imapclient.FetchMessageBuffer) (*sto
 		"from":       fromStr,
 		"message_id": msgID,
 	}
-	if !env.Date.IsZero() {
-		// "mail_date" is the canonical key the retrieval/date stack reads (same as
-		// the Proton/Gmail pipeline). Stamp the message's real sent date so it
-		// drives recency, date-range filtering and the date shown to the LLM —
-		// never the ingestion timestamp.
-		d := env.Date.Format(time.RFC3339)
+	// Date priority: the message's real sent date (Date header) → the IMAP
+	// server's INTERNALDATE (received time, essentially always present). Only if
+	// BOTH are missing do we leave the canonical date UNSET — an undated mail must
+	// not masquerade as recent by borrowing the ingestion timestamp. "mail_date"
+	// is the canonical key the retrieval/date stack reads (same as the
+	// Proton/Gmail pipeline); "date" stays for back-compat.
+	mailDate := env.Date
+	if mailDate.IsZero() {
+		mailDate = buf.InternalDate
+	}
+	if !mailDate.IsZero() {
+		d := mailDate.UTC().Format(time.RFC3339)
 		metadata["mail_date"] = d
-		metadata["date"] = d // back-compat with items already indexed under "date"
+		metadata["date"] = d
 	}
 
 	now := time.Now().UTC()
-	sentAt := env.Date
+	sentAt := mailDate
 	if sentAt.IsZero() {
 		sentAt = now
 	}
 
 	return &store.KnowledgeItem{
 		ContentID:      contentID,
-		SourceType:     "mail",
+		SourceType:     store.SourceTypeMail,
 		Title:          title,
 		NormalizedText: normalizedText,
 		Metadata:       metadata,
@@ -842,19 +849,19 @@ func extractPlainText(raw []byte) string {
 	ct := msg.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(ct)
 	if err != nil {
-		// No content-type — read body as plain text.
+		// No content-type — read body as plain text (charset unknown).
 		b, _ := io.ReadAll(msg.Body)
-		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b)
+		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b, "")
 	}
 
 	switch {
 	case strings.EqualFold(mediaType, "text/plain"):
 		b, _ := io.ReadAll(msg.Body)
-		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b)
+		return decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b, params["charset"])
 
 	case strings.EqualFold(mediaType, "text/html"):
 		b, _ := io.ReadAll(msg.Body)
-		decoded := decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b)
+		decoded := decodeTransferEncoding(msg.Header.Get("Content-Transfer-Encoding"), b, params["charset"])
 		return stripHTMLTags(decoded)
 
 	case strings.HasPrefix(strings.ToLower(mediaType), "multipart/"):
@@ -896,14 +903,14 @@ func extractFromMultipart(body io.Reader, boundary, parentMediaType string) stri
 		switch {
 		case strings.EqualFold(mt, "text/plain"):
 			b, _ := io.ReadAll(part)
-			decoded := decodeTransferEncoding(cte, b)
+			decoded := decodeTransferEncoding(cte, b, subParams["charset"])
 			if strings.TrimSpace(decoded) != "" {
 				return decoded
 			}
 
 		case strings.EqualFold(mt, "text/html"):
 			b, _ := io.ReadAll(part)
-			decoded := decodeTransferEncoding(cte, b)
+			decoded := decodeTransferEncoding(cte, b, subParams["charset"])
 			if htmlFallback == "" {
 				htmlFallback = stripHTMLTags(decoded)
 			}
@@ -924,17 +931,19 @@ func extractFromMultipart(body io.Reader, boundary, parentMediaType string) stri
 	return htmlFallback
 }
 
-// decodeTransferEncoding decodes the part body per its Content-Transfer-Encoding.
-// This is only ever called on text/plain and text/html parts, so decoding
-// base64 yields readable text — NOT decoding it (the previous behaviour) leaked
-// raw base64 blobs into the index, polluting search and bloating the LLM
-// context. quoted-printable and base64 are both handled; anything else is
-// already text and returned as-is.
-func decodeTransferEncoding(cte string, raw []byte) string {
+// decodeTransferEncoding decodes the part body per its Content-Transfer-Encoding
+// and then re-encodes the resulting bytes from the part's declared charset to
+// UTF-8 (see decodeCharset). This is only ever called on text/plain and
+// text/html parts, so decoding base64 yields readable text — NOT decoding it
+// (the previous behaviour) leaked raw base64 blobs into the index, polluting
+// search and bloating the LLM context. quoted-printable and base64 are both
+// handled; anything else is already text.
+func decodeTransferEncoding(cte string, raw []byte, charset string) string {
+	decoded := raw
 	switch strings.ToLower(strings.TrimSpace(cte)) {
 	case "quoted-printable":
-		if decoded, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(raw))); err == nil {
-			return strings.TrimSpace(string(decoded))
+		if b, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(raw))); err == nil {
+			decoded = b
 		}
 	case "base64":
 		// MIME base64 wraps lines at ~76 cols; strip all whitespace first since
@@ -945,33 +954,60 @@ func decodeTransferEncoding(cte string, raw []byte) string {
 			}
 			return r
 		}, string(raw))
-		if decoded, err := base64.StdEncoding.DecodeString(clean); err == nil {
-			return strings.TrimSpace(string(decoded))
+		if b, err := base64.StdEncoding.DecodeString(clean); err == nil {
+			decoded = b
 		}
 	}
-	return strings.TrimSpace(string(raw))
+	return strings.TrimSpace(mailpkg.DecodeCharset(decoded, charset))
 }
 
 // stripHTMLTags removes HTML tags from s using a simple state machine that
 // does not allocate a full DOM. Good enough for search-index normalization.
+// The CONTENT of <style>/<script> elements is dropped too — otherwise the CSS
+// of templated mail (MJML/Mailjet etc.) leaks into the indexed text as noise.
 func stripHTMLTags(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	inTag := false
-	for _, r := range s {
+	readingName := false  // accumulating the tag name right after '<'
+	skip := 0             // >0 while inside <style>/<script> content
+	var name []byte
+	for i := 0; i < len(s); i++ {
+		r := s[i]
 		switch {
 		case r == '<':
 			inTag = true
+			readingName = true
+			name = name[:0]
 		case r == '>':
 			inTag = false
-			b.WriteRune(' ') // preserve word boundaries
-		case !inTag:
-			b.WriteRune(r)
+			readingName = false
+			switch strings.ToLower(string(name)) {
+			case "style", "script":
+				skip++
+			case "/style", "/script":
+				if skip > 0 {
+					skip--
+				}
+			}
+			if skip == 0 {
+				b.WriteByte(' ') // preserve word boundaries
+			}
+		case inTag:
+			// Tag name runs until the first whitespace or '/' (after the leading one).
+			if readingName {
+				if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+					readingName = false
+				} else {
+					name = append(name, r)
+				}
+			}
+		case skip == 0:
+			b.WriteByte(r) // raw byte keeps multi-byte UTF-8 intact
 		}
 	}
 	// Collapse consecutive whitespace.
-	result := strings.Join(strings.Fields(b.String()), " ")
-	return result
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // setHealth updates the health status under the write lock.

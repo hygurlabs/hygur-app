@@ -105,6 +105,12 @@ func ExtractTier2(ctx context.Context, client *llm.Client, text string) (Tier2En
 		},
 		Temperature: 0,
 		MaxTokens:   tier2MaxTokens,
+		// Hard-disable reasoning at the chat-template level. The `/no_think`
+		// prefix above is ignored by some models (notably minicpm5), which then
+		// spend the whole token budget on an unterminated <think> block and never
+		// emit the JSON. enable_thinking=false stops that at the backend; it is
+		// silently ignored by templates that don't support it.
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})
 	if err != nil {
 		return Tier2Entities{}, fmt.Errorf("tier2: chat failed: %w", err)

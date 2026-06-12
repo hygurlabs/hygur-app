@@ -120,7 +120,7 @@ func (idx *EmailIndexer) CountAllMail(ctx context.Context) int64 {
 	if idx.store == nil {
 		return 0
 	}
-	n, err := idx.store.CountKnowledgeItemsBySourceTypes(ctx, []string{"email"})
+	n, err := idx.store.CountKnowledgeItemsBySourceTypes(ctx, store.MailSourceTypes)
 	if err != nil {
 		return 0
 	}
@@ -318,8 +318,10 @@ func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messag
 	tier1, highPriority := enrichMetadataWithTier1(metadata, thread.Subject, normalizedText, mailFrom)
 
 	item := &store.KnowledgeItem{
-		ContentID:      contentID,
-		SourceType:     "email",
+		ContentID: contentID,
+		// Unified on "mail" (the connector/edge value) so both ingestion paths
+		// agree; legacy "email" rows are still read via store.MailSourceTypes.
+		SourceType:     store.SourceTypeMail,
 		Title:          thread.Subject,
 		NormalizedText: normalizedText,
 		Metadata:       metadata,

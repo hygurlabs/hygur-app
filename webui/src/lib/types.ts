@@ -12,7 +12,16 @@ export type Role = "user" | "assistant" | "system";
 export type AttachmentRef =
   | { type: "document"; content_id: string; title?: string }
   | { type: "image"; data: string; mime_type: string; title?: string }
-  | { type: "audio"; data: string; format: string; title?: string };
+  | {
+      type: "audio";
+      data: string;
+      format: string;
+      title?: string;
+      /** History-loaded audio whose bytes were purged by the retention cap:
+       *  false ⇒ show a "recording no longer available" placeholder. Undefined
+       *  for freshly-sent audio (data is present). */
+      available?: boolean;
+    };
 
 export interface ChatMessage {
   role: Role;
@@ -79,6 +88,158 @@ export interface KnowledgeItem {
   tags?: { id: string; name: string; color?: string }[];
 }
 
+/** One cited side of a contradiction (W5): the divergent value + its source. */
+export interface ConflictMember {
+  content_id: string;
+  title: string;
+  from: string;
+  date: string; // RFC3339
+  value: string;
+}
+
+/** A deterministic contradiction within a thread (GET /knowledge/contradictions). */
+export interface Conflict {
+  type: "amount" | "due_date" | "iban" | "vat" | "structured_comm" | string;
+  cluster: string; // normalized thread subject
+  severity: "high" | "medium" | string;
+  members: ConflictMember[];
+}
+
+/** A validated citation back to a real knowledge item (Follow-up digest). */
+export interface DigestSource {
+  content_id: string;
+  title: string;
+  from: string;
+  date: string; // RFC3339
+}
+
+/** One topic or contradiction in the Follow-up digest; title is topics-only. */
+export interface DigestEntry {
+  title?: string;
+  note: string;
+  sources: DigestSource[];
+}
+
+/** A local to-do (GET/POST /tasks). */
+export interface Task {
+  id: string;
+  title: string;
+  body: string; // Markdown — a task is a note-like knowledge_item
+  status: string; // "open" | "done"
+  due_date?: string;
+  project_id?: string;
+  tags: Tag[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** A decision/commitment as a first-class object: logged by the user or proposed
+ *  by the nightly grounded scan, then confirmed. A note-like knowledge_item
+ *  (statement + Markdown rationale + tags + project) plus decision state. */
+export interface Decision {
+  id: string;
+  statement: string;
+  rationale: string; // Markdown
+  status: string; // "proposed" | "standing" | "superseded"
+  decided_on?: string; // RFC3339
+  source_refs: string[]; // knowledge_item ids that ground it
+  project_id?: string;
+  tags: Tag[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** The daily composed "state of your world" (GET /digest) — assembles already-
+ *  computed signals: where things stand, open contradictions, decisions to
+ *  confirm, tasks due soon. */
+export interface Digest {
+  synopsis: string;
+  contradictions: ReconciledConflict[];
+  proposed_decisions: Decision[];
+  due_tasks: Task[];
+}
+
+/** One cited side of a reconciled claim conflict (W6 REDUCE). */
+export interface ClaimRef {
+  source_id: string;
+  value: string;
+  quote: string;
+  asserted_at: string;
+}
+
+/** A reconciled semantic contradiction (GET /knowledge/claim-contradictions):
+ *  cross-source divergent claims the LLM classified as a real `conflict` or an
+ *  evolution (`supersedes`), each cited verbatim. */
+export interface ReconciledConflict {
+  cluster: string;
+  entity: string;
+  attribute: string;
+  members: ClaimRef[];
+  verdict: { kind: "conflict" | "supersedes" | string; reason: string };
+  /** Stable identity used to dismiss/restore this contradiction. */
+  key: string;
+  /** True when the user has dismissed it (only surfaced with include_dismissed). */
+  dismissed?: boolean;
+}
+
+/** One row of a project's exchange timeline (GET /knowledge/project-timeline). */
+export interface TimelineItem {
+  content_id: string;
+  title: string;
+  source_type: string;
+  from: string;
+  date: string; // RFC3339
+}
+
+/** A long-term memory Hygur keeps about the user (fact / action / preference). */
+export interface Memory {
+  memory_id: string;
+  type: string; // "fact" | "action" | "preference"
+  content: string;
+  created_at: string;
+  source?: string; // "manual" | "extracted"
+  accepted_at?: string; // "" = pending review
+}
+
+/** Chronicle — Hygur's grounded narrative, read as a book. */
+export interface ChronicleChapterSummary {
+  id: string;
+  title: string;
+  status: string;
+  act_count: number;
+  last_date?: string;
+}
+export interface ChronicleAct {
+  date: string; // YYYY-MM-DD
+  title: string; // e.g. "12 June 2026"
+  markdown: string;
+  sources: string[]; // content_ids; index n-1 ↔ "[n]" anchor in the prose
+  closing?: boolean; // the act that closed the chapter
+}
+export interface ChronicleChapterDetail {
+  id: string;
+  title: string;
+  status: string;
+  acts: ChronicleAct[];
+}
+
+/** An open task with a deadline, surfaced proactively in Follow-up. */
+export interface DueTask {
+  id: string;
+  title: string;
+  due_date: string;
+  status: string;
+}
+
+/** Grounded Follow-up synthesis (GET /knowledge/followup). */
+export interface FollowUpDigest {
+  topics: DigestEntry[];
+  contradictions: DigestEntry[];
+  due_tasks?: DueTask[];
+  scanned: number;
+  window: string;
+}
+
 export interface NoteTag {
   id: string;
   name: string;
@@ -104,6 +265,16 @@ export interface Tag {
   usage_count?: number;
 }
 
+/** One item carrying a tag (GET /tags/{id}/items). */
+export interface TagItem {
+  id: string;
+  title: string;
+  source_type: string;
+  source_path?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AgendaAction {
   what: string;
   deadline_iso: string;
@@ -123,11 +294,24 @@ export interface SessionSummary {
   updated_at: string;
 }
 
+/** A media attachment returned with a persisted user turn (GET /sessions/{id}).
+ *  `data` is base64; absent when `available` is false (audio purged by the cap). */
+export interface SessionAttachment {
+  type: "image" | "audio";
+  title?: string;
+  mime_type?: string;
+  format?: string;
+  data?: string;
+  available: boolean;
+  byte_size?: number;
+}
+
 export interface SessionMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: RagSource[];
+  attachments?: SessionAttachment[];
   created_at: string;
 }
 
@@ -238,6 +422,9 @@ export interface SidecarConfig {
     entity_search_min_score: number;
   };
   mail: { reconcile_deletions: boolean };
+  /** Hygur-operated cloud tenant: the AI-runtime endpoints are operator-controlled
+   *  (redacted server-side). The UI hides the AI-runtime editor when true. */
+  managed?: boolean;
 }
 
 /** Per-1M-token prices for the cost estimate (GET/PUT /usage). Chat is billed
@@ -250,12 +437,15 @@ export interface TokenPricing {
 }
 
 /** Token totals for one period. Chat keeps IN/OUT split; embeddings/indexing
- *  are reported as total tokens each. */
+ *  are reported as total tokens each; total_in/total_out sum every category
+ *  (the input/output budget the inference box sees — drives the usage gauge). */
 export interface TokenPeriodUsage {
   chat_in: number;
   chat_out: number;
   embedding: number;
   indexing: number;
+  total_in: number;
+  total_out: number;
 }
 
 /** Response of GET /usage/tokens. */
@@ -267,6 +457,13 @@ export interface TokenUsageResponse {
     this_week: TokenPeriodUsage;
     this_month: TokenPeriodUsage;
   };
+}
+
+/** Local at-rest encryption status (GET /admin/db/encryption). env_managed =
+ *  the key comes from the server env (cloud); not user-toggleable locally. */
+export interface EncryptionStatus {
+  enabled: boolean;
+  env_managed: boolean;
 }
 
 export interface SidecarConfigPatch {

@@ -49,6 +49,7 @@ export function ConnectorConfigForm({
         }
       }
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed the form once the connector detail loads
     setValues(next);
   }, [detail]);
 
@@ -405,6 +406,7 @@ function MultiEnumField({
   // when not yet connected, to avoid a guaranteed error on open.
   useEffect(() => {
     if (!hasStatic && connectorHealthy && loaded === null && !loading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- lazy-load on first healthy mount; load() guards re-entry
       void load();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

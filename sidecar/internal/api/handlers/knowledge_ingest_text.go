@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hygur/sidecar/internal/ingest"
 )
@@ -19,6 +20,9 @@ type IngestTextRequest struct {
 	URL        string         `json:"url,omitempty"`
 	Author     string         `json:"author,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+	// CreatedAt (RFC3339) carries the source's own date (e.g. a mail's date) so
+	// recency reasoning is correct. Empty → the server uses now.
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 // IngestText handles POST /knowledge/ingest-text. Idempotent by source_ref:
@@ -38,6 +42,12 @@ func (h *KnowledgeHandler) IngestText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var createdAt time.Time
+	if req.CreatedAt != "" {
+		if t, perr := time.Parse(time.RFC3339, req.CreatedAt); perr == nil {
+			createdAt = t
+		}
+	}
 	res, err := h.ingestor.IngestText(r.Context(), ingest.IngestTextInput{
 		Title:      req.Title,
 		Text:       req.Text,
@@ -46,6 +56,7 @@ func (h *KnowledgeHandler) IngestText(w http.ResponseWriter, r *http.Request) {
 		URL:        req.URL,
 		Author:     req.Author,
 		Metadata:   req.Metadata,
+		CreatedAt:  createdAt,
 	})
 	if err != nil {
 		h.logger.Error().Err(err).Str("source_ref", req.SourceRef).Msg("ingest-text failed")

@@ -1,5 +1,5 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { TOKEN } from "./api";
+import { apiBase, apiKey } from "./connection";
 
 /** One event off the sidecar's `/events` SSE stream (sync/ingest/mail/…). */
 export interface HygurEvent {
@@ -18,8 +18,8 @@ export function subscribeEvents(
   onEvent: (e: HygurEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  return fetchEventSource("/events", {
-    headers: { "X-Hygur-Token": TOKEN },
+  return fetchEventSource(apiBase() + "/events", {
+    headers: { "X-Hygur-Token": apiKey() },
     signal,
     openWhenHidden: true,
     onmessage(msg) {

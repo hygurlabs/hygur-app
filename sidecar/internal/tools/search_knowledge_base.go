@@ -79,7 +79,7 @@ func (t *SearchKnowledgeBaseTool) ParameterSchema() map[string]any {
 			},
 			"date_from": map[string]any{
 				"type":        "string",
-				"description": "Optional ISO date (YYYY-MM-DD). Only return documents on/after this date. For any question scoped to a period (« ces deux derniers mois », « en avril », « récemment »), compute it from today's date and set it — you'll then receive ALL documents in the window, not just the closest matches.",
+				"description": "Optional ISO date (YYYY-MM-DD). Only return documents on/after this date. For any question scoped to a period (\"these last two months\", \"in April\", \"recently\"), compute it from today's date and set it — you'll then receive ALL documents in the window, not just the closest matches.",
 			},
 			"date_to": map[string]any{
 				"type":        "string",

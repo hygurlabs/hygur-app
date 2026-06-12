@@ -86,7 +86,7 @@ func (m *MeetingBriefer) Generate(ctx context.Context, in MeetingInput) (Meeting
 	prompt := buildMeetingPrompt(in, res.Results)
 	resp, err := m.llm.Chat(ctx, llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: "system", Content: "Tu prépares un briefing court avant un rendez-vous ou une échéance. Appuie-toi UNIQUEMENT sur le contexte fourni, n'invente rien. Garde tout raisonnement interne bref. Réponds en Markdown, en français, en 3 à 6 puces maximum."},
+			{Role: "system", Content: "You prepare a short briefing ahead of a meeting or deadline. Rely ONLY on the provided context, invent nothing. Keep internal reasoning brief. Reply in Markdown, in English, in 3 to 6 bullets maximum."},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -171,12 +171,12 @@ func buildMeetingQuery(in MeetingInput) string {
 func buildMeetingPrompt(in MeetingInput, results []retrieval.UnifiedResult) string {
 	var sb strings.Builder
 	if in.Kind == "mail" {
-		sb.WriteString("Échéance à préparer : « ")
+		sb.WriteString("Deadline to prepare: \"")
 	} else {
-		sb.WriteString("Rendez-vous à préparer : « ")
+		sb.WriteString("Meeting to prepare: \"")
 	}
 	sb.WriteString(in.Title)
-	sb.WriteString(" »")
+	sb.WriteString("\"")
 	if !in.When.IsZero() {
 		sb.WriteString(" (")
 		sb.WriteString(in.When.Format("02/01 15:04"))
@@ -184,22 +184,22 @@ func buildMeetingPrompt(in MeetingInput, results []retrieval.UnifiedResult) stri
 	}
 	sb.WriteString(".\n")
 	if len(in.Attendees) > 0 {
-		sb.WriteString("Participants : ")
+		sb.WriteString("Attendees: ")
 		sb.WriteString(strings.Join(in.Attendees, ", "))
 		sb.WriteString(".\n")
 	}
 	if in.Location != "" {
-		sb.WriteString("Lieu : ")
+		sb.WriteString("Location: ")
 		sb.WriteString(in.Location)
 		sb.WriteString(".\n")
 	}
 	if in.Notes != "" {
-		sb.WriteString("Notes : ")
+		sb.WriteString("Notes: ")
 		sb.WriteString(in.Notes)
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\nGénère un briefing court (3-6 puces) : ce qu'il faut savoir/rappeler, décisions ou points en attente, et l'action à mener. Termine par une puce « Contexte : » listant les éléments utilisés.\n\n")
-	sb.WriteString("Contexte issu de la base personnelle :\n")
+	sb.WriteString("\nGenerate a short briefing (3-6 bullets): what to know/recall, decisions or pending points, and the action to take. End with a \"Context:\" bullet listing the items used.\n\n")
+	sb.WriteString("Context from the personal knowledge base:\n")
 	for i, r := range results {
 		sb.WriteString(fmt.Sprintf("- [%s] %s", r.SourceType, r.Title))
 		if r.MailFrom != "" {
@@ -236,12 +236,12 @@ func meetingTitle(in MeetingInput) string {
 	return prefix + " : " + in.Title + when
 }
 
-// MeetingBriefScheduler periodically briefs mail-extracted deadlines that fall
-// due today. Calendar events are handled natively (the macOS app calls
-// POST /brief/meeting 30 min before each event); this loop covers the date-only
-// mail deadlines, firing once per deadline per day after the configured morning
-// hour. Dedup is in-memory (briefed map) — restarts may re-brief, which is
-// acceptable for a once-a-day notification.
+// MeetingBriefScheduler periodically briefs (a) upcoming calendar events — the
+// server-side path that covers the cloud, where there's no macOS app to call
+// POST /brief/meeting — and (b) date-only mail deadlines due today. Calendar
+// events are briefed whenever they fall within the lookahead window (any hour);
+// mail deadlines fire once per day after the configured morning hour. Dedup is
+// in-memory (briefed map) — restarts may re-brief, acceptable for a notification.
 type MeetingBriefScheduler struct {
 	briefer     *MeetingBriefer
 	store       *store.DB
@@ -297,10 +297,46 @@ func (s *MeetingBriefScheduler) Start(ctx context.Context) {
 	}()
 }
 
+// tickCalendar briefs calendar events starting within the lookahead window — the
+// server-side / cloud equivalent of the macOS app's pre-event brief (which calls
+// POST /brief/meeting ~30 min before). Not gated by morningHour: a brief is timed
+// to the meeting, not the morning. The briefer itself skips events with no
+// relevant KB context (Relevant=false), so quiet events make no noise.
+func (s *MeetingBriefScheduler) tickCalendar(ctx context.Context, now time.Time) {
+	const (
+		lookahead = 45 * time.Minute
+		maxEvents = 20
+	)
+	events, err := s.store.ListEventsInWindow(ctx, now, now.Add(lookahead), maxEvents)
+	if err != nil {
+		s.logger.Debug().Err(err).Msg("meeting brief tick: list events failed")
+		return
+	}
+	for _, ev := range events {
+		dedupKey := "event|" + ev.ContentID
+		if _, done := s.briefed[dedupKey]; done {
+			continue
+		}
+		// The CalDAV connector stores the event start as created_at.
+		if _, err := s.briefer.Generate(ctx, MeetingInput{
+			Kind:  "calendar",
+			Key:   ev.ContentID,
+			Title: ev.Title,
+			When:  ev.CreatedAt,
+		}); err != nil {
+			s.logger.Debug().Err(err).Str("event", ev.ContentID).Msg("calendar brief failed")
+			continue
+		}
+		s.briefed[dedupKey] = struct{}{}
+	}
+}
+
 func (s *MeetingBriefScheduler) tick(ctx context.Context) {
 	now := time.Now()
+	// Calendar events first — timed to the meeting, not gated by the morning hour.
+	s.tickCalendar(ctx, now)
 	if now.Hour() < s.morningHour {
-		return // too early to disturb the user
+		return // too early to disturb the user with mail-deadline briefs
 	}
 	items, err := s.store.ListRecentItems(ctx, 24*14)
 	if err != nil {

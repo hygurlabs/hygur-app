@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 export function Page({ children }: { children: ReactNode }) {
   return (
     <div className="h-full overflow-y-auto">
-      <div className="view-enter mx-auto max-w-[760px] px-7 pb-24 pt-9">
+      <div className="view-enter mx-auto max-w-[760px] px-4 pb-24 pt-9 sm:px-7">
         {children}
       </div>
     </div>

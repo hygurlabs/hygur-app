@@ -73,55 +73,61 @@ func (a *AutoTagger) TagDocument(ctx context.Context, contentID, sourcePath stri
 	return result, nil
 }
 
-// TagMail applies auto-tags to an email based on sender domain and mailbox folder.
+// TagMail applies the mailbox-folder auto-tag to an email. Sender-domain tags
+// were dropped in favour of semantic topic tags (see TagTopics) — too many,
+// too little "meaning" — so only the folder tag remains here. senderEmail is
+// kept so the direct-IMAP indexer's call site is unchanged; it is unused.
 func (a *AutoTagger) TagMail(ctx context.Context, contentID string, senderEmail string, mailboxPath string) (*AutoTagResult, error) {
+	_ = senderEmail
 	if a.store == nil {
 		return &AutoTagResult{}, nil
 	}
-
-	result := &AutoTagResult{
-		Tags:    make([]string, 0),
-		NewTags: make([]string, 0),
-	}
-
-	// Extract domain from sender email
-	domainTag := extractDomainTag(senderEmail)
-	if domainTag != "" {
-		tagName := "mail:" + domainTag
-		autoRule := "mail:from:@" + domainTag
-
-		tag, err := a.store.GetOrCreateTag(ctx, tagName, true, autoRule)
-		if err == nil {
-			if tag.ItemCount == 0 {
-				result.NewTags = append(result.NewTags, tag.ID)
-			}
-			if err := a.store.AddTagToItem(ctx, contentID, tag.ID); err == nil {
-				result.Tags = append(result.Tags, tag.ID)
-			}
-		}
-	}
-
-	// Extract mailbox folder tag
-	folderTag := extractMailboxFolderTag(mailboxPath)
-	if folderTag != "" {
-		tagName := "mail:" + folderTag
-		autoRule := "mail:folder:" + folderTag
-
-		tag, err := a.store.GetOrCreateTag(ctx, tagName, true, autoRule)
-		if err == nil {
-			if tag.ItemCount == 0 {
-				result.NewTags = append(result.NewTags, tag.ID)
-			}
-			if err := a.store.AddTagToItem(ctx, contentID, tag.ID); err == nil {
-				result.Tags = append(result.Tags, tag.ID)
-			}
-		}
-	}
-
-	// Prune auto-tags if needed
+	a.tagMailFolder(ctx, contentID, mailboxPath)
 	_ = a.store.PruneAutoTags(ctx)
+	return &AutoTagResult{}, nil
+}
 
-	return result, nil
+// TagTopics applies semantic topic tags ("topic:<label>") derived by the Tier-2
+// LLM extractor — the "meaning" grouping that classifies mail by subject rather
+// than by sender. The label vocabulary is small and reused across documents, so
+// the tag set stays compact.
+func (a *AutoTagger) TagTopics(ctx context.Context, contentID string, topics []string) (*AutoTagResult, error) {
+	if a.store == nil {
+		return &AutoTagResult{}, nil
+	}
+	a.tagTopics(ctx, contentID, topics)
+	_ = a.store.PruneAutoTags(ctx)
+	return &AutoTagResult{}, nil
+}
+
+// tagMailFolder adds the mailbox-folder tag. It does NOT prune — a batch backfill
+// prunes once at the end to avoid deleting (and orphaning) tags mid-run; the
+// single-item public methods prune themselves.
+func (a *AutoTagger) tagMailFolder(ctx context.Context, contentID, mailboxPath string) {
+	folderTag := extractMailboxFolderTag(mailboxPath)
+	if folderTag == "" {
+		return
+	}
+	tag, err := a.store.GetOrCreateTag(ctx, "mail:"+folderTag, true, "mail:folder:"+folderTag)
+	if err != nil {
+		return
+	}
+	_ = a.store.AddTagToItem(ctx, contentID, tag.ID)
+}
+
+// tagTopics adds the "topic:<label>" tags. No pruning (see tagMailFolder).
+func (a *AutoTagger) tagTopics(ctx context.Context, contentID string, topics []string) {
+	for _, topic := range topics {
+		topic = strings.ToLower(strings.TrimSpace(topic))
+		if topic == "" {
+			continue
+		}
+		tag, err := a.store.GetOrCreateTag(ctx, "topic:"+topic, true, "topic:"+topic)
+		if err != nil {
+			continue
+		}
+		_ = a.store.AddTagToItem(ctx, contentID, tag.ID)
+	}
 }
 
 // extractFolderTags extracts up to 3 folder levels from a file path.
@@ -246,6 +252,9 @@ func extractMailboxFolderTag(mailboxPath string) string {
 	skipNames := []string{
 		"inbox", "sent", "sent mail", "drafts", "trash", "spam", "junk",
 		"archive", "all mail", "starred", "important",
+		// Proton Bridge exposes custom folders under "Folders/" and labels under
+		// "Labels/" — skip those container prefixes so we tag the real name.
+		"folders", "labels",
 	}
 
 	for _, part := range parts {

@@ -28,6 +28,10 @@ type periodUsage struct {
 	ChatOut   int `json:"chat_out"`
 	Embedding int `json:"embedding"`
 	Indexing  int `json:"indexing"`
+	// Totals across all categories — the input/output token budget the inference
+	// box actually sees (drives the usage gauge against the monthly caps).
+	TotalIn  int `json:"total_in"`
+	TotalOut int `json:"total_out"`
 }
 
 type usageResponse struct {
@@ -58,6 +62,8 @@ func (h *UsageHandler) GetTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		var p periodUsage
 		for _, row := range rows {
+			p.TotalIn += row.TokensIn
+			p.TotalOut += row.TokensOut
 			switch row.Category {
 			case store.TokenCategoryChat:
 				p.ChatIn += row.TokensIn

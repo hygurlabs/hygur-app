@@ -6,13 +6,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
+	// SQLCipher-enabled SQLite (drop-in for mattn/go-sqlite3; registers driver
+	// "sqlite3"). A plaintext DB opens unchanged when no key is supplied — see
+	// NewDBWithKey — so existing unencrypted databases keep working. Named (not
+	// blank) so Open can call IsEncrypted to decide whether to migrate.
+	sqlcipher "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // DB wraps the SQLite database connection and provides CRUD operations.
@@ -27,10 +32,19 @@ func (d *DB) SQLDB() *sql.DB {
 	return d.db
 }
 
-// NewDB opens or creates a SQLite database at the given path and applies migrations.
-// The database file is created with 0600 permissions for security.
-// For in-memory databases, use ":memory:" as the path.
+// NewDB opens or creates a plaintext SQLite database at the given path and
+// applies migrations. The database file is created with 0600 permissions for
+// security. For in-memory databases, use ":memory:" as the path.
 func NewDB(path string) (*DB, error) {
+	return NewDBWithKey(path, "")
+}
+
+// NewDBWithKey is NewDB with optional SQLCipher encryption at rest. When key is
+// non-empty the database is opened encrypted (DSN _pragma_key); an empty key
+// opens a plaintext database — the default — so existing unencrypted files keep
+// working unchanged. The key is the SQLCipher passphrase (e.g. an OS-keychain
+// secret locally, or the tenant DEK in the cloud).
+func NewDBWithKey(path, key string) (*DB, error) {
 	// For non-memory databases, ensure the directory exists and set file permissions
 	if path != ":memory:" {
 		dir := filepath.Dir(path)
@@ -57,6 +71,12 @@ func NewDB(path string) (*DB, error) {
 		// Use a unique name so each NewDB(":memory:") call creates a separate database
 		uniqueID := uuid.New().String()[:8]
 		dsn = fmt.Sprintf("file:memdb_%s?mode=memory&cache=shared&_foreign_keys=on", uniqueID)
+	}
+
+	// Encrypt at rest when a key is supplied. _pragma_key is applied on every
+	// pooled connection by the SQLCipher driver before any read.
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
 	}
 
 	db, err := sql.Open("sqlite3", dsn)
@@ -102,6 +122,299 @@ func NewDB(path string) (*DB, error) {
 	}
 
 	return &DB{db: db}, nil
+}
+
+// QuickCheck verifies the file at path is a usable database: it opens read-only
+// with no key (plaintext) or, failing that, with key (encrypted with the
+// current key). Used to validate an uploaded restore BEFORE staging it, so a
+// bad/foreign file can't brick the next boot. A plaintext file is accepted even
+// when a key is set — boot's Open auto-migrates it.
+func QuickCheck(ctx context.Context, path, key string) error {
+	if err := quickProbe(ctx, path, ""); err == nil {
+		return nil
+	} else if key == "" {
+		return err
+	}
+	return quickProbe(ctx, path, key)
+}
+
+func quickProbe(ctx context.Context, path, key string) error {
+	dsn := "file:" + path + "?_foreign_keys=off&mode=ro"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var n int
+	return db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master").Scan(&n)
+}
+
+// ApplyPendingRestore swaps a staged restore into place at boot, BEFORE the DB
+// is opened. If "<dbPath>.restore-pending" exists, the current DB is moved aside
+// to "<dbPath>.pre-restore.bak" and the staged file becomes the live DB (stale
+// -wal/-shm are dropped — the staged file is a clean snapshot). Returns whether
+// a restore was applied. Best-effort rollback if the swap fails midway.
+func ApplyPendingRestore(dbPath string) (bool, error) {
+	pending := dbPath + ".restore-pending"
+	if _, err := os.Stat(pending); err != nil {
+		return false, nil // nothing staged
+	}
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+	backup := dbPath + ".pre-restore.bak"
+	_ = os.Remove(backup)
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := os.Rename(dbPath, backup); err != nil {
+			return false, fmt.Errorf("restore: back up current DB: %w", err)
+		}
+	}
+	if err := os.Rename(pending, dbPath); err != nil {
+		_ = os.Rename(backup, dbPath) // roll back
+		return false, fmt.Errorf("restore: swap staged DB: %w", err)
+	}
+	return true, nil
+}
+
+// Open is the boot-time entry point: it opens the store at path, encrypting at
+// rest when key is non-empty. On the first run with a key against an existing
+// PLAINTEXT database, it transparently migrates it to encrypted (keeping a
+// .plaintext.bak) before opening — so enabling local encryption is just a
+// restart with HYGUR_DB_KEY set, not a manual step. An empty key opens plaintext
+// (the default — existing installs are unaffected).
+func Open(path, key string) (*DB, error) {
+	if key == "" {
+		return NewDB(path)
+	}
+	// Auto-migrate an existing, non-empty plaintext DB on first keyed run.
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+		enc, encErr := sqlcipher.IsEncrypted(path)
+		if encErr != nil {
+			return nil, fmt.Errorf("store: probe encryption of %q: %w", path, encErr)
+		}
+		if !enc {
+			if err := MigratePlaintextToEncrypted(path, key); err != nil {
+				return nil, fmt.Errorf("store: migrate %q to encrypted: %w", path, err)
+			}
+		}
+	}
+	return NewDBWithKey(path, key)
+}
+
+// BackupTo writes a consistent snapshot of the database to destPath. With an
+// empty key the snapshot is plaintext (VACUUM INTO — a transactional hot copy,
+// safe while the DB is in use); with a key it is SQLCipher-encrypted with that
+// same key (sqlcipher_export), so the backup preserves the source's at-rest
+// protection. destPath must not already exist.
+func (d *DB) BackupTo(ctx context.Context, destPath, key string) error {
+	return backupConn(ctx, d.db, destPath, key)
+}
+
+// backupConn runs a consistent hot copy of the database reachable through conn
+// into destPath: VACUUM INTO for plaintext, or ATTACH + sqlcipher_export keyed
+// with the same key so the copy preserves the source's at-rest encryption.
+// ATTACH is connection-scoped, so callers must pin conn to a single underlying
+// connection (SetMaxOpenConns(1)) — otherwise the export can land on a
+// connection that never saw the ATTACH.
+func backupConn(ctx context.Context, conn *sql.DB, destPath, key string) error {
+	if key == "" {
+		if _, err := conn.ExecContext(ctx, "VACUUM INTO ?", destPath); err != nil {
+			return fmt.Errorf("backup (vacuum into): %w", err)
+		}
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS bak KEY ?`, destPath, key); err != nil {
+		return fmt.Errorf("backup attach: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT sqlcipher_export('bak')`); err != nil {
+		_, _ = conn.ExecContext(ctx, `DETACH DATABASE bak`)
+		return fmt.Errorf("backup export: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `DETACH DATABASE bak`); err != nil {
+		return fmt.Errorf("backup detach: %w", err)
+	}
+	return nil
+}
+
+// SnapshotTo writes a consistent snapshot of the database file at srcPath to
+// destPath WITHOUT running migrations or mutating the source. It opens its own
+// dedicated connection (pinned to one, so the keyed ATTACH/export stays
+// coherent), so it is safe to run from a separate process while the server holds
+// the DB open — SQLite admits concurrent readers. With a non-empty key the
+// snapshot is SQLCipher-encrypted under that same key; an empty key yields a
+// plaintext copy. destPath must not already exist. This is the entry point for
+// the `backup-db` operator subcommand driving the off-box backup job. The DB
+// schema is irrelevant, so the same call snapshots both the tenant knowledge
+// store and the control-plane admin DB.
+func SnapshotTo(ctx context.Context, srcPath, destPath, key string) error {
+	return snapshotExport(ctx, srcPath, destPath, key, key)
+}
+
+// RekeyTo copies the DB at srcPath (opened with oldKey) to destPath encrypted
+// under newKey — the export half of a SQLCipher DEK rotation. destPath must not
+// exist; the caller verifies it opens with newKey, then swaps it in. Reads via
+// its own connection, so it does not disturb a server holding the source open
+// (though an in-place rotation should still quiesce writers before the swap).
+func RekeyTo(ctx context.Context, srcPath, destPath, oldKey, newKey string) error {
+	return snapshotExport(ctx, srcPath, destPath, oldKey, newKey)
+}
+
+// snapshotExport opens srcPath with openKey on its own pinned connection (no
+// migrations, no source mutation) and writes a consistent copy to destPath
+// encrypted under destKey. Shared core of SnapshotTo (openKey == destKey) and
+// RekeyTo (open with old, write with new).
+func snapshotExport(ctx context.Context, srcPath, destPath, openKey, destKey string) error {
+	dsn := "file:" + srcPath + "?_foreign_keys=off&_busy_timeout=30000"
+	if openKey != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(openKey))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return fmt.Errorf("snapshot open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1) // ATTACH/export must stay on a single connection
+	if err := conn.PingContext(ctx); err != nil {
+		return fmt.Errorf("snapshot open (wrong key?): %w", err)
+	}
+	return backupConn(ctx, conn, destPath, destKey)
+}
+
+// DumpTokenUsage opens the DB at path READ-ONLY (its own pinned connection, no
+// migrations) and returns per-day token usage since startDay plus the pricing.
+// Read-only, so it is safe to run in-pod alongside the live server — the entry
+// point for the admin cost poll's `usage dump`.
+func DumpTokenUsage(ctx context.Context, path, key, startDay string) ([]DayCategoryUsage, Pricing, error) {
+	dsn := "file:" + path + "?_foreign_keys=off&mode=ro&_busy_timeout=30000"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, Pricing{}, fmt.Errorf("usage dump open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1)
+	if err := conn.PingContext(ctx); err != nil {
+		return nil, Pricing{}, fmt.Errorf("usage dump open (wrong key?): %w", err)
+	}
+	ro := &DB{db: conn}
+	days, err := ro.TokenUsageDailySince(ctx, startDay)
+	if err != nil {
+		return nil, Pricing{}, err
+	}
+	pricing, err := ro.GetPricing(ctx)
+	if err != nil {
+		return nil, Pricing{}, err
+	}
+	return days, pricing, nil
+}
+
+// MailboxStat is one row of the mail-by-mailbox breakdown (the purge dry-run).
+type MailboxStat struct {
+	Mailbox   string `json:"mailbox"`
+	Count     int    `json:"count"`
+	TextBytes int64  `json:"text_bytes"`
+}
+
+// DumpMailBreakdown returns mail items grouped by their source mailbox
+// (metadata.mailbox), with counts and total normalized-text bytes. Read-only —
+// the dry-run for the differential KB purge; lets the user see the scale and the
+// provenance spread before any deletion. Mirrors DumpTokenUsage's keyed RO open.
+func DumpMailBreakdown(ctx context.Context, path, key string) ([]MailboxStat, error) {
+	dsn := "file:" + path + "?_foreign_keys=off&mode=ro&_busy_timeout=30000"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("mail breakdown open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1)
+	if err := conn.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("mail breakdown open (wrong key?): %w", err)
+	}
+	rows, err := conn.QueryContext(ctx, `
+SELECT COALESCE(json_extract(metadata, '$.mailbox'), '(none)') AS mbox,
+       COUNT(*) AS n,
+       COALESCE(SUM(LENGTH(normalized_text)), 0) AS bytes
+FROM knowledge_items
+WHERE source_type IN ('mail', 'email')
+GROUP BY mbox
+ORDER BY n DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MailboxStat
+	for rows.Next() {
+		var s MailboxStat
+		if err := rows.Scan(&s.Mailbox, &s.Count, &s.TextBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// MigratePlaintextToEncrypted converts an existing plaintext database at path
+// into a SQLCipher-encrypted one keyed by key, in place. It exports via
+// sqlcipher_export (schema + data + FTS5 indexes), verifies the result opens
+// with the key, then swaps it in — keeping the original as "<path>.plaintext.bak"
+// so a failed migration is recoverable. Call only on a plaintext DB (e.g. when
+// a user first opts into local encryption).
+func MigratePlaintextToEncrypted(path, key string) error {
+	if key == "" {
+		return fmt.Errorf("migrate: empty key")
+	}
+	tmp := path + ".sqlcipher-tmp"
+	_ = os.Remove(tmp)
+
+	// Export the plaintext DB into a fresh encrypted DB via SQLCipher.
+	src, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return fmt.Errorf("migrate: open source: %w", err)
+	}
+	exportErr := func() error {
+		if _, err := src.Exec(`ATTACH DATABASE ? AS enc KEY ?`, tmp, key); err != nil {
+			return fmt.Errorf("attach: %w", err)
+		}
+		if _, err := src.Exec(`SELECT sqlcipher_export('enc')`); err != nil {
+			return fmt.Errorf("export: %w", err)
+		}
+		if _, err := src.Exec(`DETACH DATABASE enc`); err != nil {
+			return fmt.Errorf("detach: %w", err)
+		}
+		return nil
+	}()
+	src.Close()
+	if exportErr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("migrate: %w", exportErr)
+	}
+
+	// Verify the encrypted copy opens with the key and migrates cleanly.
+	verify, err := NewDBWithKey(tmp, key)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("migrate: verify open: %w", err)
+	}
+	verify.Close()
+
+	// Swap in: keep the original as a backup, then move the encrypted copy in.
+	backup := path + ".plaintext.bak"
+	if err := os.Rename(path, backup); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("migrate: backup original: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Rename(backup, path) // best-effort rollback
+		return fmt.Errorf("migrate: swap: %w", err)
+	}
+	return nil
 }
 
 // ensureRAGSchema idempotently guarantees the sections + chunks_fts objects
@@ -348,6 +661,54 @@ func (d *DB) ListKnowledgeItems(ctx context.Context, limit, offset int) ([]*Know
 	return items, nil
 }
 
+// ListKnowledgeItemsExcluding lists items whose source_type is NOT in `excluded`,
+// newest first. Used by the Library browse to hide calendar events (they have
+// their own view). Empty `excluded` falls back to listing everything.
+func (d *DB) ListKnowledgeItemsExcluding(ctx context.Context, excluded []string, limit, offset int) ([]*KnowledgeItem, error) {
+	if len(excluded) == 0 {
+		return d.ListKnowledgeItems(ctx, limit, offset)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(excluded)), ",")
+	args := make([]any, 0, len(excluded)+2)
+	for _, e := range excluded {
+		args = append(args, e)
+	}
+	args = append(args, limit, offset)
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		FROM knowledge_items
+		WHERE source_type NOT IN (`+placeholders+`)
+		ORDER BY created_at DESC
+		LIMIT ? OFFSET ?
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list knowledge items (excluding): %w", err)
+	}
+	defer rows.Close()
+
+	var items []*KnowledgeItem
+	for rows.Next() {
+		item := &KnowledgeItem{}
+		var metadataStr, sourcePath sql.NullString
+		if err := rows.Scan(
+			&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
+			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan knowledge item: %w", err)
+		}
+		if sourcePath.Valid {
+			item.SourcePath = &sourcePath.String
+		}
+		if metadataStr.Valid && metadataStr.String != "" {
+			if err := json.Unmarshal([]byte(metadataStr.String), &item.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 // ListKnowledgeItemsSince returns items created or updated on/after `since`,
 // optionally restricted to specific source_types. Ordered with the most
 // recently created first. limit caps the result size; 0 means default 100.
@@ -585,6 +946,46 @@ func (d *DB) CountMailItemsByAccount(ctx context.Context, accountID, provider st
 }
 
 // ListKnowledgeItemsBySourceType returns items filtered by source_type.
+// ListEventsInWindow returns source_type="event" items whose start (stored as
+// created_at by the CalDAV connector) falls within [from, to], earliest first.
+// Lets the calendar summary/view surface upcoming events without scanning the
+// whole (mostly historical) calendar.
+func (d *DB) ListEventsInWindow(ctx context.Context, from, to time.Time, limit int) ([]*KnowledgeItem, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		FROM knowledge_items
+		WHERE source_type = 'event' AND created_at >= ? AND created_at <= ?
+		ORDER BY created_at ASC
+		LIMIT ?
+	`, from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list events in window: %w", err)
+	}
+	defer rows.Close()
+
+	var items []*KnowledgeItem
+	for rows.Next() {
+		item := &KnowledgeItem{}
+		var metadataStr, sourcePath sql.NullString
+		if err := rows.Scan(
+			&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
+			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan event: %w", err)
+		}
+		if sourcePath.Valid {
+			item.SourcePath = &sourcePath.String
+		}
+		if metadataStr.Valid && metadataStr.String != "" {
+			if err := json.Unmarshal([]byte(metadataStr.String), &item.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (d *DB) ListKnowledgeItemsBySourceType(ctx context.Context, sourceType string, limit, offset int) ([]*KnowledgeItem, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at

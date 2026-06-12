@@ -77,6 +77,7 @@ func TestDailyBrief_PublishesBriefForRecentItems(t *testing.T) {
 		now.Add(-2*time.Hour),
 		map[string]any{
 			"mail_from":           "compta@example.test",
+			"mail_date":           now.Add(-2 * time.Hour).UTC().Format(time.RFC3339),
 			"extracted_amounts":   []string{"7421.85 EUR"},
 			"extracted_due_dates": []string{"25 avril 2026"},
 			"high_priority":       true,
@@ -210,7 +211,8 @@ func TestDailyBrief_EmptyWindow_StillPublishes(t *testing.T) {
 func TestDailyBrief_LLMFailure_EmitsErrorEvent(t *testing.T) {
 	db := newTestDB(t)
 	now := time.Now()
-	insertItem(t, db, "email:1", "email", "Test", "body", now.Add(-1*time.Hour), nil)
+	insertItem(t, db, "email:1", "email", "Test", "body", now.Add(-1*time.Hour),
+		map[string]any{"mail_date": now.Add(-1 * time.Hour).UTC().Format(time.RFC3339)})
 
 	server := fakeLLMServer(t, "", true)
 	defer server.Close()
@@ -263,7 +265,8 @@ func TestStripReasoningTags(t *testing.T) {
 func TestDailyBrief_EmptyLLMContent_FallsBackToErrorEvent(t *testing.T) {
 	db := newTestDB(t)
 	now := time.Now()
-	insertItem(t, db, "email:1", "email", "Test", "body", now.Add(-1*time.Hour), nil)
+	insertItem(t, db, "email:1", "email", "Test", "body", now.Add(-1*time.Hour),
+		map[string]any{"mail_date": now.Add(-1 * time.Hour).UTC().Format(time.RFC3339)})
 
 	// LLM returns 200 OK but only thinking tokens (post-strip => empty).
 	server := fakeLLMServer(t, "<think>let me think about this</think>", false)
@@ -337,5 +340,64 @@ func TestFirstBullets_ExtractsLeadingMarkdownBullets(t *testing.T) {
 	got := firstBullets(text, 3)
 	if len(got) != 3 || got[0] != "premier point" || got[2] != "troisième" {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestDeterministicSources(t *testing.T) {
+	items := []briefItem{
+		{KnowledgeItem: &store.KnowledgeItem{ContentID: "a"}, projectName: "SRL", tags: []string{"invoicing", "banking"}},
+		{KnowledgeItem: &store.KnowledgeItem{ContentID: "b"}, projectName: "SRL", tags: []string{"invoicing"}},
+		{KnowledgeItem: &store.KnowledgeItem{ContentID: "c"}, tags: []string{"family"}},
+	}
+	got := deterministicSources(items)
+	want := "## Sources\n- Projects: SRL\n- Tags: banking, family, invoicing\n"
+	if got != want {
+		t.Errorf("deterministicSources:\n got %q\nwant %q", got, want)
+	}
+	if deterministicSources(nil) != "" {
+		t.Error("empty input should yield no Sources section")
+	}
+}
+
+func TestStripSourcesSection(t *testing.T) {
+	md := "## Points importants\n- a\n\n## Sources\n- Tags : x, y\n"
+	got := stripSourcesSection(md)
+	want := "## Points importants\n- a"
+	if got != want {
+		t.Errorf("stripSourcesSection:\n got %q\nwant %q", got, want)
+	}
+	// A Sources section in the middle stops at the next heading.
+	md2 := "## Sources\n- old\n## Plan\n- keep\n"
+	if got := stripSourcesSection(md2); got != "## Plan\n- keep" {
+		t.Errorf("mid-section strip wrong: %q", got)
+	}
+	// No Sources section → unchanged (trailing newline trimmed).
+	if got := stripSourcesSection("## A\n- x\n"); got != "## A\n- x" {
+		t.Errorf("no-sources strip wrong: %q", got)
+	}
+}
+
+func TestDropUndatedMail(t *testing.T) {
+	mk := func(src string, withDate bool) *store.KnowledgeItem {
+		md := map[string]any{}
+		if withDate {
+			md["canonical_date"] = "2026-05-01T09:00:00Z"
+		}
+		return &store.KnowledgeItem{SourceType: src, Metadata: md, CreatedAt: time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)}
+	}
+	in := []*store.KnowledgeItem{
+		mk(store.SourceTypeMail, true),   // keep — dated mail
+		mk(store.SourceTypeMail, false),  // drop — undated mail
+		mk(store.SourceTypeNote, false),  // keep — note created_at is a real date
+		mk(store.SourceTypeEmail, false), // drop — mail variant, undated
+	}
+	out := dropUndatedMail(in)
+	if len(out) != 2 {
+		t.Fatalf("want 2 kept, got %d", len(out))
+	}
+	for _, it := range out {
+		if store.IsMailSourceType(it.SourceType) && store.GetCanonicalDate(it).IsZero() {
+			t.Errorf("undated mail leaked through: %+v", it)
+		}
 	}
 }

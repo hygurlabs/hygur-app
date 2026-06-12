@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { markOnboardingComplete } from "../lib/onboarding";
+import { native } from "../lib/native";
+import { isRemote } from "../lib/connection";
+import { api } from "../lib/api";
 import {
   StepAccounts,
   StepModel,
@@ -20,7 +23,7 @@ interface StepDef {
   primaryLabel?: string;
 }
 
-const STEPS: StepDef[] = [
+const ALL_STEPS: StepDef[] = [
   { id: "welcome", skippable: false, ownsPrimary: false, primaryLabel: "Get started" },
   { id: "permissions", skippable: false, ownsPrimary: false, primaryLabel: "Continue" },
   { id: "model", skippable: true, ownsPrimary: true },
@@ -29,17 +32,64 @@ const STEPS: StepDef[] = [
   { id: "ready", skippable: false, ownsPrimary: false, primaryLabel: "Start using Hygur" },
 ];
 
+// Steps depend on context:
+//  - "permissions" (macOS perms) only makes sense in a native shell — skip in the
+//    browser / Tauri web client (no native bridge).
+//  - "model" (LLM endpoints) is for a LOCAL server you configure yourself; on a
+//    remote OR managed cloud tenant the server owns its LLM (endpoints redacted),
+//    so skip it. `managed` covers the proxy thin client, where isRemote() is false
+//    (same-origin) but /config reports managed.
+function visibleSteps(managed: boolean): StepDef[] {
+  const remote = isRemote() || managed;
+  return ALL_STEPS.filter((s) => {
+    if (s.id === "permissions") return native.available;
+    if (s.id === "model") return !remote;
+    return true;
+  });
+}
+
 /** Full-screen first-run wizard. Replaces the app shell until the user finishes
  *  or skips through it; `onComplete` swaps the real app in. */
 export function Onboarding({ onComplete }: { onComplete: () => void }) {
+  // Resolve managed (server owns its LLM) before fixing the step list, so the
+  // "model" step is correctly skipped on a cloud tenant — including the proxy
+  // thin client where isRemote() is false. Hold the first paint until known
+  // (the shell shows its own "Starting Hygur…" cover meanwhile).
+  const [managed, setManaged] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .config()
+      .then((c) => {
+        if (!cancelled) setManaged(!!c.managed);
+      })
+      .catch(() => {
+        if (!cancelled) setManaged(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const STEPS = useMemo(
+    () => (managed === null ? null : visibleSteps(managed)),
+    [managed],
+  );
   const [index, setIndex] = useState(0);
+  // Plays the "reveal" exit (the wizard lifts away) before the app swaps in.
+  const [leaving, setLeaving] = useState(false);
+
+  if (!STEPS) return null; // brief async check; nothing painted yet
   const step = STEPS[index];
   const isLast = index === STEPS.length - 1;
+  // Hosted experience (remote tenant or a managed/proxy server that owns the
+  // LLM) → context-correct copy, never the "runs on this Mac" local story.
+  const cloud = isRemote() || !!managed;
 
   const complete = (route?: string) => {
     if (route) window.location.hash = route;
     markOnboardingComplete();
-    onComplete();
+    setLeaving(true);
+    window.setTimeout(onComplete, 450); // let the reveal animation play first
   };
   const next = () => {
     if (isLast) complete();
@@ -50,18 +100,22 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   const ctx: StepContext = { next, complete };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-bg">
+    <div
+      className={`fixed inset-0 z-50 flex flex-col bg-bg transition-[opacity,transform] duration-[450ms] ease-out ${
+        leaving ? "pointer-events-none scale-[1.04] opacity-0" : "scale-100 opacity-100"
+      }`}
+    >
       <div className="flex-1 overflow-y-auto">
         <div
           key={step.id}
           className="view-enter mx-auto flex min-h-full max-w-[560px] flex-col justify-center px-8 py-12"
         >
-          {step.id === "welcome" && <StepWelcome />}
+          {step.id === "welcome" && <StepWelcome cloud={cloud} />}
           {step.id === "permissions" && <StepPermissions />}
           {step.id === "model" && <StepModel ctx={ctx} />}
-          {step.id === "accounts" && <StepAccounts ctx={ctx} />}
+          {step.id === "accounts" && <StepAccounts ctx={ctx} cloud={cloud} />}
           {step.id === "notifications" && <StepNotifications />}
-          {step.id === "ready" && <StepReady />}
+          {step.id === "ready" && <StepReady cloud={cloud} />}
         </div>
       </div>
 

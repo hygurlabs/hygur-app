@@ -1,0 +1,31 @@
+# Keep the Docker build context small and reproducible. The image rebuilds the
+# WebUI and downloads Go modules itself, so vendored/generated artifacts are
+# excluded — only source is sent.
+
+.git
+.github
+.build
+.opencode
+.claude
+.grepai
+docs
+*.md
+
+# Desktop shell — not part of the server image.
+webui/src-tauri
+
+# Node deps / generated SPA bundle (the webui stage runs `npm ci` + `vite build`).
+webui/node_modules
+webui/dist
+sidecar/internal/api/webui/dist
+
+# Go build artifacts / local runtime data.
+sidecar/bin
+sidecar/data
+sidecar/coverage.out
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Misc.
+**/.DS_Store

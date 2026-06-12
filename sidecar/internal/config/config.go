@@ -38,6 +38,30 @@ type Config struct {
 
 	// Mail configures mail-sync behaviour.
 	Mail MailConfig `mapstructure:"mail" yaml:"mail,omitempty"`
+
+	// Auth configures request authentication (local single-token vs remote
+	// per-device JWT). Defaults to "local" so the bundled/embedded mode is
+	// unchanged.
+	Auth AuthConfig `mapstructure:"auth" yaml:"auth,omitempty"`
+}
+
+// AuthConfig configures how the server authenticates requests.
+//
+//   - mode "local"  (default): a single static token in X-Hygur-Token. This is
+//     the loopback trust model used by the embedded/desktop mode.
+//   - mode "remote": per-device EdDSA JWTs, verified against PublicKey, with
+//     expiry and a jti revocation list checked locally. Used when the server is
+//     exposed beyond loopback (self-host / Hygur Cloud).
+type AuthConfig struct {
+	Mode string `mapstructure:"mode" yaml:"mode,omitempty"`
+	// PublicKey is the PEM-encoded Ed25519 public key verifying device tokens.
+	// Required when mode == "remote".
+	PublicKey string `mapstructure:"public_key" yaml:"public_key,omitempty"`
+	// PrivateKey is the PEM-encoded Ed25519 private key used ONLY by the
+	// `issue-token` CLI for self-hosted issuance. Never needed to serve.
+	PrivateKey string `mapstructure:"private_key" yaml:"private_key,omitempty"`
+	// RevokedJTIs lists token ids to reject even when otherwise valid.
+	RevokedJTIs []string `mapstructure:"revoked_jtis" yaml:"revoked_jtis,omitempty"`
 }
 
 // MailConfig configures mail-sync behaviour.
@@ -205,6 +229,31 @@ type LMStudioConfig struct {
 	// VisionModel is the model id sent to VisionURL (e.g. "nemotron-omni").
 	// Falls back to ModelDefault when empty.
 	VisionModel string `mapstructure:"vision_model"`
+
+	// NoChatTemplateKwargs omits chat_template_kwargs (e.g. {"enable_thinking":
+	// false}) from chat requests. Set true for hosted backends that reject unknown
+	// request fields — e.g. Gemma on Infomaniak, OpenAI, Mistral. Leave false for
+	// vLLM/SGLang (Qwen3, Nemotron) which NEED enable_thinking:false to suppress
+	// reasoning. Env: HYGUR_LM_STUDIO_NO_CHAT_TEMPLATE_KWARGS.
+	NoChatTemplateKwargs bool `mapstructure:"no_chat_template_kwargs"`
+
+	// MaxCompletionTokens makes chat requests carry `max_completion_tokens` instead
+	// of the legacy `max_tokens` — required by backends (Infomaniak, newer OpenAI)
+	// whose schema only accepts the former. Default false (vLLM/LM Studio/Sparky).
+	MaxCompletionTokens bool `mapstructure:"max_completion_tokens"`
+	// ReasoningEffort, when non-empty ("none"|"low"|"medium"|"high"), is sent as the
+	// OpenAI `reasoning_effort` on chat requests — "none" disables thinking on a
+	// reasoning model (the Infomaniak way, replacing chat_template_kwargs). Leave
+	// empty for models that reject it (e.g. gemma → 400). Per-endpoint.
+	ReasoningEffort string `mapstructure:"reasoning_effort"`
+	// IndexingReasoningEffort is ReasoningEffort for the separate indexing model
+	// (e.g. "none" for a reasoning-capable Tier-2 model like Nemotron-Nano).
+	IndexingReasoningEffort string `mapstructure:"indexing_reasoning_effort"`
+	// RerankURL + RerankModel enable a dedicated reranker (Cohere-shaped /rerank,
+	// e.g. Infomaniak serving bge-reranker-v2-m3). When both set, retrieval reranks
+	// there instead of via the chat LLM. Empty = LLM reranking (Sparky/local).
+	RerankURL   string `mapstructure:"rerank_url"`
+	RerankModel string `mapstructure:"rerank_model"`
 
 	// EmbeddingMaxTokens is the per-input token budget enforced before sending
 	// requests to the embedding endpoint. Inputs that exceed it are truncated

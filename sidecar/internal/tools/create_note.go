@@ -17,7 +17,13 @@ import (
 type CreateNoteTool struct {
 	store            *store.DB
 	embeddingService *llm.EmbeddingService
+	ingestor         *ingest.Ingestor
 }
+
+// SetIngestor wires the ingestor so newly created notes are auto-classified into
+// the tag taxonomy (topic categories), the same way mail is. Optional; nil leaves
+// inline note tagging disabled.
+func (t *CreateNoteTool) SetIngestor(ing *ingest.Ingestor) { t.ingestor = ing }
 
 // NewCreateNoteTool creates a new CreateNoteTool with the given database.
 func NewCreateNoteTool(db *store.DB) *CreateNoteTool {
@@ -131,6 +137,11 @@ func (t *CreateNoteTool) Run(ctx context.Context, req CreateNoteRequest) (*Creat
 		if err := t.store.InsertProjectLink(ctx, link); err != nil {
 			return nil, fmt.Errorf("failed to link note to project: %w", err)
 		}
+	}
+
+	// Auto-classify the note into the tag taxonomy (topic categories), like mail.
+	if t.ingestor != nil {
+		t.ingestor.TagItem(ctx, item, true)
 	}
 
 	return &CreateNoteResponse{

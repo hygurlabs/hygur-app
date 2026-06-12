@@ -3,7 +3,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -55,22 +58,24 @@ func (s *Server) loggerMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// authMiddleware validates the authentication token from the request.
-// Requests must include the X-Hygur-Token header with a valid token.
+// authMiddleware authenticates the request via the configured Authenticator
+// (loopback single-token in local mode, per-device JWT in remote mode) and
+// attaches the resolved Identity to the request context for downstream handlers
+// and the per-identity store layer (P1.3).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("X-Hygur-Token")
-		if token == "" {
-			writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Missing X-Hygur-Token header")
+		id, err := s.authenticator.Authenticate(r)
+		if err != nil {
+			// Preserve the established client-facing messages.
+			if errors.Is(err, auth.ErrMissingToken) {
+				writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Missing X-Hygur-Token header")
+			} else {
+				writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid token")
+			}
 			return
 		}
 
-		if !auth.CompareTokens(token, s.token) {
-			writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid token")
-			return
-		}
-
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(auth.WithIdentity(r.Context(), id)))
 	})
 }
 
@@ -81,28 +86,61 @@ func writeAuthError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message})
 }
 
+// hostGuardMiddleware rejects requests whose Host header isn't allow-listed — the
+// textbook DNS-rebinding defence. A rebound malicious page reaches us as
+// *same-origin* (so CORS won't stop it), but the Host header still carries the
+// attacker's domain. Loopback is always allowed (local desktop); extra hosts come
+// from HYGUR_ALLOWED_HOSTS (the tenant FQDN in cloud). /health and /version are
+// exempt so k8s probes (which use the pod IP as Host) keep working. No-op unless
+// enabled via SetHostGuard.
+func (s *Server) hostGuardMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.hostGuardEnabled || r.URL.Path == "/health" || r.URL.Path == "/version" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.allowedHosts[hostOnly(r.Host)] {
+			writeAuthError(w, http.StatusForbidden, "FORBIDDEN", "Host not allowed")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostOnly lowercases the Host and strips the port (+ IPv6 brackets).
+func hostOnly(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.Trim(host, "[]")
+}
+
 // corsMiddleware adds CORS headers for local development.
 // Only allows requests from localhost origins.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 
-		// Only allow localhost origins
-		// http://localhost = 16 chars, http://localhost: = 17 chars
-		// http://127.0.0.1 = 16 chars, http://127.0.0.1: = 17 chars
-		allowed := origin == "http://localhost" || origin == "http://127.0.0.1"
-		if !allowed && len(origin) > 17 {
-			if len(origin) >= 17 && origin[:17] == "http://localhost:" {
-				allowed = true
-			} else if len(origin) >= 17 && origin[:17] == "http://127.0.0.1:" {
-				allowed = true
-			}
+		// Allow loopback origins (the sidecar-served UI and vite dev) plus the
+		// Tauri desktop shell, which serves its bundled UI from a custom scheme
+		// (tauri://localhost on Apple, https://tauri.localhost on Windows) and
+		// therefore calls this API cross-origin.
+		allowed := origin == "http://localhost" || origin == "http://127.0.0.1" ||
+			origin == "tauri://localhost" || origin == "https://tauri.localhost" ||
+			strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:")
+
+		// Extra cross-origin shells (Hygur Cloud web app on a separate host) opted
+		// in via HYGUR_ALLOWED_ORIGINS / SetAllowedOrigins.
+		if !allowed && origin != "" && s.extraOrigins[strings.ToLower(origin)] {
+			allowed = true
 		}
 
 		if allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Hygur-Token")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Hygur-Token, X-Hygur-API")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 		}
 

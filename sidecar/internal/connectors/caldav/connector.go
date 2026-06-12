@@ -95,11 +95,15 @@ func (c *Connector) ConfigSchema() plugin.ConfigSchema {
 				Title: "Calendar",
 				Fields: []plugin.ConfigField{
 					{
-						Key:         "url",
-						Type:        plugin.FieldString,
-						Label:       "Calendar URL",
-						Description: "CalDAV per-calendar export or a public iCal/webcal .ics URL",
-						Required:    true,
+						Key:   "url",
+						Type:  plugin.FieldString,
+						Label: "Calendar URL",
+						Description: "Google Calendar: Settings → your calendar → \"Secret address in " +
+							"iCal format\" (no login). iCloud: https://caldav.icloud.com with your Apple ID " +
+							"(Username below) + an app-specific password from appleid.apple.com (Password). " +
+							"Self-hosted (Nextcloud/Radicale): the CalDAV URL + Username/Password, or a " +
+							"direct .ics export link.",
+						Required: true,
 					},
 				},
 			},
@@ -155,7 +159,7 @@ func (c *Connector) Sync(ctx context.Context, opts plugin.SyncOptions) (*plugin.
 	}
 	start := time.Now()
 
-	body, err := c.fetch(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
+	body, err := c.fetchCalendar(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
 	if err != nil {
 		c.setHealth(plugin.StatusUnhealthy, "fetch failed: "+err.Error())
 		return nil, fmt.Errorf("caldav sync: %w", err)
@@ -204,12 +208,12 @@ func (c *Connector) HealthCheck(ctx context.Context) error {
 	if url == "" {
 		return errors.New("caldav: url missing")
 	}
-	_, err := c.fetch(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
+	_, err := c.fetchCalendar(ctx, url, cfg.Settings["username"], cfg.Settings["password"])
 	return err
 }
 
 func (c *Connector) fetch(ctx context.Context, url, username, password string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeCalURL(url), nil)
 	if err != nil {
 		return "", err
 	}
@@ -223,6 +227,14 @@ func (c *Connector) fetch(ctx context.Context, url, username, password string) (
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		// This connector GETs a calendar FILE; it does not speak the CalDAV
+		// protocol. A 401/403 usually means the URL is a CalDAV server (e.g.
+		// caldav.icloud.com) or a private feed missing credentials.
+		return "", fmt.Errorf("HTTP %d — for a private/CalDAV calendar (iCloud, Nextcloud), "+
+			"add your Username + an app-specific password; for a public feed use a direct "+
+			".ics link (Google: \"Secret address in iCal format\")", resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -238,7 +250,7 @@ func (c *Connector) fetch(ctx context.Context, url, username, password string) (
 func (c *Connector) ingest(ctx context.Context, contentID string, ev Event) error {
 	title := strings.TrimSpace(ev.Summary)
 	if title == "" {
-		title = "(événement sans titre)"
+		title = "(untitled event)"
 	}
 
 	var sb strings.Builder
@@ -339,6 +351,19 @@ func (c *Connector) markSynced(indexed int64) {
 	c.lastSync = now
 	c.health = plugin.HealthStatus{Status: plugin.StatusHealthy, LastSync: now, ItemCount: c.health.ItemCount + indexed}
 	c.mu.Unlock()
+}
+
+// normalizeCalURL makes a user-pasted calendar URL fetchable over HTTP: it maps
+// the webcal:// scheme (used by iCloud "Public Calendar" share links) to https,
+// and prepends https:// when the user pasted a bare host/path with no scheme.
+func normalizeCalURL(u string) string {
+	u = strings.TrimSpace(u)
+	if low := strings.ToLower(u); strings.HasPrefix(low, "webcal://") {
+		u = "https://" + u[len("webcal://"):]
+	} else if !strings.Contains(u, "://") {
+		u = "https://" + u
+	}
+	return u
 }
 
 // eventContentID is stable per (feed URL, event UID) so re-syncs overwrite.

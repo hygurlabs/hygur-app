@@ -14,6 +14,9 @@ func (s *Server) setupRoutes() {
 	// Health endpoint uses a handler that's updated when SetLLMClient is called
 	s.router.Get("/health", s.handleHealth)
 
+	// API version — public so clients can detect version skew before auth.
+	s.router.Get("/version", s.handleVersion)
+
 	// Web UI — the embedded single-page client that replaces the SwiftUI views.
 	// Public so it can bootstrap the API token into the page (see handleWebUI);
 	// the loopback bind is the trust boundary.
@@ -23,35 +26,68 @@ func (s *Server) setupRoutes() {
 	// shell; served from the embedded build with long-lived immutable caching.
 	s.router.Handle("/assets/*", webUIAssets())
 
+	// Root static assets (favicon, home-screen icons, PWA manifest). Public;
+	// requested at the site root by browsers and "Add to Home Screen".
+	pub := webUIPublic()
+	for _, p := range webUIPublicFiles {
+		s.router.Handle(p, pub)
+	}
+
 	// Streaming routes (auth, no timeout) — SSE can take minutes for chat
 	// with multiple LLM round-trips (tool calls + synthesis). Declared as a
 	// separate group BEFORE the timeout-bearing group because chi's Group
 	// inherits all parent middleware: once Timeout is applied, sub-Groups
 	// cannot opt out.
 	s.router.Group(func(r chi.Router) {
+		r.Use(s.apiVersionMiddleware)
 		r.Use(s.authMiddleware)
 		r.Post("/chat", s.handleChat)
 		r.Get("/events", s.handleEvents)
+		// DB backup/restore — no request timeout (large downloads/uploads).
+		r.Get("/admin/db/backup", s.handleBackupDownload)
+		r.Post("/admin/db/backup/save", s.handleBackupSave)
+		r.Post("/admin/db/restore", s.handleBackupRestore)
+		// Encrypted data export (GDPR portability) — user-passphrase-encrypted zip.
+		r.Post("/admin/export", s.handleExport)
+		// Local at-rest encryption (opt-in; key in the OS keychain).
+		r.Get("/admin/db/encryption", s.handleEncryptionStatus)
+		r.Post("/admin/db/encrypt", s.handleEncryptionEnable)
+		// Storage + access metering (memory-consolidation Phase 0).
+		r.Get("/admin/db/stats", s.handleDBStats)
 	})
 
 	// Protected routes (authentication required) with standard timeout
 	s.router.Group(func(r chi.Router) {
+		r.Use(s.apiVersionMiddleware)
 		r.Use(s.authMiddleware)
 		r.Use(middleware.Timeout(s.cfg.Server.ReadTimeout))
 
 		// Model endpoints
 		r.Get("/models", s.handleModels)
 
+		// Edge (cloud thin client): on-device Proton folder listing + sync
+		// status/trigger. Served LOCALLY (kept off the cloud proxy) because only
+		// this device can reach the local Proton Bridge. 503 in non-thin-client.
+		r.Get("/edge/status", s.handleEdgeStatus)
+		r.Get("/edge/proton/mailboxes", s.handleEdgeMailboxes)
+		r.Post("/edge/sync", s.handleEdgeSync)
+
 		// Knowledge endpoints (fast operations)
 		r.Route("/knowledge", func(r chi.Router) {
 			r.Get("/items", s.handleKnowledgeList)
 			r.Get("/diagnostic", s.handleKnowledgeDiagnostic)
+			r.Get("/contradictions", s.handleKnowledgeContradictions)
+			r.Get("/followup", s.handleKnowledgeFollowup)
+			r.Get("/project-timeline", s.handleKnowledgeProjectTimeline)
+			r.Get("/followup/report", s.handleKnowledgeFollowupReport)
 			r.Post("/ingest", s.handleKnowledgeIngest)
 			r.Post("/ingest-text", s.handleKnowledgeIngestText)
 			r.Post("/ingest-folder", s.handleKnowledgeIngestFolder)
 			r.Post("/upload", s.handleKnowledgeUpload)
 			r.Post("/search", s.handleKnowledgeSearch)
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
+			r.Post("/retag", s.handleKnowledgeRetag)
+			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
 			r.Delete("/reset", s.handleKnowledgeReset)
 			r.Get("/{content_id}", s.handleKnowledgeGet)
 			r.Delete("/{content_id}", s.handleKnowledgeDelete)
@@ -62,6 +98,13 @@ func (s *Server) setupRoutes() {
 			// Project link operations on knowledge items
 			r.Post("/{content_id}/project", s.handleLinkProject)
 			r.Delete("/{content_id}/project", s.handleUnlinkProject)
+			// Dismiss the proactive project suggestion (W4).
+			r.Delete("/{content_id}/project-suggestion", s.handleDismissProjectSuggestion)
+			// On-demand grounded reply draft for a mail item (W7).
+			r.Post("/{content_id}/draft-reply", s.handleDraftReply)
+			r.Get("/{content_id}/claims", s.handleItemClaims)
+			r.Get("/claim-contradictions", s.handleClaimContradictions)
+			r.Post("/contradictions/dismiss", s.handleDismissContradiction)
 		})
 
 		// Tag endpoints
@@ -83,6 +126,35 @@ func (s *Server) setupRoutes() {
 			r.Put("/{id}", s.handleProjectUpdate)
 			r.Delete("/{id}", s.handleProjectDelete)
 			r.Get("/{id}/items", s.handleProjectListItems)
+		})
+
+		// Tasks — local to-do list (optionally linked to a project/item).
+		r.Route("/tasks", func(r chi.Router) {
+			r.Get("/", s.handleTaskList)
+			r.Post("/", s.handleTaskCreate)
+			r.Get("/{id}", s.handleTaskGet)
+			r.Patch("/{id}", s.handleTaskPatch)
+			r.Delete("/{id}", s.handleTaskDelete)
+		})
+
+		// Decisions — the user's decisions/commitments as first-class objects:
+		// logged by hand or proposed by the nightly grounded scan, then confirmed.
+		r.Route("/decisions", func(r chi.Router) {
+			r.Get("/", s.handleDecisionList)
+			r.Post("/", s.handleDecisionCreate)
+			r.Post("/scan", s.handleDecisionScan) // manual trigger (grounded scan of recent items)
+			r.Get("/{id}", s.handleDecisionGet)
+			r.Patch("/{id}", s.handleDecisionPatch)
+			r.Delete("/{id}", s.handleDecisionDelete)
+		})
+
+		// Chronicle — Hygur's grounded narrative of the user's life (read as a book).
+		r.Route("/chronicle", func(r chi.Router) {
+			r.Get("/", s.handleChronicleList)
+			r.Post("/run", s.handleChronicleRun) // manual trigger (force today's act)
+			r.Get("/{id}", s.handleChronicleGet)
+			r.Post("/{id}/close", s.handleChronicleClose)   // write a closing act + close the chapter
+			r.Post("/{id}/reopen", s.handleChronicleReopen) // reopen with a reason the night narrates
 		})
 
 		// Mail endpoints
@@ -158,18 +230,23 @@ func (s *Server) setupRoutes() {
 
 		// Agenda context — upcoming deadlines and actions within a time window.
 		r.Get("/agenda/context", s.handleAgendaContext)
+		// Calendar summary — short LLM synthesis of upcoming events (header card).
+		r.Get("/agenda/calendar-summary", s.handleCalendarSummary)
+		// Calendar events by date window (ordered by date, not ingestion time).
+		r.Get("/agenda/events", s.handleAgendaEvents)
 
 		// On-demand brief — POST /brief/run with optional JSON body
 		// {"project_id": "...", "lookback_hours": 24}. The brief runs
 		// asynchronously; the result lands in /events as a `brief` event.
 		r.Post("/brief/run", s.handleBriefRun)
 
-		// Meeting briefing — POST /brief/meeting generates a RAG briefing for
-		// one calendar event (the macOS app calls this ~30 min before).
-		r.Post("/brief/meeting", s.handleBriefMeeting)
-
-		// GET /briefings — unified list of daily briefs + meeting briefings.
+		// GET /briefings — unified list of daily briefs + meeting briefings
+		// (meeting briefs now come from the server-side MeetingBriefScheduler).
 		r.Get("/briefings", s.handleBriefingsList)
+
+		// GET /digest — the daily composed "state of your world" (Direction C):
+		// life synopsis + open contradictions + decisions to confirm + tasks due.
+		r.Get("/digest", s.handleDigest)
 
 		// Config read/write — exposes the tunable sidecar config to the macOS app.
 		// Changes are persisted to config.yaml and take effect on next restart.
@@ -349,6 +426,24 @@ func (s *Server) handleKnowledgeReset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKnowledgeReembedMissing(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.ReembedMissing(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeRetag handles POST /knowledge/retag — backfill mail auto-tags.
+func (s *Server) handleKnowledgeRetag(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.Retag(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillClaims handles POST /knowledge/backfill-claims (W6).
+func (s *Server) handleKnowledgeBackfillClaims(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillClaims(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
@@ -752,6 +847,35 @@ func (s *Server) handleLinkProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnlinkProject(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.UnlinkProject(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleDismissProjectSuggestion handles DELETE /knowledge/{content_id}/project-suggestion.
+func (s *Server) handleDismissProjectSuggestion(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.DismissProjectSuggestion(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeContradictions handles GET /knowledge/contradictions.
+// It delegates to the KnowledgeHandler.
+func (s *Server) handleKnowledgeContradictions(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.Contradictions(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeProjectTimeline handles GET /knowledge/project-timeline.
+// It delegates to the KnowledgeHandler.
+func (s *Server) handleKnowledgeProjectTimeline(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.ProjectTimeline(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

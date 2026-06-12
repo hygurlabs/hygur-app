@@ -310,7 +310,7 @@ func (h *TagHandler) ListItems(w http.ResponseWriter, r *http.Request) {
 
 // GetItemTags handles GET /knowledge/{content_id}/tags - Get tags for a knowledge item.
 func (h *TagHandler) GetItemTags(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	if contentID == "" {
 		writeTagError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content_id is required")
 		return
@@ -346,7 +346,7 @@ func (h *TagHandler) GetItemTags(w http.ResponseWriter, r *http.Request) {
 
 // AddTagToItem handles POST /knowledge/{content_id}/tags - Add a tag to a knowledge item.
 func (h *TagHandler) AddTagToItem(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	if contentID == "" {
 		writeTagError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content_id is required")
 		return
@@ -422,7 +422,7 @@ func (h *TagHandler) AddTagToItem(w http.ResponseWriter, r *http.Request) {
 
 // RemoveTagFromItem handles DELETE /knowledge/{content_id}/tags/{tag_id} - Remove a tag from an item.
 func (h *TagHandler) RemoveTagFromItem(w http.ResponseWriter, r *http.Request) {
-	contentID := chi.URLParam(r, "content_id")
+	contentID := contentIDParam(r)
 	tagID := chi.URLParam(r, "tag_id")
 
 	if contentID == "" {

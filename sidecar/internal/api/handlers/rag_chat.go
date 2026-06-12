@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/agenda"
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/intent"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/retrieval"
@@ -107,6 +109,15 @@ const maxToolRounds = 5
 // without crowding out the actual conversation context.
 const memoryInjectionTokenBudget = 500
 
+// decisionInjectionMax caps how many standing decisions are injected as brain
+// context per turn (most recent first), so the block never dominates the prompt.
+const decisionInjectionMax = 8
+
+// contradictionInjectionMax caps how many open contradictions are injected as
+// brain context per turn. Read from the durable cache (never computed in the chat
+// path), so injection stays cheap and non-blocking.
+const contradictionInjectionMax = 5
+
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
 	llmClient       *llm.Client
@@ -118,6 +129,10 @@ type RAGChatHandler struct {
 	agendaStore     *store.DB
 	chatStore       *store.DB
 	toolRegistry    *tools.Registry
+	chatTokenCap    int           // monthly chat-token cap; 0 = unlimited (local default)
+	chatTokenCapDay int           // daily chat-token cap; 0 = unlimited (the fast fuse)
+	rpmLimiter      *rateLimiter  // per-tenant request-rate fuse; nil = off
+	chatSem         chan struct{} // per-tenant concurrency cap; nil = off
 	config          RAGConfig
 	logger          zerolog.Logger
 }
@@ -137,6 +152,39 @@ func NewRAGChatHandler(
 		sessionStore:    sessionStore,
 		config:          config.Validate(),
 		logger:          logger.With().Str("handler", "rag_chat").Logger(),
+	}
+}
+
+// SetChatTokenCap sets the monthly LLM-token budget (prompt + completion of the
+// 'chat' category). 0 disables enforcement (the local default). On a managed cloud
+// tenant it's set from HYGUR_CHAT_TOKEN_CAP_MONTHLY to protect margin under
+// per-token inference pricing; embeddings/indexing are a separate budget.
+func (h *RAGChatHandler) SetChatTokenCap(n int) {
+	if n > 0 {
+		h.chatTokenCap = n
+	}
+}
+
+// SetDailyTokenCap sets the DAILY LLM-token budget — a fast fuse against a
+// runaway loop that complements the monthly cap. 0 disables it. Set on a managed
+// tenant from HYGUR_CHAT_TOKEN_CAP_DAILY.
+func (h *RAGChatHandler) SetDailyTokenCap(n int) {
+	if n > 0 {
+		h.chatTokenCapDay = n
+	}
+}
+
+// SetRateLimits enables per-tenant request-rate (rpm, req/min) and concurrency
+// guards on the chat endpoint — fast fuses against a runaway client loop,
+// complementing the slower monthly token cap. 0 leaves a guard disabled (the
+// local default). Set on a managed tenant from HYGUR_CHAT_RPM_PER_TENANT /
+// HYGUR_CHAT_CONCURRENCY_PER_TENANT.
+func (h *RAGChatHandler) SetRateLimits(rpm, concurrency int) {
+	if rpm > 0 {
+		h.rpmLimiter = newRateLimiter(rpm)
+	}
+	if concurrency > 0 {
+		h.chatSem = make(chan struct{}, concurrency)
 	}
 }
 
@@ -179,59 +227,17 @@ func (h *RAGChatHandler) SetToolRegistry(registry *tools.Registry) {
 // fenced code, GFM tables, blockquotes, lists, hr), so we tell the model to
 // lean on Markdown when it helps comprehension. Kept short to avoid bloating
 // the prompt budget on small local models.
-const baseFormatGuidance = `Tu es Hygur, l'assistant personnel de l'utilisateur. ` +
-	`L'interface affiche tes réponses avec un rendu Markdown complet : titres (##, ###), ` +
-	`gras (**texte**), italique (*texte*), listes à puces et numérotées, ` +
-	"citations (>), blocs de code avec triple-backquote et indication de langage (```python …```), " +
-	`code inline avec backquotes, tableaux GFM (| col1 | col2 |\n| --- | --- |), ` +
-	`liens [texte](url), barres horizontales (---). ` +
-	`Utilise ces éléments quand ils améliorent la lisibilité, mais reste concis : ` +
-	`pas de Markdown pour les réponses très courtes (un mot, un nombre, oui/non).` +
+const baseFormatGuidance = `You are Hygur, the user's personal assistant. ` +
+	`The interface renders full Markdown — use it when it improves readability, ` +
+	`but stay concise (no Markdown for a one-word, number, or yes/no answer).` +
 	"\n\n" +
-	`Désambiguïsation temporelle : une année ou une période dans une question ` +
-	`(ex. « TVA 2026 ») peut désigner soit un document REÇU à cette date, soit un document ` +
-	`dont le CONTENU concerne cet exercice ou cette échéance. Distingue les deux : appuie-toi ` +
-	`sur les échéances (champ due_dates), montants et périodes présents dans le contenu des ` +
-	`sources, pas seulement sur la date du message (mail_date). Pour une question de paiement ` +
-	`ou d'échéance, privilégie la source dont l'échéance (due_dates) correspond.` +
-	"\n\n" +
-	`CHERCHE AVANT DE DEMANDER : ne pose jamais une question de clarification sans avoir d'abord ` +
-	`appelé search_knowledge_base — les données tranchent presque toujours le doute (un sens qui ` +
-	`domine, une réponse présente). Une demande de TYPE/SENS (« quel type de recharges ? ») sans ` +
-	`recherche préalable est une erreur : lance la recherche, et si les sources convergent vers un ` +
-	`sens unique, réponds avec ce sens. ` +
-	`Quand trancher reste incertain APRÈS recherche — la demande admet plusieurs lectures plausibles ` +
-	`que les sources ne départagent pas, ou la réponse est absente/peu pertinente — pose UNE ` +
-	`question de clarification brève et ciblée au lieu de deviner. Ne fabrique jamais une date, un ` +
-	`montant, une référence ou un fait absent des sources : dis plutôt ce qui manque et propose la ` +
-	`prochaine étape.` +
-	"\n\n" +
-	`Sens des termes : si un mot de la requête a plusieurs sens plausibles (ex. « recharges » = ` +
-	`recharges de véhicule électrique, recharges mobiles/téléphone, crédit de compte), ANCRE-toi ` +
-	`sur le sens dominant dans les données réelles et RÉPONDS avec ce sens. Quand les sources ` +
-	`récupérées portent massivement sur un seul sens (p. ex. quasi toutes des factures Chargemap = ` +
-	`recharges de véhicule), ne demande PAS de clarification : traite ce sens directement. ` +
-	`N'élargis pas la recherche à un autre sens non demandé. Ne demande une clarification de sens ` +
-	`QUE si les sources se répartissent réellement entre plusieurs sens concurrents.` +
-	"\n\n" +
-	`Période d'un document : pour les documents périodiques (factures, relevés, récapitulatifs de ` +
-	`consommation ou de recharges), rattache les montants à la PÉRIODE indiquée DANS LE CONTENU ` +
-	`(mois de consommation / période facturée), PAS à la date de réception du message. Exemple : une ` +
-	`facture reçue début mai pour les recharges d'avril compte pour AVRIL, pas pour mai. Lis la ` +
-	`période dans le texte de la source ; si elle n'y figure pas, dis-le plutôt que de supposer ` +
-	`d'après la date de réception.` +
-	"\n\n" +
-	`Tri chronologique : quand tu présentes une liste ou un tableau d'éléments datés (recharges, ` +
-	`factures, événements, paiements…), classe-les par date CROISSANTE (du plus ancien au plus ` +
-	`récent), sauf si l'utilisateur demande explicitement l'ordre inverse.` +
-	"\n\n" +
-	`Vérification avant de chiffrer : un total ou un cumul se RECONSTITUE en additionnant les ` +
-	`éléments unitaires des sources — fais-le explicitement avant de l'annoncer. N'additionne ` +
-	`JAMAIS un agrégat (facture, relevé, total mensuel) AVEC les opérations qu'il récapitule déjà : ` +
-	`ce serait un double comptage. Distingue toujours une pièce récapitulative (souvent sans détail ` +
-	`unitaire : pas de quantité, de durée, de lieu) des opérations individuelles. Quand un agrégat ` +
-	`et la somme des unités devraient coïncider, sers-toi de l'un pour VALIDER l'autre et signale ` +
-	`tout écart, plutôt que d'avancer un chiffre non vérifié.`
+	`Ground every answer in the retrieved sources; never invent a date, amount, reference or fact. ` +
+	`Search (search_knowledge_base) before asking a clarifying question, and only ask if the sources ` +
+	`genuinely can't settle it. Anchor an ambiguous term on the meaning dominant in the data rather ` +
+	`than guessing. For a question that spans a period, compute the window and pass date_from/date_to ` +
+	`so you get every item in range. Tie a document's figures to the period stated in its content, not ` +
+	`its received date. Sort dated lists oldest-first unless asked otherwise. Build a total by adding ` +
+	`the unit items, and never add an aggregate to the items it already summarises.`
 
 // injectFormatGuidance ensures every chat turn carries the base persona +
 // markdown-rendering hint at the top of the system prompt. Subsequent
@@ -245,18 +251,10 @@ const baseFormatGuidance = `Tu es Hygur, l'assistant personnel de l'utilisateur.
 // to the requested window itself — no query-side date parsing needed.
 func todayGuidance() string {
 	return fmt.Sprintf(
-		"Date du jour : %s. Sers-toi de CETTE date comme référence pour toute expression "+
-			"temporelle relative (« ces deux derniers mois », « la semaine dernière », "+
-			"« récemment », « ce mois-ci »…) : calcule la période par rapport à aujourd'hui, "+
-			"jamais d'après les dates trouvées dans le contenu des documents. Chaque source "+
-			"porte un champ `date` (ISO 8601) — ne retiens que les documents dont la date tombe "+
-			"dans la période demandée ; si aucune source ne tombe dedans, dis-le clairement "+
-			"plutôt que de présenter des documents hors période comme s'ils y étaient. "+
-			"Pour une question qui couvre une PÉRIODE (récapitulatif, liste, total, « ces deux "+
-			"derniers mois », « en avril »…), calcule date_from/date_to à partir d'aujourd'hui et "+
-			"passe-les à l'outil search_knowledge_base : tu récupéreras TOUS les éléments de la "+
-			"fenêtre (pas seulement les plus proches), indispensable pour ne rien oublier dans une "+
-			"agrégation.",
+		"Today's date: %s. Resolve relative time expressions against this date, not against dates "+
+			"found in the documents. Each source has a `date` field (ISO 8601); for a period "+
+			"question, compute date_from/date_to from today and keep only sources inside the window. "+
+			"If none fall inside, say so rather than presenting out-of-window documents as if they were.",
 		time.Now().Format("2006-01-02"))
 }
 
@@ -282,9 +280,9 @@ func injectAgendaIntoSystemPrompt(prompt string, actions []agenda.AgendaAction) 
 		return prompt
 	}
 	var b strings.Builder
-	b.WriteString("Voici les actions urgentes des prochaines 48h :\n")
+	b.WriteString("Urgent actions in the next 48h:\n")
 	for _, a := range actions {
-		b.WriteString(fmt.Sprintf("- [%s] %s (deadline : %s)\n", a.Priority, a.What, a.DeadlineISO))
+		b.WriteString(fmt.Sprintf("- [%s] %s (deadline: %s)\n", a.Priority, a.What, a.DeadlineISO))
 	}
 	b.WriteString("\n")
 	return b.String() + prompt
@@ -398,6 +396,53 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.llmClient == nil {
 		writeChatError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "LLM client not configured")
 		return
+	}
+
+	// Per-tenant monthly LLM budget — the cloud margin guard under per-token
+	// inference. Enforced only when a cap is set (HYGUR_CHAT_TOKEN_CAP_MONTHLY);
+	// local installs leave it 0. Checked here, before any LLM call, so we refuse
+	// cleanly (pre-SSE JSON) rather than mid-stream. A query error fails OPEN
+	// (never block a paying user because the usage read hiccuped).
+	if h.chatTokenCap > 0 && h.chatStore != nil {
+		if used, err := h.chatStore.ChatTokensThisMonth(r.Context()); err == nil && used >= h.chatTokenCap {
+			h.logger.Warn().Int("used", used).Int("cap", h.chatTokenCap).Msg("monthly chat-token cap reached")
+			writeChatError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED",
+				"You've reached this month's usage limit. It resets at the start of next month.")
+			return
+		}
+	}
+
+	// Per-tenant DAILY budget — the fast fuse: catches a runaway loop within a day,
+	// long before the monthly cap. Fails OPEN on a read error.
+	if h.chatTokenCapDay > 0 && h.chatStore != nil {
+		if used, err := h.chatStore.ChatTokensToday(r.Context()); err == nil && used >= h.chatTokenCapDay {
+			h.logger.Warn().Int("used", used).Int("cap", h.chatTokenCapDay).Msg("daily chat-token cap reached")
+			writeChatError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED",
+				"You've reached today's usage limit. It resets tomorrow.")
+			return
+		}
+	}
+
+	// Per-tenant request-rate fuse (req/min) — a fast guard against a runaway
+	// client loop, before any work. 0/nil = off (local default).
+	if h.rpmLimiter != nil && !h.rpmLimiter.Allow() {
+		writeChatError(w, http.StatusTooManyRequests, "RATE_LIMITED",
+			"Too many requests in a short time — give it a moment and try again.")
+		return
+	}
+
+	// Per-tenant concurrency cap — bound simultaneous generations. Non-blocking:
+	// reject at capacity rather than queue (a queued SSE stream would just hang).
+	// Held for the whole request (the streamed generation). nil = off.
+	if h.chatSem != nil {
+		select {
+		case h.chatSem <- struct{}{}:
+			defer func() { <-h.chatSem }()
+		default:
+			writeChatError(w, http.StatusTooManyRequests, "BUSY",
+				"Too many chats in flight right now — try again in a moment.")
+			return
+		}
 	}
 
 	// Determine if RAG is enabled for this request
@@ -532,6 +577,44 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Brain context (Direction A): Hygur's own signals — the user's standing
+	// decisions + the running "story so far" synopsis — so a chat answer can
+	// ground in "you decided X" / the ongoing narrative even when document
+	// retrieval didn't surface them. Cheap (no LLM), bounded, best-effort.
+	if h.chatStore != nil {
+		var decisions []*store.Decision
+		if ds, err := h.chatStore.ListDecisions(r.Context(), "", "standing"); err == nil {
+			if len(ds) > decisionInjectionMax {
+				ds = ds[:decisionInjectionMax]
+			}
+			decisions = ds
+		}
+		var synopsis string
+		if ch, err := h.chatStore.GetChronicleChapter(r.Context(), "life"); err == nil && ch != nil {
+			synopsis = ch.Synopsis
+		}
+		// Open contradictions from the DURABLE cache only — never computed here, so
+		// the chat path stays cheap + non-blocking. Empty until the digest /
+		// Contradictions view has warmed it. Dismissed ones are filtered out.
+		var contradictions []contradict.ReconciledConflict
+		if js, _, _, found, err := h.chatStore.GetContradictionCache(r.Context(), ""); err == nil && found {
+			var all []contradict.ReconciledConflict
+			if json.Unmarshal([]byte(js), &all) == nil && len(all) > 0 {
+				dismissed, _ := h.chatStore.DismissedContradictions(r.Context())
+				for _, c := range all {
+					if dismissed[c.Key] {
+						continue
+					}
+					contradictions = append(contradictions, c)
+					if len(contradictions) >= contradictionInjectionMax {
+						break
+					}
+				}
+			}
+		}
+		messages = injectBrainContext(messages, decisions, synopsis, contradictions)
+	}
+
 	// Build the LLM request
 	llmReq := llm.ChatRequest{
 		Model:       req.Model,
@@ -549,14 +632,14 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//
 	// When ragEnabled=false (per-request override), drop search_knowledge_base
 	// so the LLM can't trigger retrieval the user explicitly disabled.
+	// Base tool set, computed once; the per-round set is derived from it inside
+	// the loop (tainted-context guard). When ragEnabled=false, drop
+	// search_knowledge_base so the LLM can't trigger retrieval the user disabled.
+	var baseDefs []map[string]any
 	if h.toolRegistry != nil {
-		defs := h.toolRegistry.OpenAIDefinitions()
+		baseDefs = h.toolRegistry.OpenAIDefinitions()
 		if !ragEnabled {
-			defs = filterToolDef(defs, "search_knowledge_base")
-		}
-		if len(defs) > 0 {
-			llmReq.Tools = defs
-			llmReq.ToolChoice = "auto"
+			baseDefs = filterToolDef(baseDefs, "search_knowledge_base")
 		}
 	}
 
@@ -618,8 +701,27 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var streamErr error
 	var lastUsage *llm.Usage
 	finalRound := false
+	tainted := false // set once untrusted web content enters (tainted-context guard)
 
 	for round := 0; round < maxToolRounds && !finalRound; round++ {
+		// Tainted-context injection defence: once a web tool has pulled untrusted
+		// external content into the conversation, drop the side-effecting tools so
+		// an injected page can't trick the model into creating notes/events. The
+		// read-only tools (search_knowledge_base, web_search, fetch_url) stay.
+		roundDefs := baseDefs
+		if tainted {
+			for _, name := range untrustedDisabledTools {
+				roundDefs = filterToolDef(roundDefs, name)
+			}
+		}
+		if len(roundDefs) > 0 {
+			llmReq.Tools = roundDefs
+			llmReq.ToolChoice = "auto"
+		} else {
+			llmReq.Tools = nil
+			llmReq.ToolChoice = ""
+		}
+
 		var roundContent strings.Builder
 		var roundFinishReason string
 		assembler := llm.NewToolCallAssembler()
@@ -690,6 +792,9 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			argsRaw := json.RawMessage(tc.Function.Arguments)
 			h.logger.Info().Str("tool", tc.Function.Name).Str("call_id", tc.ID).RawJSON("args", argsRaw).Msg("executing tool")
 			result, execErr := h.toolRegistry.Execute(r.Context(), tc.Function.Name, argsRaw)
+			if isUntrustedSourceTool(tc.Function.Name) {
+				tainted = true // subsequent rounds lose the side-effecting tools
+			}
 
 			evt := map[string]any{
 				"type":      "tool_call",
@@ -782,6 +887,28 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pcancel()
 	}
 
+	// "Quand Hygur rêve" Phase 0: stamp access on the items that were CITED this
+	// turn — the "useful" signal that feeds future consolidation (docs/DREAM_PLAN.md).
+	// Detached + best-effort; never blocks the response. Observe-only: nothing reads
+	// this yet. Stamps regardless of SessionID (a transient chat still uses items).
+	if h.chatStore != nil && len(turnSources) > 0 {
+		ids := make([]string, 0, len(turnSources))
+		for _, s := range turnSources {
+			if s.ContentID != "" {
+				ids = append(ids, s.ContentID)
+			}
+		}
+		if len(ids) > 0 {
+			go func() {
+				actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := h.chatStore.BumpItemAccess(actx, ids); err != nil {
+					h.logger.Debug().Err(err).Msg("bump item access")
+				}
+			}()
+		}
+	}
+
 	// Post-stream: extract entities from the assistant answer and append a
 	// ResolvedQuery so the next turn's direct-answer check has fresh context.
 	// Skip when the session is transient (no SessionID) or the answer is empty.
@@ -855,14 +982,59 @@ func (h *RAGChatHandler) persistUserTurn(ctx context.Context, req RAGChatRequest
 			return
 		}
 	}
+	userMsgID := uuid.NewString()
 	if err := h.chatStore.AppendChatMessage(ctx, &store.ChatMessage{
-		MessageID: uuid.NewString(),
+		MessageID: userMsgID,
 		SessionID: req.SessionID,
 		Role:      "user",
 		Content:   userMsg,
 	}); err != nil {
 		h.logger.Debug().Err(err).Msg("chat persist: append user message failed")
+		return
 	}
+	// Persist the image/audio media of this turn so reopening the conversation
+	// re-displays the image and replays the audio. Documents are KB references
+	// (re-attachable by id), so they're not stored here.
+	if atts := latestUserMediaAttachments(req.Messages); len(atts) > 0 {
+		if err := h.chatStore.AppendChatMessageAttachments(ctx, userMsgID, atts); err != nil {
+			h.logger.Debug().Err(err).Msg("chat persist: append attachments failed")
+		}
+	}
+}
+
+// latestUserMediaAttachments extracts the image/audio attachments of the most
+// recent user message, decoding the wire base64 to raw bytes for storage.
+func latestUserMediaAttachments(messages []llm.Message) []store.ChatAttachment {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		var out []store.ChatAttachment
+		for _, att := range messages[i].Attachments {
+			switch att.Type {
+			case llm.AttachmentTypeImage:
+				data, err := base64.StdEncoding.DecodeString(att.Data)
+				if err != nil || len(data) == 0 {
+					continue
+				}
+				out = append(out, store.ChatAttachment{
+					Type: "image", Title: att.Title, MimeType: att.MimeType,
+					Data: data, ByteSize: len(data),
+				})
+			case llm.AttachmentTypeAudio:
+				data, err := base64.StdEncoding.DecodeString(att.Data)
+				if err != nil || len(data) == 0 {
+					continue
+				}
+				out = append(out, store.ChatAttachment{
+					Type: "audio", Title: att.Title, Format: att.Format,
+					Data: data, ByteSize: len(data),
+				})
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // persistAssistantTurn appends the assistant answer and its (deduplicated)
@@ -948,6 +1120,79 @@ func injectMemoriesIntoSystem(messages []llm.Message, memories []tools.MemoryRes
 		out = append(out, messages[1:]...)
 	} else {
 		out = append(out, llm.Message{Role: "system", Content: memBlock})
+		out = append(out, messages...)
+	}
+	return out
+}
+
+// injectBrainContext prepends a compact, grounded block of Hygur's own signals —
+// the user's standing decisions and the running life synopsis — so the assistant
+// can reference "you decided X" / the ongoing story even when document retrieval
+// didn't surface them. Cheap lookups (no LLM), bounded, grounded in stored state.
+func injectBrainContext(messages []llm.Message, decisions []*store.Decision, synopsis string, contradictions []contradict.ReconciledConflict) []llm.Message {
+	if len(decisions) == 0 && strings.TrimSpace(synopsis) == "" && len(contradictions) == 0 {
+		return messages
+	}
+	var b strings.Builder
+	if len(decisions) > 0 {
+		b.WriteString("## The user's standing decisions\n\n")
+		for _, d := range decisions {
+			b.WriteString("- ")
+			b.WriteString(d.Statement)
+			if len(d.DecidedOn) >= 10 {
+				b.WriteString(" (")
+				b.WriteString(d.DecidedOn[:10])
+				b.WriteString(")")
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(contradictions) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## Open contradictions in the user's records\n\n")
+		for _, c := range contradictions {
+			b.WriteString("- ")
+			if c.Entity != "" {
+				b.WriteString(c.Entity)
+				b.WriteString(" — ")
+			}
+			b.WriteString(c.Attribute)
+			vals := make([]string, 0, len(c.Members))
+			for _, m := range c.Members {
+				if m.Value != "" {
+					vals = append(vals, m.Value)
+				}
+			}
+			if len(vals) > 0 {
+				b.WriteString(": ")
+				b.WriteString(strings.Join(vals, " vs "))
+			}
+			if c.Verdict.Reason != "" {
+				b.WriteString(" — ")
+				b.WriteString(c.Verdict.Reason)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if s := strings.TrimSpace(synopsis); s != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## The story so far\n\n")
+		b.WriteString(s)
+		b.WriteString("\n")
+	}
+	block := b.String()
+
+	hasSystem := len(messages) > 0 && messages[0].Role == "system"
+	out := make([]llm.Message, 0, len(messages)+1)
+	if hasSystem {
+		out = append(out, llm.Message{Role: "system", Content: messages[0].Content + "\n\n" + block})
+		out = append(out, messages[1:]...)
+	} else {
+		out = append(out, llm.Message{Role: "system", Content: block})
 		out = append(out, messages...)
 	}
 	return out
@@ -1110,7 +1355,7 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 
 	// Build context string
 	var contextBuilder strings.Builder
-	contextBuilder.WriteString("## Contexte pertinent\n\n")
+	contextBuilder.WriteString("## Relevant context\n\n")
 
 	for i, source := range ragContext.Sources {
 		// Determine source label
@@ -1176,16 +1421,16 @@ func (h *RAGChatHandler) buildNoResultsMessage(messages []llm.Message, ragContex
 			}
 		}
 		if len(sources) == 0 {
-			searchedSources = "les notes et documents"
+			searchedSources = "the notes and documents"
 		} else {
-			searchedSources = strings.Join(sources, " et ")
+			searchedSources = strings.Join(sources, " and ")
 		}
 	} else {
-		searchedSources = "les notes et documents"
+		searchedSources = "the notes and documents"
 	}
 
 	noResultsHint := fmt.Sprintf(
-		"## Information système\n\nUne recherche a été effectuée dans %s pour répondre à la question de l'utilisateur, mais aucun résultat pertinent n'a été trouvé. Informe l'utilisateur qu'aucune information correspondante n'a été trouvée dans sa base de connaissances.",
+		"## System information\n\nA search was run in %s to answer the user's question, but no relevant result was found. Tell the user that no matching information was found in their knowledge base.",
 		searchedSources,
 	)
 
@@ -1219,6 +1464,17 @@ func (h *RAGChatHandler) buildNoResultsMessage(messages []llm.Message, ragContex
 // filterToolDef removes the entry whose function.name matches `name` from the
 // list of OpenAI tool definitions. Used to drop the search_knowledge_base tool
 // when RAG is disabled per-request.
+// untrustedDisabledTools are the side-effecting tools removed from the model's
+// toolset once untrusted web content has entered the conversation (tainted
+// context). Add any future write/action tool here.
+var untrustedDisabledTools = []string{"create_note", "create_calendar_event"}
+
+// isUntrustedSourceTool reports whether a tool pulls UNTRUSTED external content
+// into the conversation — which taints the context for the rest of the turn.
+func isUntrustedSourceTool(name string) bool {
+	return name == "web_search" || name == "fetch_url"
+}
+
 func filterToolDef(defs []map[string]any, name string) []map[string]any {
 	out := make([]map[string]any, 0, len(defs))
 	for _, d := range defs {

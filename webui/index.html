@@ -3,6 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Favicon (browser tab) + home-screen icons. The files live in public/ and
+         are copied to the dist root at build time; the sidecar serves them. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+
+    <!-- iOS "Add to Home Screen": apple-touch-icon + standalone web-app meta. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Hygur" />
+
+    <!-- Android / Chrome "Add to Home Screen": web manifest + icons. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#121b30" />
+
     <!-- The sidecar replaces the placeholder with the live API token at serve
          time so same-origin fetches can authenticate. -->
     <meta name="hygur-token" content="__HYGUR_TOKEN__" />

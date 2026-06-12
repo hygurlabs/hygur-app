@@ -532,6 +532,15 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 		return nil, fmt.Errorf("failed to insert knowledge item: %w", err)
 	}
 
+	// Auto-tag mail pushed as text (the edge agent's Proton path). The file and
+	// direct-IMAP ingest paths tag at their own ingest time, but this text-push
+	// path didn't — so cloud/edge mail had no tags at all. Tags = mailbox folder
+	// + semantic topics from the Tier-2 extractor, run inline so a freshly-synced
+	// mail is classified immediately (one bounded LLM call per new mail).
+	if store.IsMailSourceType(sourceType) {
+		i.TagItem(ctx, item, true)
+	}
+
 	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, text, DefaultChunkTokenBudget, now)
 	if idxErr != nil {
 		// Keep the item (chunks are FTS-indexed); do NOT roll back on embed
@@ -540,6 +549,150 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	}
 
 	return &IngestResult{ContentID: contentID, Status: status, ChunkCount: chunkCount}, nil
+}
+
+// classifyItem returns the taxonomy categories for an item: the ones cached in
+// metadata, or a fresh LLM classification. fresh=true means the caller should
+// persist them. Pure of DB writes (safe to run concurrently). Empty when there's
+// no indexing LLM client or no text.
+func (i *Ingestor) classifyItem(ctx context.Context, item *store.KnowledgeItem) (cats []string, fresh bool) {
+	if cachedFresh(item.Metadata, "mail_categories", mailCategoryVersion) {
+		if cached := categoriesFromMetadata(item.Metadata); len(cached) > 0 {
+			return cached, false
+		}
+	}
+	// Classify on the MAIN model, not the small indexing model: the latter
+	// follows the closed-taxonomy instruction poorly (it emitted the same garbage
+	// pair for unrelated mail), whereas the main model classifies cleanly. Tier-2
+	// NER stays on the small model (tier2Client) — only classification moved.
+	c := i.llmClient
+	if c == nil || strings.TrimSpace(item.NormalizedText) == "" {
+		return nil, false
+	}
+	got, err := classifyMail(ctx, c, item.NormalizedText)
+	if err != nil {
+		log.Printf("[ingest] classify failed for %s: %v", item.ContentID, err)
+		return nil, false
+	}
+	return got, len(got) > 0
+}
+
+// applyItemTags writes the mailbox-folder tag (mail only) + topic category tags,
+// and caches fresh categories. DB writes only — in a concurrent backfill the
+// caller must serialize these (SQLite is a single writer).
+func (i *Ingestor) applyItemTags(ctx context.Context, item *store.KnowledgeItem, cats []string, fresh bool) {
+	if mailbox, _ := item.Metadata["mailbox"].(string); mailbox != "" {
+		i.autoTagger.tagMailFolder(ctx, item.ContentID, mailbox)
+	}
+	if fresh && len(cats) > 0 {
+		item.Metadata["mail_categories"] = cats
+		item.Metadata["mail_categories_version"] = mailCategoryVersion
+		if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
+			log.Printf("[ingest] category metadata update failed for %s: %v", item.ContentID, uerr)
+		}
+	}
+	i.autoTagger.tagTopics(ctx, item.ContentID, cats)
+}
+
+// TagItem classifies one mail or note into the fixed taxonomy and applies its
+// tags (mailbox folder for mail + topic categories). Used inline on ingest /
+// note creation. prune caps the topic-tag set afterwards.
+func (i *Ingestor) TagItem(ctx context.Context, item *store.KnowledgeItem, prune bool) {
+	if i.autoTagger == nil || item == nil {
+		return
+	}
+	cats, fresh := i.classifyItem(ctx, item)
+	i.applyItemTags(ctx, item, cats, fresh)
+	// W6: extract + cache semantic claims (skips junk senders / Notifications).
+	claims, cfresh := i.extractClaimsForItem(ctx, item, cats)
+	i.applyItemClaims(ctx, item, claims, cfresh)
+	// Inline project suggestion (W4): cache the best-matching project so the
+	// detail panel can offer "Add to <project>".
+	if projects := i.activeProjects(ctx); len(projects) > 0 {
+		i.suggestProjectForItem(ctx, item, projects)
+	}
+	if prune {
+		_ = i.store.PruneAutoTags(ctx)
+	}
+}
+
+// retagConcurrency bounds parallel classify (LLM) calls during a backfill. The
+// indexing model handles several concurrent requests comfortably; tag writes
+// stay serialized behind a mutex since SQLite is a single writer.
+const retagConcurrency = 4
+
+// RetagItems rebuilds auto-tags across all mail + notes: it purges existing
+// auto-tags (dropping stale rules), then classifies + tags every item, reusing
+// categories already cached in metadata. Classification runs up to
+// retagConcurrency in parallel; tag writes are serialized. Pruning happens once
+// at the end. Long-running — callers should run it async. Returns items processed.
+func (i *Ingestor) RetagItems(ctx context.Context) (int, error) {
+	if i.autoTagger == nil || i.store == nil {
+		return 0, nil
+	}
+	if err := i.purgeAutoTags(ctx); err != nil {
+		log.Printf("[ingest] retag: purge auto-tags failed: %v", err)
+	}
+
+	// Collect the corpus to tag (mail + notes).
+	var items []*store.KnowledgeItem
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote) {
+		const batch = 500
+		for offset := 0; ; offset += batch {
+			page, err := i.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)
+			if err != nil {
+				return 0, err
+			}
+			items = append(items, page...)
+			if len(page) < batch {
+				break
+			}
+		}
+	}
+
+	var (
+		mu        sync.Mutex
+		wg        sync.WaitGroup
+		sem       = make(chan struct{}, retagConcurrency)
+		processed int
+	)
+	for _, it := range items {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(it *store.KnowledgeItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			cats, fresh := i.classifyItem(ctx, it) // LLM — runs in parallel
+			mu.Lock()
+			i.applyItemTags(ctx, it, cats, fresh) // DB — serialized
+			processed++
+			mu.Unlock()
+		}(it)
+	}
+	wg.Wait()
+	_ = i.store.PruneAutoTags(ctx)
+	return processed, nil
+}
+
+// purgeAutoTags deletes every auto-generated tag (and its item links), leaving
+// user-created tags untouched. Used before a full retag so the taxonomy isn't a
+// mix of old and new auto-rules.
+func (i *Ingestor) purgeAutoTags(ctx context.Context) error {
+	tags, err := i.store.ListTags(ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range tags {
+		if t.IsAuto {
+			if derr := i.store.DeleteTag(ctx, t.ID); derr != nil {
+				log.Printf("[ingest] retag: delete auto-tag %s failed: %v", t.ID, derr)
+			}
+		}
+	}
+	return nil
 }
 
 func hashContent(text string) string {

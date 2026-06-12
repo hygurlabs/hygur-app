@@ -15,9 +15,9 @@ It ships as three pieces:
   **and serves the web UI** (embedded into the binary via `go:embed`).
 - **`webui/`** — a React + TypeScript single-page app (Vite + Tailwind). This is the primary Hygur
   interface. It talks to the sidecar API on the same loopback origin.
-- **`macos-app/`** — a thin native macOS shell (SwiftUI) that hosts the web UI in a `WKWebView`, plus the
-  menu-bar item, global hotkeys, App Intents/Shortcuts, the Share extension, and a small JS↔Swift bridge
-  for capabilities the web layer can't reach (Calendar/EventKit, notifications, on-device speech).
+- **`webui/src-tauri/`** — a cross-platform desktop shell (Tauri 2 / Rust) that embeds and supervises the
+  sidecar, points its window at the sidecar-served UI, and adds the native bits the web layer can't reach:
+  tray icon, global hotkey, autostart, and OS notifications.
 
 First-run setup (macOS permissions, AI model, accounts, notifications) runs as a **guided onboarding
 wizard inside the web UI**.
@@ -26,12 +26,10 @@ wizard inside the web UI**.
 
 | Tool | Version | Used for |
 |------|---------|----------|
-| macOS | 26.0+ | the app target / build host |
-| Xcode | 26+ | building the macOS app |
+| macOS | 11.0+ | the desktop app target / build host (Apple Silicon) |
 | Go | 1.26+ | building/testing the sidecar |
 | Node.js | 20+ & npm | building the web UI |
-| [XcodeGen](https://github.com/yonaskolb/XcodeGen) | latest | generates the Xcode project (`brew install xcodegen`) |
-| [create-dmg](https://github.com/create-dmg/create-dmg) | latest | DMG packaging (`brew install create-dmg`) |
+| [Rust](https://rustup.rs) | stable | building the Tauri desktop shell |
 | [gh](https://cli.github.com) | latest | drafting GitHub releases (`brew install gh`) |
 
 You also need an **OpenAI-compatible LLM runtime** running locally or on your network — e.g.
@@ -39,14 +37,14 @@ You also need an **OpenAI-compatible LLM runtime** running locally or on your ne
 llama.cpp. Hygur calls its `/v1/chat/completions`, `/v1/embeddings` and `/v1/models` endpoints.
 
 ```bash
-brew install go node xcodegen create-dmg gh
+brew install go node gh && curl https://sh.rustup.rs -sSf | sh
 ```
 
 ## Quick start
 
 ```bash
-# Build the web UI (required before any Go build — see "Web UI" below), run the
-# Go test suite, build the universal sidecar binary and compile the macOS app:
+# Build the web UI (required before any Go build — see "Web UI" below) and run
+# the Go test suite:
 make test
 
 # Build + ad-hoc sign + launch the app (web UI served at http://localhost:8420):
@@ -172,22 +170,15 @@ hygur/
 │       ├── retrieval/            # Hybrid RAG (BM25 + vector + fusion)
 │       └── store/                # SQLite + FTS5 + vector store
 ├── webui/                        # React + TS + Vite + Tailwind SPA
-│   └── src/
-│       ├── views/                # Ask, Search, Library, Notes, Connectors, Settings, …
-│       ├── onboarding/           # First-run guided setup wizard
-│       ├── components/           # Shared UI primitives
-│       └── lib/                  # API client, native bridge, types
-├── macos-app/                    # SwiftUI shell hosting the web UI
-│   ├── Sources/
-│   │   ├── App/                  # @main, AppDelegate, window access
-│   │   ├── Views/Shell/          # WebShellView (WKWebView + JS↔Swift bridge)
-│   │   ├── Views/Menubar/        # Menu-bar panel + status icon
-│   │   ├── Views/QuickAsk/       # Global quick-ask palette
-│   │   ├── Services/             # Sidecar supervisor, calendar, voice, notifications, …
-│   │   ├── Intents/              # App Intents / Shortcuts
-│   │   └── DesignSystem/         # Tokens, modifiers, shared components
-│   ├── Share/                    # Share extension ("Add to Hygur")
-│   └── project.yml               # XcodeGen config
+│   ├── src/
+│   │   ├── views/                # Ask, Search, Library, Notes, Connectors, Settings, …
+│   │   ├── onboarding/           # First-run guided setup wizard
+│   │   ├── components/           # Shared UI primitives
+│   │   └── lib/                  # API client, native bridge, types
+│   └── src-tauri/                # Tauri 2 desktop shell (Rust)
+│       ├── src/                  # Sidecar supervisor, tray, hotkey, autostart
+│       ├── binaries/             # Staged sidecar (externalBin, generated)
+│       └── tauri.conf.json       # Bundle + window config
 ├── .github/workflows/            # CI — release on a v*.*.* tag
 └── Makefile                      # Root build orchestration
 ```

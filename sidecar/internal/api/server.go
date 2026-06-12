@@ -5,12 +5,16 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/hygur/sidecar/internal/api/handlers"
+	"github.com/hygur/sidecar/internal/auth"
 	"github.com/hygur/sidecar/internal/config"
+	"github.com/hygur/sidecar/internal/edge"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/rs/zerolog"
 )
@@ -28,6 +32,8 @@ type Server struct {
 	modelsHandler    *handlers.ModelsHandler
 	knowledgeHandler *handlers.KnowledgeHandler
 	projectHandler   *handlers.ProjectHandler
+	taskHandler      *handlers.TaskHandler
+	decisionHandler  *handlers.DecisionHandler
 	mailHandler      *handlers.MailHandler
 	searchHandler    *handlers.SearchHandler
 	notesHandler     *handlers.NotesHandler
@@ -39,6 +45,7 @@ type Server struct {
 	memoryHandler    *handlers.MemoryHandler
 	eventsHandler    *handlers.EventsHandler
 	briefHandler     *handlers.BriefHandler
+	chronicleHandler *handlers.ChronicleHandler
 	timelineHandler  *handlers.TimelineHandler
 	agendaHandler    *handlers.AgendaHandler
 	configHandler    *handlers.ConfigHandler
@@ -46,8 +53,70 @@ type Server struct {
 	interactionsHandler *handlers.InteractionsHandler
 	insightsHandler  *handlers.InsightsHandler
 	usageHandler     *handlers.UsageHandler
-	token            string // Authentication token for API access
+	backupHandler    *handlers.BackupHandler
+	exportHandler    *handlers.ExportHandler
+	encryptionHandler *handlers.EncryptionHandler
+	token            string             // Static token (local mode) + WebUI bootstrap
+	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
+	hostGuardEnabled bool               // DNS-rebinding Host allow-list (SetHostGuard)
+	allowedHosts     map[string]bool
+	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
+	cloudProxy       *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
+	extraOrigins     map[string]bool        // extra CORS-allowed origins (SetAllowedOrigins) — e.g. the cloud web shell
+	cspConnectSrc    []string               // resolved connect-src sources for the served SPA CSP (SetCSPConnectSources)
+	edgeRunner       *edge.Runner           // local edge push loop (cloud thin client) — backs the /edge/* routes
 }
+
+// SetManaged marks this as a Hygur-operated cloud tenant. The served SPA then
+// ships no bootstrap token (auth is per-device JWT; the user connects explicitly).
+func (s *Server) SetManaged(v bool) { s.managed = v }
+
+// SetHostGuard enables DNS-rebinding protection: requests whose Host isn't loopback
+// or in `hosts` are rejected (except /health, /version). Loopback is always allowed
+// so the local desktop works without configuration. No-op when enabled=false.
+func (s *Server) SetHostGuard(enabled bool, hosts []string) {
+	s.hostGuardEnabled = enabled
+	s.allowedHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range hosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			s.allowedHosts[h] = true
+		}
+	}
+}
+
+// SetAllowedOrigins permits additional cross-origin web shells to call this API
+// (CORS), on top of the always-allowed loopback + Tauri origins. In Hygur Cloud
+// the central web app (e.g. https://cloud.hygur.ai) is served on a different host
+// than the tenant API, so it calls the tenant cross-origin; list its origin here.
+func (s *Server) SetAllowedOrigins(origins []string) {
+	s.extraOrigins = make(map[string]bool, len(origins))
+	for _, o := range origins {
+		if o = strings.ToLower(strings.TrimSpace(o)); o != "" {
+			s.extraOrigins[o] = true
+		}
+	}
+}
+
+// SetCSPConnectSources sets the extra connect-src origins for the served SPA's
+// Content-Security-Policy (see buildCSP). main resolves these from the cloud
+// upstream host, HYGUR_CONSOLE_ORIGIN and HYGUR_ALLOWED_ORIGINS so the desktop
+// CSP tightens to the exact tenant/console host instead of the *.hygur.ai
+// wildcard. The unconditional fail-safe sources ('self', ipc:, http://ipc.localhost)
+// are added in buildCSP regardless of what is passed here. Mirrors
+// SetAllowedOrigins.
+func (s *Server) SetCSPConnectSources(origins []string) {
+	s.cspConnectSrc = nil
+	for _, o := range origins {
+		if o = strings.TrimSpace(o); o != "" {
+			s.cspConnectSrc = append(s.cspConnectSrc, o)
+		}
+	}
+}
+
+// SetEdgeRunner wires the on-device edge push loop so the /edge/* routes can list
+// local Proton folders, report sync status, and trigger a sync. Cloud thin client
+// only; nil in local/self-host mode (the routes then return 503).
+func (s *Server) SetEdgeRunner(r *edge.Runner) { s.edgeRunner = r }
 
 // NewServer creates a new API server instance.
 // The token parameter is used for authenticating API requests via the X-Hygur-Token header.
@@ -57,6 +126,9 @@ func NewServer(cfg *config.Config, logger zerolog.Logger, token string) *Server 
 		logger: logger.With().Str("component", "api").Logger(),
 		router: chi.NewRouter(),
 		token:  token,
+		// Default to the loopback single-token scheme. Remote (JWT) auth is
+		// opted into in main via SetAuthenticator when auth.mode == "remote".
+		authenticator: auth.LocalTokenAuth{Token: token},
 		// Initialise the health handler eagerly with a nil LLM client so the
 		// /health endpoint reports `version` + `lm_studio: disconnected` even
 		// before SetLLMClient is called (e.g. during tests or boot warmup).
@@ -67,6 +139,15 @@ func NewServer(cfg *config.Config, logger zerolog.Logger, token string) *Server 
 	s.setupRoutes()
 
 	return s
+}
+
+// SetAuthenticator overrides the request authenticator. main calls this when
+// auth.mode == "remote" to swap the default loopback token scheme for per-device
+// JWT verification.
+func (s *Server) SetAuthenticator(a auth.Authenticator) {
+	if a != nil {
+		s.authenticator = a
+	}
 }
 
 // SetLLMClient sets the LLM client for the server.
@@ -91,6 +172,149 @@ func (s *Server) SetKnowledgeHandler(handler *handlers.KnowledgeHandler) {
 // This allows dependency injection of the project handler.
 func (s *Server) SetProjectHandler(handler *handlers.ProjectHandler) {
 	s.projectHandler = handler
+}
+
+// SetTaskHandler sets the task handler for the server.
+func (s *Server) SetTaskHandler(handler *handlers.TaskHandler) {
+	s.taskHandler = handler
+}
+
+// SetChronicleHandler sets the chronicle handler for the server.
+func (s *Server) SetChronicleHandler(handler *handlers.ChronicleHandler) {
+	s.chronicleHandler = handler
+}
+
+func (s *Server) handleChronicleList(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleChronicleGet(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleChronicleRun(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Run(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleChronicleClose(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Close(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleChronicleReopen(w http.ResponseWriter, r *http.Request) {
+	if s.chronicleHandler != nil {
+		s.chronicleHandler.Reopen(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Create(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskPatch(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Patch(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
+	if s.taskHandler != nil {
+		s.taskHandler.Delete(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "task handler not configured")
+}
+
+// SetDecisionHandler sets the decision handler for the server.
+func (s *Server) SetDecisionHandler(handler *handlers.DecisionHandler) {
+	s.decisionHandler = handler
+}
+
+func (s *Server) handleDecisionList(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionCreate(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Create(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionGet(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Get(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionPatch(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Patch(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionDelete(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Delete(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
+}
+
+func (s *Server) handleDecisionScan(w http.ResponseWriter, r *http.Request) {
+	if s.decisionHandler != nil {
+		s.decisionHandler.Scan(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "decision handler not configured")
 }
 
 // SetMailHandler sets the mail handler for the server.
@@ -154,11 +378,26 @@ func (s *Server) setupMiddleware() {
 	// Real IP extraction (for proxied requests)
 	s.router.Use(middleware.RealIP)
 
+	// DNS-rebinding guard (Host allow-list). Runs early; no-op unless enabled.
+	s.router.Use(s.hostGuardMiddleware)
+
+	// CORS — required for cross-origin clients (the Tauri desktop shell serves
+	// its UI from tauri://localhost; vite dev from http://localhost:5173). Runs
+	// before auth so preflight OPTIONS needs no token. Same-origin clients (the
+	// sidecar-served UI) are unaffected.
+	s.router.Use(s.corsMiddleware)
+
 	// Custom zerolog logger middleware
 	s.router.Use(s.loggerMiddleware)
 
 	// Panic recovery with logging
 	s.router.Use(s.recovererWithLogger)
+
+	// Cloud-backed thin-client proxy. No-op in local mode; when SetCloudProxy is
+	// active it forwards data/AI routes to the tenant (runs after logger+recoverer
+	// so proxied requests are still logged + panic-protected, and before the
+	// per-route auth so the device token — not the local token — authenticates).
+	s.router.Use(s.cloudProxyMiddleware)
 }
 
 // LongOperationTimeout is the timeout for long-running operations like folder ingestion.
@@ -385,10 +624,10 @@ func (s *Server) handleBriefRun(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
 }
 
-// handleBriefMeeting handles POST /brief/meeting.
-func (s *Server) handleBriefMeeting(w http.ResponseWriter, r *http.Request) {
+// handleDigest handles GET /digest — the daily composed "state of your world".
+func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 	if s.briefHandler != nil {
-		s.briefHandler.Meeting(w, r)
+		s.briefHandler.Digest(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
@@ -431,6 +670,86 @@ func (s *Server) handleAgendaContext(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "agenda handler not configured")
 }
 
+// handleCalendarSummary handles GET /agenda/calendar-summary.
+func (s *Server) handleCalendarSummary(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.CalendarSummary(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"summary":"","window":"","count":0}`))
+}
+
+// handleKnowledgeFollowup handles GET /knowledge/followup — the grounded
+// Follow-up digest. Delegates to the BriefHandler (it owns the LLM + store).
+func (s *Server) handleKnowledgeFollowup(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.FollowUp(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"topics":[],"contradictions":[],"scanned":0,"window":""}`))
+}
+
+// handleAgendaEvents handles GET /agenda/events — calendar events by date window.
+func (s *Server) handleAgendaEvents(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.AgendaEvents(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"events":[]}`))
+}
+
+// handleDraftReply handles POST /knowledge/{content_id}/draft-reply.
+func (s *Server) handleDraftReply(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.DraftReply(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
+// handleItemClaims handles GET /knowledge/{content_id}/claims (W6 stage-1 preview).
+func (s *Server) handleItemClaims(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.Claims(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
+// handleClaimContradictions handles GET /knowledge/claim-contradictions (W6 3c).
+func (s *Server) handleClaimContradictions(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.ClaimContradictions(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
+// handleDismissContradiction handles POST /knowledge/contradictions/dismiss —
+// records (or undoes) a user's dismissal of a contradiction.
+func (s *Server) handleDismissContradiction(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.DismissContradiction(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "brief handler not configured")
+}
+
+// handleKnowledgeFollowupReport handles GET /knowledge/followup/report — the
+// streamed natural-language report (SSE). Delegates to the BriefHandler.
+func (s *Server) handleKnowledgeFollowupReport(w http.ResponseWriter, r *http.Request) {
+	if s.briefHandler != nil {
+		s.briefHandler.FollowUpReport(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write([]byte("data: {\"done\":true}\n\n"))
+}
+
 // SetConfigHandler attaches the config read/write handler.
 func (s *Server) SetConfigHandler(handler *handlers.ConfigHandler) {
 	s.configHandler = handler
@@ -455,6 +774,78 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 // SetUsageHandler attaches the token-usage / cost handler.
 func (s *Server) SetUsageHandler(handler *handlers.UsageHandler) {
 	s.usageHandler = handler
+}
+
+// SetBackupHandler attaches the DB backup/restore handler.
+func (s *Server) SetBackupHandler(handler *handlers.BackupHandler) {
+	s.backupHandler = handler
+}
+
+func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.Download(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+// handleDBStats handles GET /admin/db/stats — storage + access metering.
+func (s *Server) handleDBStats(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.Stats(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+func (s *Server) handleBackupSave(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.SaveLocal(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+	if s.backupHandler != nil {
+		s.backupHandler.Restore(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "backup handler not configured")
+}
+
+// SetExportHandler attaches the encrypted data-export handler.
+func (s *Server) SetExportHandler(handler *handlers.ExportHandler) {
+	s.exportHandler = handler
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if s.exportHandler != nil {
+		s.exportHandler.Export(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "export handler not configured")
+}
+
+// SetEncryptionHandler attaches the local at-rest encryption handler.
+func (s *Server) SetEncryptionHandler(handler *handlers.EncryptionHandler) {
+	s.encryptionHandler = handler
+}
+
+func (s *Server) handleEncryptionStatus(w http.ResponseWriter, r *http.Request) {
+	if s.encryptionHandler != nil {
+		s.encryptionHandler.Status(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "encryption handler not configured")
+}
+
+func (s *Server) handleEncryptionEnable(w http.ResponseWriter, r *http.Request) {
+	if s.encryptionHandler != nil {
+		s.encryptionHandler.Enable(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "encryption handler not configured")
 }
 
 func (s *Server) handleGetTokenUsage(w http.ResponseWriter, r *http.Request) {

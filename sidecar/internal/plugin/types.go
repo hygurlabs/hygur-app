@@ -24,7 +24,22 @@ type Capabilities struct {
 	CanAttach    bool     `json:"can_attach"`
 	NeedsAuth    bool     `json:"needs_auth"`
 	AuthType     AuthType `json:"auth_type"`
+	// Locality dit OÙ le connecteur doit tourner (C7 edge agent). Vide = serveur.
+	Locality Locality `json:"locality,omitempty"`
 }
+
+// Locality décrit OÙ un connecteur doit tourner (cf. EDGE_AGENT_DESIGN §3) : au
+// serveur central, sur le device propriétaire de la ressource, ou l'un ou l'autre
+// (selon config — ex. IMAP loopback vs distant). L'edge agent (--mode=edge) ne
+// lance QUE les connecteurs `device` et pousse leur texte vers le central ; le
+// serveur ignore les `device`. Vide = `server` (comportement historique).
+type Locality string
+
+const (
+	LocalityServer Locality = "server"
+	LocalityDevice Locality = "device"
+	LocalityEither Locality = "either"
+)
 
 // AuthType représente le type d'authentification requis par un connecteur.
 type AuthType string

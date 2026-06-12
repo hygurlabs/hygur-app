@@ -401,6 +401,26 @@ func (m *Manager) Get(id string) (Connector, bool) {
 	return c, ok
 }
 
+// ConnectorIDsByLocality retourne, triés, les ids des connecteurs dont la
+// Capabilities.Locality vaut loc (vide = LocalityServer). L'edge agent (C7) ne
+// lance que les `device` ; le serveur central ignore les `device`. (E2)
+func (m *Manager) ConnectorIDsByLocality(loc Locality) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var ids []string
+	for id, c := range m.connectors {
+		l := c.Capabilities().Locality
+		if l == "" {
+			l = LocalityServer
+		}
+		if l == loc {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // ListInfos retourne les infos de tous les connecteurs enregistrés.
 func (m *Manager) ListInfos() []ConnectorInfo {
 	m.mu.RLock()

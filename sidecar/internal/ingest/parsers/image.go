@@ -155,6 +155,15 @@ func cleanOCRText(raw string) string {
 	return strings.Join(kept, "\n")
 }
 
+// suppressChatTemplateKwargs reports whether the vision backend rejects the
+// chat_template_kwargs passthrough (hosted models like Gemma on Infomaniak).
+// Mirrors lm_studio.no_chat_template_kwargs; read from the env here because the
+// parser is constructed without the full config.
+func suppressChatTemplateKwargs() bool {
+	v := os.Getenv("HYGUR_LM_STUDIO_NO_CHAT_TEMPLATE_KWARGS")
+	return strings.EqualFold(v, "true") || v == "1"
+}
+
 // tryVision posts the image to the LM Studio vision endpoint and returns the
 // transcribed text. Returns empty string if the endpoint is not configured or
 // on any HTTP error.
@@ -164,14 +173,11 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
-	prompt := "Transcris tout le texte visible dans cette image, fidèlement. Aucun commentaire, aucune explication."
+	prompt := "Transcribe all visible text in this image, faithfully. No commentary, no explanation."
 
 	payload := map[string]any{
 		"model":      p.visionModel,
 		"max_tokens": 2048, // enough for a full page of transcribed text
-		// Reasoning models (e.g. nemotron-omni) otherwise spend the budget
-		// "thinking" and leave content empty; OCR is a pure extraction task.
-		"chat_template_kwargs": map[string]any{"enable_thinking": false},
 		"messages": []map[string]any{
 			{
 				"role": "user",
@@ -185,6 +191,12 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 				},
 			},
 		},
+	}
+	// Reasoning models (e.g. nemotron-omni) otherwise spend the budget "thinking"
+	// and leave content empty; OCR is pure extraction. Omitted for hosted backends
+	// that reject the field (mirrors lm_studio.no_chat_template_kwargs).
+	if !suppressChatTemplateKwargs() {
+		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 	}
 
 	body, err := json.Marshal(payload)

@@ -68,12 +68,9 @@ fastlane/test_output
 # Go — compiled binaries
 sidecar/bin/
 
-# XcodeGen — generated project (regenerate with: cd macos-app && xcodegen generate)
-macos-app/*.xcodeproj/
-macos-app/build/
-
-# Sidecar binary bundled into .app (built at compile time by Xcode pre-build script)
-macos-app/Resources/hygur-sidecar
+# Tauri — staged sidecar (externalBin) + Rust build output
+webui/src-tauri/binaries/
+webui/src-tauri/target/
 
 # Tool-specific directories (not source code)
 .claude/

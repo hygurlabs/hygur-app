@@ -94,8 +94,10 @@ func TestEmailIndexer_IndexThread(t *testing.T) {
 	if item.Title != "Project Update Meeting" {
 		t.Errorf("expected Title 'Project Update Meeting', got '%s'", item.Title)
 	}
-	if item.SourceType != "email" {
-		t.Errorf("expected SourceType 'email', got '%s'", item.SourceType)
+	// Unified on "mail" so both ingestion paths agree (legacy "email" rows are
+	// still read via store.MailSourceTypes).
+	if item.SourceType != store.SourceTypeMail {
+		t.Errorf("expected SourceType 'mail', got '%s'", item.SourceType)
 	}
 
 	// Verify metadata

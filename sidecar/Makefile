@@ -16,11 +16,15 @@ INSTALL_DIR=$(HOME)/.hygur/bin
 # CGO is required for the sqlite3 driver.
 CGO_ENABLED=1
 
-# Build tags. sqlite_fts5 enables SQLite's FTS5 extension in mattn/go-sqlite3,
-# which powers the lexical/BM25 half of the hybrid retriever. Without it,
-# `CREATE VIRTUAL TABLE ... USING fts5` fails at RUNTIME with "no such module:
-# fts5" — the build stays green, so this tag must be on every build path.
-GO_TAGS := sqlite_fts5
+# Build tags for the SQLCipher-enabled sqlite3 driver (mutecomm/go-sqlcipher):
+#   sqlite_fts5  — FTS5 extension (lexical/BM25 half of the hybrid retriever).
+#   sqlite_json1 — JSON1 functions (json_extract/json_each) used across metadata,
+#                  entity search, source_ref lookup, mail filtering.
+# Unlike mattn (which bundled JSON1 by default), mutecomm gates BOTH behind tags,
+# and both fail at RUNTIME if missing ("no such module: fts5" / "no such function:
+# json_extract") while the build stays green — so this tag list must be on every
+# build AND test path.
+GO_TAGS := sqlite_fts5 sqlite_json1
 
 # Version information injected at build time
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -36,7 +40,7 @@ LDFLAGS := -ldflags "\
 # Stays in sync with `make run` so all binaries are built identically.
 GO_BUILD = CGO_ENABLED=$(CGO_ENABLED) go build -tags '$(GO_TAGS)' $(LDFLAGS)
 
-.PHONY: all build build-sidecar build-reindex build-probe build-backfill build-arm64 build-amd64 build-universal build-for-bundle run reindex probe backfill install uninstall test lint clean fmt vet check
+.PHONY: all build build-sidecar build-reindex build-probe build-backfill build-arm64 build-amd64 build-universal run reindex probe backfill install uninstall test lint clean fmt vet check
 
 all: build
 
@@ -66,19 +70,6 @@ build-universal: build-arm64 build-amd64
 	lipo -create -output $(BUILD_DIR)/$(BINARY_NAME)-universal \
 		$(BUILD_DIR)/$(BINARY_NAME)-arm64 \
 		$(BUILD_DIR)/$(BINARY_NAME)-amd64
-
-# Build the arm64 sidecar slice and copy it into the macOS app bundle.
-# Called by the Xcode pre-build script in macos-app/Project.yml and by the
-# release workflow.
-#
-# Apple Silicon only — Hygur ships local LLM inference via MLX (and friends),
-# which has no path on Intel Macs. Universal binaries doubled the bundle size
-# for an audience we can't actually serve.
-build-for-bundle: build-arm64
-	@DEST="$$(cd ..; pwd)/macos-app/Resources/hygur-sidecar"; \
-	mkdir -p "$$(dirname $$DEST)"; \
-	cp $(BUILD_DIR)/$(BINARY_NAME)-arm64 "$$DEST"; \
-	echo "✅ arm64 sidecar → $$DEST"
 
 # Build the reindex CLI (Tier 1 entity backfill).
 build-reindex:

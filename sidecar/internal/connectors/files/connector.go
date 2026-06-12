@@ -87,6 +87,7 @@ func (c *FilesConnector) Capabilities() plugin.Capabilities {
 		CanAttach:    false,
 		NeedsAuth:    false,
 		AuthType:     plugin.AuthNone,
+		Locality:     plugin.LocalityDevice, // reads the local filesystem → edge agent
 	}
 }
 
