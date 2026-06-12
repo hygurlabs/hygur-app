@@ -225,6 +225,7 @@ type RetrievalOptions struct {
 	UseJudge             bool
 	EntitySearchFallback bool
 	EntitySearchMinScore float64
+	AuthorityRerank      bool // M2: re-score by authority (boost what "fait foi")
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -237,6 +238,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	if opts.EntitySearchMinScore > 0 {
 		us.entitySearchMinScore = opts.EntitySearchMinScore
 	}
+	us.SetAuthorityRerank(opts.AuthorityRerank)
 }
 
 // Search performs a semantic search across knowledge base and mail.

@@ -595,6 +595,7 @@ func main() {
 		UseJudge:             cfg.Retrieval.UseJudge,
 		EntitySearchFallback: cfg.Retrieval.EntitySearchFallback,
 		EntitySearchMinScore: cfg.Retrieval.EntitySearchMinScore,
+		AuthorityRerank:      cfg.Retrieval.AuthorityRerank,
 	})
 
 	// Create search handler with unified search
