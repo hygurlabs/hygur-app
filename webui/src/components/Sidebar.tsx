@@ -1,5 +1,6 @@
+import { useEffect } from "react";
 import { NavLink } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   MessageSquareText,
   Sunrise,
@@ -79,6 +80,7 @@ export function Sidebar({
   onClose?: () => void;
 }) {
   const { busy, label, progress } = useActivity();
+  const qc = useQueryClient();
   const { data: healthy } = useQuery({
     queryKey: ["health"],
     queryFn: async () => {
@@ -86,8 +88,21 @@ export function Sidebar({
       return h?.status === "ok";
     },
     refetchInterval: 15000,
+    refetchOnReconnect: true,
     retry: false,
   });
+
+  // Re-check health the moment the network or window wakes (laptop sleep +
+  // network change otherwise leaves it "offline" until the next 15s tick).
+  useEffect(() => {
+    const recheck = () => qc.invalidateQueries({ queryKey: ["health"] });
+    window.addEventListener("online", recheck);
+    window.addEventListener("focus", recheck);
+    return () => {
+      window.removeEventListener("online", recheck);
+      window.removeEventListener("focus", recheck);
+    };
+  }, [qc]);
 
   // On desktop the cloud session lives in the Tauri config (the sidecar proxies
   // with it), not localStorage — so isRemote() is false. Detect a cloud account

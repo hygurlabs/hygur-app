@@ -161,7 +161,16 @@ function cidPath(id: string): string {
 }
 
 export const api = {
-  health: () => fetch(u("/health")).then((r) => r.json()),
+  // Bounded so a stale socket (laptop sleep + network change) fails fast instead
+  // of hanging on the TCP timeout for minutes — the health poll then recovers on
+  // its next tick rather than showing "offline" long after connectivity is back.
+  health: () => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    return fetch(u("/health"), { signal: ctrl.signal, cache: "no-store" })
+      .then((r) => r.json())
+      .finally(() => clearTimeout(t));
+  },
   search: (query: string, topK = 15) =>
     postJSON<SearchResponse>("/search", { query, top_k: topK }),
   knowledgeItems: (limit = 200, sourceType?: string, exclude?: string[]) =>
