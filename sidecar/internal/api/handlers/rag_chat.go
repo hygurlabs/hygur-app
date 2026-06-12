@@ -620,7 +620,13 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		messages = injectBrainContext(messages, decisions, synopsis, contradictions)
+		// The user's standing positions (Angle A-2b), read cheaply from the cache the
+		// digest warms — no LLM on the chat path; empty until first warmed.
+		var positions string
+		if text, _, found, err := h.chatStore.GetPositionsSynopsis(r.Context()); err == nil && found {
+			positions = text
+		}
+		messages = injectBrainContext(messages, decisions, positions, synopsis, contradictions)
 	}
 
 	// Build the LLM request
@@ -1137,12 +1143,20 @@ func injectMemoriesIntoSystem(messages []llm.Message, memories []tools.MemoryRes
 // the user's standing decisions and the running life synopsis — so the assistant
 // can reference "you decided X" / the ongoing story even when document retrieval
 // didn't surface them. Cheap lookups (no LLM), bounded, grounded in stored state.
-func injectBrainContext(messages []llm.Message, decisions []*store.Decision, synopsis string, contradictions []contradict.ReconciledConflict) []llm.Message {
-	if len(decisions) == 0 && strings.TrimSpace(synopsis) == "" && len(contradictions) == 0 {
+func injectBrainContext(messages []llm.Message, decisions []*store.Decision, positions, synopsis string, contradictions []contradict.ReconciledConflict) []llm.Message {
+	if len(decisions) == 0 && strings.TrimSpace(positions) == "" && strings.TrimSpace(synopsis) == "" && len(contradictions) == 0 {
 		return messages
 	}
 	var b strings.Builder
+	if p := strings.TrimSpace(positions); p != "" {
+		b.WriteString("## Where the user stands (from their confirmed decisions)\n\n")
+		b.WriteString(p)
+		b.WriteString("\n")
+	}
 	if len(decisions) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
 		b.WriteString("## The user's standing decisions\n\n")
 		for _, d := range decisions {
 			b.WriteString("- ")

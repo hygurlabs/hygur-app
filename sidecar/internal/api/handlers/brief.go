@@ -434,9 +434,17 @@ func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
 		dueTasks = ts
 	}
 
+	// Where the user stands: a grounded summary of their confirmed decisions
+	// (Angle A-2b). Regenerated here on a decision-set change, then cached.
+	var positions string
+	if h.brief != nil {
+		positions = h.brief.PositionsSynopsis(ctx, true)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"synopsis":           synopsis,
+		"positions":          positions,
 		"contradictions":     contradictions,
 		"proposed_decisions": proposed,
 		"due_tasks":          dueTasks,

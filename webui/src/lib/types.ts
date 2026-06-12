@@ -147,6 +147,10 @@ export interface Decision {
   tags: Tag[];
   created_at: string;
   updated_at: string;
+  // Angle A-2a — set when this decision updates an earlier one (same matter decided
+  // again with a divergent value). updates_statement is the predecessor's statement.
+  updates_decision_id?: string;
+  updates_statement?: string;
 }
 
 /** The daily composed "state of your world" (GET /digest) — assembles already-
@@ -163,6 +167,7 @@ export interface Upcoming {
 
 export interface Digest {
   synopsis: string;
+  positions?: string; // Angle A-2b — grounded summary of the user's standing positions
   contradictions: ReconciledConflict[];
   proposed_decisions: Decision[];
   due_tasks: Task[];

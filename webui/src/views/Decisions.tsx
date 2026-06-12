@@ -261,6 +261,15 @@ export function Decisions() {
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>{d.rationale}</ReactMarkdown>
                           </div>
                         )}
+                        {d.updates_statement && (
+                          <p className="mt-1 flex items-start gap-1 text-[12px] text-muted">
+                            <RotateCcw size={12} strokeWidth={1.75} className="mt-[2px] shrink-0" />
+                            <span>
+                              Updates your earlier decision:{" "}
+                              <span className="text-text">{d.updates_statement}</span>
+                            </span>
+                          </p>
+                        )}
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
                           {superseded && (
                             <span className="rounded bg-surface2 px-1.5 py-0.5 text-faint">

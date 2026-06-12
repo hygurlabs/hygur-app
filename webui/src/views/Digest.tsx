@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookOpen, CalendarClock, CheckSquare, Gavel, Scale } from "lucide-react";
+import { BookOpen, CalendarClock, CheckSquare, Compass, Gavel, Scale } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
 import { EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
@@ -15,12 +15,14 @@ export function Digest() {
   const { data, isLoading } = useQuery({ queryKey: ["digest"], queryFn: () => api.digest() });
 
   const synopsis = data?.synopsis?.trim() ?? "";
+  const positions = data?.positions?.trim() ?? "";
   const contradictions = data?.contradictions ?? [];
   const decisions = data?.proposed_decisions ?? [];
   const tasks = data?.due_tasks ?? [];
   const upcoming = data?.upcoming ?? [];
   const nothing =
     !synopsis &&
+    !positions &&
     contradictions.length === 0 &&
     decisions.length === 0 &&
     tasks.length === 0 &&
@@ -46,6 +48,14 @@ export function Digest() {
             <Section icon={BookOpen} title="Where things stand" to="/chronicle">
               <div className="prose-answer font-display text-[15px] leading-[1.7] text-text [&_p]:mb-2">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{synopsis}</ReactMarkdown>
+              </div>
+            </Section>
+          )}
+
+          {positions && (
+            <Section icon={Compass} title="Where you stand" to="/decisions">
+              <div className="prose-answer font-display text-[15px] leading-[1.7] text-text [&_p]:mb-2">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{positions}</ReactMarkdown>
               </div>
             </Section>
           )}
