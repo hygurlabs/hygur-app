@@ -84,7 +84,7 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 		return nil, 0, err
 	}
 	candidates := contradict.DetectClaimConflicts(items, contradictionSince())
-	reconciled := contradict.Reconcile(ctx, d.llm, candidates)
+	reconciled := d.reconcileCached(ctx, candidates)
 	if reconciled == nil {
 		reconciled = []contradict.ReconciledConflict{}
 	}
@@ -98,6 +98,37 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 		_ = d.store.PutContradictionCache(ctx, projectID, string(blob), len(items))
 	}
 	return reconciled, len(items), nil
+}
+
+// reconcileCached judges the candidate clusters using the durable per-cluster
+// verdict cache: a cluster Key encodes its exact claim set, so a verdict holds for
+// that Key forever. Only clusters with no cached verdict (new or claim-changed)
+// hit the LLM; every fresh verdict (including "none") is stored so it is never
+// re-judged. Returns only the real conflicts/supersedes (drops "none").
+func (d *DailyBrief) reconcileCached(ctx context.Context, candidates []contradict.ClaimConflict) []contradict.ReconciledConflict {
+	cache, err := d.store.GetReconcileVerdicts(ctx)
+	if err != nil {
+		d.logger.Debug().Err(err).Msg("reconcile verdict cache read; judging all")
+		cache = map[string]store.CachedVerdict{}
+	}
+	out := make([]contradict.ReconciledConflict, 0, len(candidates))
+	for _, c := range candidates {
+		v, ok := cache[c.Key]
+		if !ok {
+			ver, _ := contradict.ReconcileClaimConflict(ctx, d.llm, c) // "none" on error (fail-closed)
+			v = store.CachedVerdict{Kind: ver.Kind, Reason: ver.Reason}
+			if v.Kind == "" {
+				v.Kind = "none"
+			}
+			if perr := d.store.PutReconcileVerdict(ctx, c.Key, v.Kind, v.Reason); perr != nil {
+				d.logger.Debug().Err(perr).Msg("cache reconcile verdict")
+			}
+		}
+		if v.Kind == "conflict" || v.Kind == "supersedes" {
+			out = append(out, contradict.ReconciledConflict{ClaimConflict: c, Verdict: contradict.Verdict{Kind: v.Kind, Reason: v.Reason}})
+		}
+	}
+	return out
 }
 
 // contradictionItems gathers the corpus for detection: a project's items (complete,

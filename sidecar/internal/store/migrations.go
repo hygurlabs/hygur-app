@@ -377,6 +377,24 @@ CREATE TABLE IF NOT EXISTS item_access (
 CREATE INDEX IF NOT EXISTS idx_item_access_last ON item_access(last_accessed_at);
 `,
 	},
+	// Migration 21 — per-cluster reconcile verdict cache. The W6 contradiction
+	// Reconcile (LLM, one call per cluster) was the steady-state chat-token hog:
+	// every cold recompute re-judged EVERY cluster. The cluster Key encodes the
+	// exact claim set (cluster+entity+attribute+values), so a verdict is valid for
+	// that Key forever. Cache every verdict INCLUDING 'none', so a recompute only
+	// calls the LLM for clusters whose claims actually changed (new Keys).
+	{
+		Version: 21,
+		Name:    "reconcile_verdicts",
+		SQL: `
+CREATE TABLE IF NOT EXISTS reconcile_verdicts (
+    cluster_key  TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

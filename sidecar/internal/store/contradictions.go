@@ -53,6 +53,44 @@ func (d *DB) GetContradictionCache(ctx context.Context, scope string) (conflicts
 	return conflictsJSON, scanned, time.Since(computed), true, nil
 }
 
+// CachedVerdict is a reconcile verdict held in the per-cluster cache. Kept as
+// plain strings so the store doesn't depend on package contradict.
+type CachedVerdict struct {
+	Kind   string // "conflict" | "supersedes" | "none"
+	Reason string
+}
+
+// GetReconcileVerdicts loads the whole per-cluster verdict cache as a map keyed by
+// cluster Key. The table is small (one row per distinct cluster ever judged) and
+// recomputes are infrequent, so loading all is cheap and simplest.
+func (d *DB) GetReconcileVerdicts(ctx context.Context) (map[string]CachedVerdict, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT cluster_key, kind, reason FROM reconcile_verdicts`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]CachedVerdict{}
+	for rows.Next() {
+		var k string
+		var v CachedVerdict
+		if err := rows.Scan(&k, &v.Kind, &v.Reason); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// PutReconcileVerdict caches one cluster's verdict (idempotent; a re-judge of the
+// same Key overwrites). Stores 'none' too, so unchanged clusters are never re-judged.
+func (d *DB) PutReconcileVerdict(ctx context.Context, clusterKey, kind, reason string) error {
+	_, err := d.db.ExecContext(ctx, `
+INSERT INTO reconcile_verdicts (cluster_key, kind, reason) VALUES (?, ?, ?)
+ON CONFLICT(cluster_key) DO UPDATE SET kind = excluded.kind, reason = excluded.reason`,
+		clusterKey, kind, reason)
+	return err
+}
+
 // DismissedContradictions returns the set of dismissed contradiction keys.
 func (d *DB) DismissedContradictions(ctx context.Context) (map[string]bool, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT key FROM dismissed_contradictions`)
