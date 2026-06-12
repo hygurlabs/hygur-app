@@ -11,7 +11,9 @@ import (
 // of the decision set so it regenerates only when the decisions change. The scheduler
 // writes it; the digest reads/refreshes it; the chat path reads it cheaply.
 
-const positionsSynopsisKey = "positions_synopsis_v1"
+// v2: second-person voice ("you"). Bumping the key invalidates the v1 cache so the
+// summary regenerates with the new prompt rather than serving the stale text.
+const positionsSynopsisKey = "positions_synopsis_v2"
 
 type positionsSynopsisCache struct {
 	Text        string `json:"text"`

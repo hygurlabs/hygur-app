@@ -141,6 +141,11 @@ type RetrievalConfig struct {
 	// demote superseded, surface conflicts). Default true; a no-op until decision/
 	// conflict records exist. Kill-switch: HYGUR_RETRIEVAL_AUTHORITY_RERANK=false.
 	AuthorityRerank bool `mapstructure:"authority_rerank" yaml:"authority_rerank,omitempty"`
+
+	// AttentionRerank enables the P-2 attention re-score (small boost for often/
+	// recently-cited items, from the item_access bus). Default true; a no-op until
+	// the bus has data. Kill-switch: HYGUR_RETRIEVAL_ATTENTION_RERANK=false.
+	AttentionRerank bool `mapstructure:"attention_rerank" yaml:"attention_rerank,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.

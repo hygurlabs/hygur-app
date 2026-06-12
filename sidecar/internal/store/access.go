@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -44,6 +45,48 @@ ON CONFLICT(content_id) DO UPDATE SET hit_count = hit_count + 1, last_accessed_a
 		}
 	}
 	return tx.Commit()
+}
+
+// ItemAccess is the per-item attention signal: how often and how recently an item
+// was actually cited in an answer.
+type ItemAccess struct {
+	HitCount       int
+	LastAccessedAt time.Time
+}
+
+// ItemAccessByIDs batch-reads the access signal for the given content ids. Items
+// never accessed are simply absent from the map. The first reader of the attention
+// bus (P-2): the retrieval re-score consumes it to nudge often/recently-used items.
+func (d *DB) ItemAccessByIDs(ctx context.Context, contentIDs []string) (map[string]ItemAccess, error) {
+	out := make(map[string]ItemAccess, len(contentIDs))
+	if len(contentIDs) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(contentIDs))
+	args := make([]any, len(contentIDs))
+	for i, id := range contentIDs {
+		ph[i] = "?"
+		args[i] = id
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT content_id, hit_count, last_accessed_at FROM item_access WHERE content_id IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, lastAt string
+		var hits int
+		if err := rows.Scan(&cid, &hits, &lastAt); err != nil {
+			return nil, err
+		}
+		a := ItemAccess{HitCount: hits}
+		if t, perr := time.Parse(time.RFC3339, lastAt); perr == nil {
+			a.LastAccessedAt = t
+		}
+		out[cid] = a
+	}
+	return out, rows.Err()
 }
 
 // DBSizeBytes returns the logical database size (page_count × page_size). Works on

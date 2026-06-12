@@ -184,7 +184,15 @@ type UnifiedSearcher struct {
 	// M2 authority re-score (off by default → annotate-only, no ranking change).
 	useAuthorityRerank bool
 	authorityWeights   AuthorityWeights
+
+	// P-2 attention re-score (off by default): a small boost for often/recently-used
+	// items, read from the item_access bus.
+	useAttentionRerank bool
 }
+
+// SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
+// items). Off by default; a no-op until the item_access bus has data.
+func (us *UnifiedSearcher) SetAttentionRerank(on bool) { us.useAttentionRerank = on }
 
 // SetAuthorityRerank enables the M2 authority re-score (boost what "fait foi",
 // demote the superseded loser, surface unresolved conflicts). Off by default so
@@ -227,6 +235,7 @@ type RetrievalOptions struct {
 	EntitySearchFallback bool
 	EntitySearchMinScore float64
 	AuthorityRerank      bool // M2: re-score by authority (boost what "fait foi")
+	AttentionRerank      bool // P-2: re-score by attention (boost often/recently-used)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -240,6 +249,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 		us.entitySearchMinScore = opts.EntitySearchMinScore
 	}
 	us.SetAuthorityRerank(opts.AuthorityRerank)
+	us.SetAttentionRerank(opts.AttentionRerank)
 }
 
 // Search performs a semantic search across knowledge base and mail.
@@ -801,6 +811,7 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	// within it. The re-score is a no-op unless authority rerank is enabled.
 	us.annotateAuthority(ctx, results)
 	us.applyAuthorityRescore(results)
+	us.applyAttentionRescore(ctx, results) // P-2: attention nudges within the authority band
 
 	// Apply TopK after freshness re-ranking.
 	if len(results) > req.TopK {
