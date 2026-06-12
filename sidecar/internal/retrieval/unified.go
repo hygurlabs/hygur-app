@@ -444,7 +444,10 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	if searchKnowledge {
 		g.Go(func() error {
 			var err error
-			knowledgeTypes := []string{"file", "note", "markdown", "pdf", "txt", "docx"}
+			// Includes decisions so "ce qui fait foi" can actually surface (and be
+			// boosted by the M2 re-score); without it, decision items are never in
+			// the candidate pool. (task/event are still excluded — separate gap.)
+			knowledgeTypes := []string{"file", "note", "markdown", "pdf", "txt", "docx", store.SourceTypeDecision}
 			knowledgeVecResults, err = us.store.SearchChunksVecBySourceType(gCtx, embedding, fetchLimit, knowledgeTypes)
 			return err
 		})
