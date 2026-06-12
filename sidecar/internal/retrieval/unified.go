@@ -179,6 +179,20 @@ type UnifiedSearcher struct {
 	useJudge             bool
 	entitySearchFallback bool
 	entitySearchMinScore float64
+
+	// M2 authority re-score (off by default → annotate-only, no ranking change).
+	useAuthorityRerank bool
+	authorityWeights   AuthorityWeights
+}
+
+// SetAuthorityRerank enables the M2 authority re-score (boost what "fait foi",
+// demote the superseded loser, surface unresolved conflicts). Off by default so
+// existing callers keep pure-relevance order; uses DefaultAuthorityWeights.
+func (us *UnifiedSearcher) SetAuthorityRerank(on bool) {
+	us.useAuthorityRerank = on
+	if on && (us.authorityWeights == AuthorityWeights{}) {
+		us.authorityWeights = DefaultAuthorityWeights()
+	}
 }
 
 // NewUnifiedSearcher creates a new UnifiedSearcher instance.
@@ -776,6 +790,12 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	// Re-sort by final score (scoring may have reordered results).
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 
+	// Authority: annotate (M1a/M1b) then re-score (M2) BEFORE TopK so a
+	// high-authority item can be promoted into the top-K, not merely reordered
+	// within it. The re-score is a no-op unless authority rerank is enabled.
+	us.annotateAuthority(ctx, results)
+	us.applyAuthorityRescore(results)
+
 	// Apply TopK after freshness re-ranking.
 	if len(results) > req.TopK {
 		results = results[:req.TopK]
@@ -796,10 +816,6 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	// LLM error: original results stay through.
 	results = us.applyJudge(ctx, req.Query, results)
 	knowledgeCount, mailCount = recountSources(results)
-
-	// Authority annotation (M1a): tag each result's tier/validity from the
-	// decision graph. Annotate-only — no reordering here (that is M2). Fail-open.
-	us.annotateAuthority(ctx, results)
 
 	resp := &UnifiedSearchResponse{
 		Results: results,

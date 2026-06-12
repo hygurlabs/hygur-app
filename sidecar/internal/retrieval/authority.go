@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
@@ -172,4 +173,61 @@ func parseAsserted(s string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// ─── M2: authority re-score ──────────────────────────────────────────────────
+
+// AuthorityWeights are the multipliers applied to a result's relevance score by
+// the authority re-score. A weighted-feature shape (not a fixed formula) so future
+// signals (consequence/angle/attention) can be added without rewriting. All 1.0 =
+// identity (no reordering) — the safe default when no authority signal is present.
+type AuthorityWeights struct {
+	Confirmed  float64 // confirmed decision, current → boost (this is what "fait foi")
+	Candidate  float64 // proposed decision → neutral (not authoritative until confirmed)
+	Capture    float64 // raw capture, current → baseline
+	Superseded float64 // superseded (decision or capture) → demote (the resolved loser)
+	Conflicted float64 // unresolved conflict → SURFACE, never bury (guardrail G4)
+}
+
+// DefaultAuthorityWeights boosts the confirmed-and-current, demotes the resolved
+// loser, and keeps an unresolved conflict visible (slightly above baseline so the
+// user sees the tension rather than it sinking under the "winning" side).
+func DefaultAuthorityWeights() AuthorityWeights {
+	return AuthorityWeights{Confirmed: 1.6, Candidate: 1.0, Capture: 1.0, Superseded: 0.3, Conflicted: 1.15}
+}
+
+// multiplier picks the weight for a result. Validity is checked first: a conflict
+// must surface and a superseded item must demote regardless of tier (a superseded
+// *decision* still loses). Otherwise the current item is weighted by its tier.
+func (w AuthorityWeights) multiplier(tier AuthorityTier, v Validity) float64 {
+	switch v {
+	case ValidityConflicted:
+		return w.Conflicted
+	case ValiditySuperseded:
+		return w.Superseded
+	}
+	switch tier {
+	case TierConfirmed:
+		return w.Confirmed
+	case TierCandidate:
+		return w.Candidate
+	default:
+		return w.Capture
+	}
+}
+
+// applyAuthorityRescore multiplies each result's score by its authority weight and
+// re-sorts (stable, so equal weights preserve the relevance order — when nothing
+// carries authority every weight is 1.0 and the order is byte-identical: no
+// regression). No-op unless the searcher has authority rerank enabled. Requires
+// Tier/Validity to be set first (annotateAuthority).
+func (us *UnifiedSearcher) applyAuthorityRescore(results []UnifiedResult) {
+	if !us.useAuthorityRerank || len(results) == 0 {
+		return
+	}
+	w := us.authorityWeights
+	for i := range results {
+		results[i].Score *= w.multiplier(results[i].Tier, results[i].Validity)
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 }

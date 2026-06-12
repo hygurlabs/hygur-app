@@ -13,11 +13,12 @@ import (
 // runner executes a single query against multiple strategies and returns
 // the per-strategy results for side-by-side display.
 type runner struct {
-	searcher   *retrieval.UnifiedSearcher
-	llm        *llm.Client
-	db         *store.DB
-	topK       int
-	strategies []string
+	searcher          *retrieval.UnifiedSearcher
+	authoritySearcher *retrieval.UnifiedSearcher // same pipeline + M2 authority re-score
+	llm               *llm.Client
+	db                *store.DB
+	topK              int
+	strategies        []string
 }
 
 // strategyReport holds the output of one strategy on one query.
@@ -65,9 +66,38 @@ func (r *runner) run(ctx context.Context, query string) queryReport {
 			report.Reports = append(report.Reports, r.runJudge(ctx, query, baseline))
 		case "intent":
 			report.Reports = append(report.Reports, r.runIntent(ctx, query, baseline))
+		case "authority":
+			report.Reports = append(report.Reports, r.runAuthority(ctx, query))
 		}
 	}
 	return report
+}
+
+// runAuthority runs the production pipeline WITH the M2 authority re-score on, so
+// it can be compared side-by-side with baseline. When no result carries authority
+// (all capture/current) the order must match baseline exactly — the regression
+// guarantee.
+func (r *runner) runAuthority(ctx context.Context, query string) strategyReport {
+	start := time.Now()
+	resp, err := r.authoritySearcher.Search(ctx, retrieval.UnifiedSearchRequest{Query: query, TopK: r.topK})
+	dur := time.Since(start)
+	if err != nil {
+		return strategyReport{Name: "authority", Duration: dur, Error: err.Error()}
+	}
+	out := strategyReport{Name: "authority", Duration: dur}
+	for i, res := range resp.Results {
+		out.Results = append(out.Results, strategyResult{
+			Rank:       i + 1,
+			Title:      preferredTitle(res),
+			SourceType: res.SourceType,
+			Tier:       string(res.Tier),
+			Validity:   string(res.Validity),
+			Score:      res.Score,
+			Excerpt:    excerpt(res.Excerpt, 200),
+			ContentID:  res.ContentID,
+		})
+	}
+	return out
 }
 
 // runBaseline runs the production UnifiedSearcher with default options.
