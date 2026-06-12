@@ -36,6 +36,8 @@ type strategyResult struct {
 	Rank       int     `json:"rank"`
 	Title      string  `json:"title"`
 	SourceType string  `json:"source_type"`
+	Tier       string  `json:"tier,omitempty"`
+	Validity   string  `json:"validity,omitempty"`
 	Score      float64 `json:"score"`
 	Excerpt    string  `json:"excerpt"`
 	JudgeScore int     `json:"judge_score,omitempty"`
@@ -86,6 +88,8 @@ func (r *runner) runBaseline(ctx context.Context, query string) strategyReport {
 			Rank:       i + 1,
 			Title:      preferredTitle(res),
 			SourceType: res.SourceType,
+			Tier:       string(res.Tier),
+			Validity:   string(res.Validity),
 			Score:      res.Score,
 			Excerpt:    excerpt(res.Excerpt, 200),
 			ContentID:  res.ContentID,

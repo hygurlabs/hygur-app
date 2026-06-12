@@ -27,6 +27,10 @@ type UnifiedResult struct {
 	Title      string         `json:"title"`
 	Date       string         `json:"date,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+	// Authority annotation (M1a) — deterministic tier/validity from the decision
+	// graph, set by annotateAuthority just before return. Empty when unannotated.
+	Tier     AuthorityTier `json:"tier,omitempty"`
+	Validity Validity      `json:"validity,omitempty"`
 	// Mail-specific
 	MailFrom    string `json:"mail_from,omitempty"`
 	MailDate    string `json:"mail_date,omitempty"`
@@ -792,6 +796,10 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	// LLM error: original results stay through.
 	results = us.applyJudge(ctx, req.Query, results)
 	knowledgeCount, mailCount = recountSources(results)
+
+	// Authority annotation (M1a): tag each result's tier/validity from the
+	// decision graph. Annotate-only — no reordering here (that is M2). Fail-open.
+	us.annotateAuthority(ctx, results)
 
 	resp := &UnifiedSearchResponse{
 		Results: results,
