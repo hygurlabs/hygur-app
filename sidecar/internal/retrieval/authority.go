@@ -304,3 +304,28 @@ func (us *UnifiedSearcher) applyAuthorityRescore(results []UnifiedResult) {
 		log.Printf("[authority] rescore: boosted=%d demoted=%d surfaced=%d of=%d", boosted, demoted, surfaced, len(results))
 	}
 }
+
+// StratumLabel is the authority-lens label shown to the LLM for a result (A-1
+// multi-lens), or "" for the baseline (the user's own current capture). Validity
+// (superseded / contested) takes precedence over tier, so a stale or contested item
+// is never presented as authoritative; owner-origin separates the user's own content
+// from a third party (the Porto case). Shared by the chat context builder AND the
+// search tool, so both retrieval paths label sources identically.
+func StratumLabel(tier AuthorityTier, v Validity, owner OwnerOrigin) string {
+	switch v {
+	case ValiditySuperseded:
+		return "superseded"
+	case ValidityConflicted:
+		return "contested"
+	}
+	switch tier {
+	case TierConfirmed:
+		return "your decision"
+	case TierCandidate:
+		return "proposed decision"
+	}
+	if owner == OriginExternal {
+		return "external"
+	}
+	return ""
+}

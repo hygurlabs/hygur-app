@@ -245,7 +245,12 @@ const baseFormatGuidance = `You are Hygur, the user's personal assistant. ` +
 	`than guessing. For a question that spans a period, compute the window and pass date_from/date_to ` +
 	`so you get every item in range. Tie a document's figures to the period stated in its content, not ` +
 	`its received date. Sort dated lists oldest-first unless asked otherwise. Build a total by adding ` +
-	`the unit items, and never add an aggregate to the items it already summarises.`
+	`the unit items, and never add an aggregate to the items it already summarises.` +
+	"\n\n" +
+	`Some retrieved sources carry an authority tag (its "stratum" — e.g. "your decision", "external", ` +
+	`"superseded", "contested"). When tagged sources differ on the same point, keep them distinct and ` +
+	`attribute each to its tag — what you decided versus what an external or unconfirmed source asserts — ` +
+	`rather than blending them into one answer.`
 
 // injectFormatGuidance ensures every chat turn carries the base persona +
 // markdown-rendering hint at the top of the system prompt. Subsequent
@@ -1378,22 +1383,9 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 // contested) takes precedence over tier, so a stale or contested item is never shown
 // as authoritative.
 func sourceStratum(s RAGSource) string {
-	switch s.Validity {
-	case string(retrieval.ValiditySuperseded):
-		return "superseded"
-	case string(retrieval.ValidityConflicted):
-		return "contested"
-	}
-	switch s.Tier {
-	case string(retrieval.TierConfirmed):
-		return "your decision"
-	case string(retrieval.TierCandidate):
-		return "proposed decision"
-	}
-	if s.OwnerOrigin == string(retrieval.OriginExternal) {
-		return "external"
-	}
-	return ""
+	return retrieval.StratumLabel(
+		retrieval.AuthorityTier(s.Tier), retrieval.Validity(s.Validity), retrieval.OwnerOrigin(s.OwnerOrigin),
+	)
 }
 
 func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragContext *RAGContext) []llm.Message {
