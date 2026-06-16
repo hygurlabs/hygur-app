@@ -88,6 +88,9 @@ func (s *Server) setupRoutes() {
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
 			r.Post("/retag", s.handleKnowledgeRetag)
 			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
+			// Deletion reconciliation: the edge agent posts the full set of refs
+			// currently present on the server; items no longer present are recycled.
+			r.Post("/reconcile", s.handleKnowledgeReconcile)
 			r.Delete("/reset", s.handleKnowledgeReset)
 			r.Get("/{content_id}", s.handleKnowledgeGet)
 			r.Delete("/{content_id}", s.handleKnowledgeDelete)
@@ -367,6 +370,16 @@ func (s *Server) handleKnowledgeIngest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKnowledgeIngestText(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.IngestText(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeReconcile handles POST /knowledge/reconcile (deletion
+// reconciliation from an edge enumeration). It delegates to the KnowledgeHandler.
+func (s *Server) handleKnowledgeReconcile(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.Reconcile(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

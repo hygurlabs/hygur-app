@@ -33,6 +33,11 @@ const (
 	DefaultProtonBridgePort = 1143
 )
 
+// Compile-time guarantee that the Proton connector can enumerate Message-IDs for
+// deletion reconciliation. If this assertion ever breaks, the edge reconcile pass
+// would silently fall back to "skip" (no pruning) — fail it at build time instead.
+var _ mail.MessageIDLister = (*IMAPConnector)(nil)
+
 // maxThreadFetchBytes bounds how many bytes of message bodies + decoded
 // attachments a single GetMessagesByThread call accumulates before it stops at
 // a message boundary. A reference-chain "thread" (or a chain carrying many
@@ -449,6 +454,78 @@ func (c *IMAPConnector) ListThreads(ctx context.Context, opts mail.ListOptions) 
 	}
 
 	return threads, nil
+}
+
+// ListMessageIDs returns the Message-ID of every message currently in the mailbox
+// (an envelope-only FETCH — no bodies, no attachments), in the SAME form used as
+// the edge source_ref ("<provider>:<id>"). It is the authoritative "present" set
+// for deletion reconciliation. The returned count is the server's reported message
+// count for the folder; the caller compares it against len(ids) as an integrity
+// check (a short read means a truncated enumeration → do not reconcile). Returns an
+// error rather than a partial list when the fetch is incomplete, so the caller
+// never prunes on bad data.
+func (c *IMAPConnector) ListMessageIDs(ctx context.Context, mailbox string) (ids []string, serverCount int, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.connected || c.client == nil {
+		return nil, 0, mail.ErrNotConnected
+	}
+	if mailbox == "" {
+		mailbox = "INBOX"
+	}
+
+	selectData, err := c.client.Select(mailbox, nil).Wait()
+	if err != nil {
+		if c.isConnectionLost(err) {
+			c.markDisconnected()
+			return nil, 0, mail.ErrConnectionLost
+		}
+		if isMailboxNotFoundError(err) {
+			return nil, 0, mail.ErrMailboxNotFound
+		}
+		return nil, 0, fmt.Errorf("failed to select mailbox %q: %w", mailbox, err)
+	}
+	serverCount = int(selectData.NumMessages)
+	if selectData.NumMessages == 0 {
+		return nil, 0, nil
+	}
+
+	seqSet := new(imap.SeqSet)
+	seqSet.AddRange(1, selectData.NumMessages)
+	fetchCmd := c.client.Fetch(*seqSet, &imap.FetchOptions{Envelope: true})
+
+	fetched := 0
+	for {
+		if checkContext(ctx) {
+			_ = fetchCmd.Close()
+			return nil, 0, ctx.Err()
+		}
+		msg := fetchCmd.Next()
+		if msg == nil {
+			break
+		}
+		msgData, cerr := msg.Collect()
+		if cerr != nil {
+			continue
+		}
+		fetched++
+		if env := msgData.Envelope; env != nil && env.MessageID != "" {
+			ids = append(ids, env.MessageID)
+		}
+	}
+	if cerr := fetchCmd.Close(); cerr != nil {
+		if c.isConnectionLost(cerr) {
+			c.markDisconnected()
+		}
+		return nil, 0, fmt.Errorf("envelope enumeration of %q failed: %w", mailbox, cerr)
+	}
+	// Integrity: every message's envelope must have been read. A short read means
+	// the server cut the listing — refuse to hand back a partial "present" set.
+	if fetched < serverCount {
+		return nil, 0, fmt.Errorf("incomplete enumeration of %q: read %d of %d", mailbox, fetched, serverCount)
+	}
+	return ids, serverCount, nil
 }
 
 // GetThread retrieves a single thread by its ID.

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hygur/sidecar/internal/mail"
 	"github.com/hygur/sidecar/internal/mail/proton"
 )
 
@@ -96,7 +97,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // stateDir. Shared by the UI runner and the headless CLI. Never panics; the first
 // hard error is returned in lastErr. (The blocking part is the network push; the
 // caller decides about backgrounding.)
-func Sync(ctx context.Context, cfg *Config, stateDir string) (files, mail, errs int, lastErr string) {
+func Sync(ctx context.Context, cfg *Config, stateDir string) (files, mailPushed, errs int, lastErr string) {
 	client := NewClient(cfg.Server, cfg.Token)
 	if err := client.Health(ctx); err != nil {
 		return 0, 0, 1, "server unreachable: " + err.Error()
@@ -120,13 +121,46 @@ func Sync(ctx context.Context, cfg *Config, stateDir string) (files, mail, errs 
 		} else {
 			fs := ReadFolderState(statePath)
 			st, fs, _ := NewMailSync(client, "proton").Run(ctx, conn, splitMailboxes(cfg.ProtonMailbox), fs, cfg.Backfill())
+			mailPushed = st.Pushed
+			errs += st.Errors
+			// Deletion reconciliation (cadence-gated), while the connection is open.
+			if rerr := reconcileProton(ctx, client, conn, cfg, stateDir); rerr != "" {
+				errs++
+				if lastErr == "" {
+					lastErr = rerr
+				}
+			}
 			_ = conn.Disconnect()
 			_ = WriteFolderState(statePath, fs)
-			mail = st.Pushed
-			errs += st.Errors
 		}
 	}
-	return files, mail, errs, lastErr
+	return files, mailPushed, errs, lastErr
+}
+
+// reconcileProton runs deletion reconciliation for Proton when it is due. It
+// enumerates the messages still present on the server (envelope-only) and asks the
+// center to recycle KB items that vanished. Cadence-gated by a per-destination
+// stamp so it runs ~daily, not every push. An incomplete enumeration is a SILENT
+// skip — never a prune on partial data; only a real transport failure returns an
+// error string.
+func reconcileProton(ctx context.Context, client *Client, conn mail.MailConnector, cfg *Config, stateDir string) string {
+	interval, enabled := cfg.ReconcileInterval()
+	if !enabled {
+		return ""
+	}
+	stamp := filepath.Join(stateDir, reconcileStampName("proton", cfg.Server))
+	if time.Since(ReadWatermark(stamp)) < interval {
+		return "" // not due yet
+	}
+	refs, complete := NewMailSync(client, "proton").Reconcile(ctx, conn, splitMailboxes(cfg.ProtonMailbox))
+	if !complete {
+		return "" // partial/unsupported enumeration → skip, never infer absence
+	}
+	if _, err := client.Reconcile(ctx, "proton", refs, true, cfg.ReconcileGrace()); err != nil {
+		return "reconcile: " + err.Error()
+	}
+	_ = WriteWatermark(stamp, time.Now())
+	return ""
 }
 
 func (r *Runner) finish(files, mail, errs int, lastErr string) Status {
@@ -170,6 +204,16 @@ func folderStateName(source, server string) string {
 		return source + "." + host + ".folders.json"
 	}
 	return source + ".folders.json"
+}
+
+// reconcileStampName is the per-source+destination stamp recording when deletion
+// reconciliation last ran, so the cadence survives restarts and is scoped per
+// destination tenant (re-pointing the edge resets it).
+func reconcileStampName(source, server string) string {
+	if host := destHost(server); host != "" {
+		return source + "." + host + ".reconcile"
+	}
+	return source + ".reconcile"
 }
 
 // destHost derives a filesystem-safe host token from the server URL.

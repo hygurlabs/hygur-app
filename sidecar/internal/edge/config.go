@@ -21,11 +21,24 @@ type Config struct {
 	ProtonMailbox  string `json:"proton_mailbox"`  // e.g. "All Mail"
 	IntervalSecs   int    `json:"interval_secs"`   // background loop; 0 = manual only
 	BackfillCount  int    `json:"backfill_count"`  // mails fetched per folder on its first sync (0 = default)
+	// ReconcileIntervalSecs is the deletion-reconciliation cadence: 0 = default
+	// (daily), <0 = disabled. Kept slower than IntervalSecs because a reconcile
+	// pass enumerates the full mailbox, unlike the incremental push.
+	ReconcileIntervalSecs int `json:"reconcile_interval_secs"`
+	// ReconcileGraceMisses is how many consecutive passes an item must be missing
+	// before its recycle entry is physically purged (0 = default).
+	ReconcileGraceMisses int `json:"reconcile_grace_misses"`
 }
 
 // DefaultBackfillCount is how many recent mails a folder pulls on its first sync
 // (before switching to incremental). Applied when Config.BackfillCount is unset.
 const DefaultBackfillCount = 200
+
+// Reconcile cadence/grace defaults (daily; purge after 3 consecutive misses).
+const (
+	DefaultReconcileIntervalSecs = 86400
+	DefaultReconcileGraceMisses  = 3
+)
 
 // Backfill returns the effective per-folder backfill count (the default when unset).
 func (c *Config) Backfill() int {
@@ -33,6 +46,26 @@ func (c *Config) Backfill() int {
 		return c.BackfillCount
 	}
 	return DefaultBackfillCount
+}
+
+// ReconcileInterval returns the deletion-reconcile cadence and whether it is
+// enabled (a negative configured value disables it; zero selects the default).
+func (c *Config) ReconcileInterval() (time.Duration, bool) {
+	if c.ReconcileIntervalSecs < 0 {
+		return 0, false
+	}
+	if c.ReconcileIntervalSecs == 0 {
+		return DefaultReconcileIntervalSecs * time.Second, true
+	}
+	return time.Duration(c.ReconcileIntervalSecs) * time.Second, true
+}
+
+// ReconcileGrace returns the effective grace-miss count (the default when unset).
+func (c *Config) ReconcileGrace() int {
+	if c.ReconcileGraceMisses > 0 {
+		return c.ReconcileGraceMisses
+	}
+	return DefaultReconcileGraceMisses
 }
 
 // DefaultConfigPath is ~/.hygur-edge/config.json (falls back to CWD-relative).
