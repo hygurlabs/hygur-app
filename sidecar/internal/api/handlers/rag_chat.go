@@ -75,6 +75,14 @@ type RAGSource struct {
 	// LLM can reason about "when" for pre-injected context (entity follow-ups),
 	// matching what the search_knowledge_base tool exposes.
 	Date string `json:"date,omitempty"`
+	// OwnerOrigin: "owner" (the user's own content) vs "external" (a third party).
+	// Drives attribution in synthesis so a third party's claim never reads as the
+	// user's own position/decision (the Porto case).
+	OwnerOrigin string `json:"owner_origin,omitempty"`
+	// Tier/Validity — the authority stratum (A-1 multi-lens): confirmed/candidate/
+	// capture · current/superseded/conflicted. Labels each source by its lens.
+	Tier     string `json:"tier,omitempty"`
+	Validity string `json:"validity,omitempty"`
 }
 
 // RAGContext holds the retrieved context for a RAG request.
@@ -237,7 +245,12 @@ const baseFormatGuidance = `You are Hygur, the user's personal assistant. ` +
 	`than guessing. For a question that spans a period, compute the window and pass date_from/date_to ` +
 	`so you get every item in range. Tie a document's figures to the period stated in its content, not ` +
 	`its received date. Sort dated lists oldest-first unless asked otherwise. Build a total by adding ` +
-	`the unit items, and never add an aggregate to the items it already summarises.`
+	`the unit items, and never add an aggregate to the items it already summarises.` +
+	"\n\n" +
+	`Some retrieved sources carry an authority tag (its "stratum" — e.g. "your decision", "external", ` +
+	`"superseded", "contested"). When tagged sources differ on the same point, keep them distinct and ` +
+	`attribute each to its tag — what you decided versus what an external or unconfirmed source asserts — ` +
+	`rather than blending them into one answer.`
 
 // injectFormatGuidance ensures every chat turn carries the base persona +
 // markdown-rendering hint at the top of the system prompt. Subsequent
@@ -549,7 +562,10 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		messages = h.buildMessagesWithContext(req.Messages, prefetchedContext)
+		// Augment the ALREADY-seeded messages (persona + resolved attachments), not
+		// req.Messages — else the fast-path would drop injectFormatGuidance and the
+		// resolved document text for this turn (#4).
+		messages = h.buildMessagesWithContext(messages, prefetchedContext)
 	}
 
 	// Agenda injection: prepend upcoming deadlines to the system prompt so the
@@ -612,7 +628,13 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		messages = injectBrainContext(messages, decisions, synopsis, contradictions)
+		// The user's standing positions (Angle A-2b), read cheaply from the cache the
+		// digest warms — no LLM on the chat path; empty until first warmed.
+		var positions string
+		if text, _, found, err := h.chatStore.GetPositionsSynopsis(r.Context()); err == nil && found {
+			positions = text
+		}
+		messages = injectBrainContext(messages, decisions, positions, synopsis, time.Now().UTC().Format("2006-01-02"), contradictions)
 	}
 
 	// Build the LLM request
@@ -1125,66 +1147,104 @@ func injectMemoriesIntoSystem(messages []llm.Message, memories []tools.MemoryRes
 	return out
 }
 
-// injectBrainContext prepends a compact, grounded block of Hygur's own signals —
-// the user's standing decisions and the running life synopsis — so the assistant
-// can reference "you decided X" / the ongoing story even when document retrieval
-// didn't surface them. Cheap lookups (no LLM), bounded, grounded in stored state.
-func injectBrainContext(messages []llm.Message, decisions []*store.Decision, synopsis string, contradictions []contradict.ReconciledConflict) []llm.Message {
-	if len(decisions) == 0 && strings.TrimSpace(synopsis) == "" && len(contradictions) == 0 {
+// brainContextCharBudget backstops the size of the injected brain block (~700 tokens
+// at ~4 chars/token). Sections are added in priority order — what's TRUE first, the
+// running narrative last — so a tight budget drops the least-critical section, never
+// the standing facts (#2: keeps the system prompt from ballooning on the 12B model).
+const brainContextCharBudget = 2800
+
+// injectBrainContext prepends a compact, grounded block of Hygur's own signals so the
+// assistant can reference "you decided X" / the ongoing story even when document
+// retrieval didn't surface them. Cheap (no LLM), grounded in stored state. asOf stamps
+// the cached signals as a snapshot (#5). Sections are budget-bounded and the standing
+// facts are shown ONCE — the synthesized positions when present, else the raw decision
+// list, never both (#3).
+func injectBrainContext(messages []llm.Message, decisions []*store.Decision, positions, synopsis, asOf string, contradictions []contradict.ReconciledConflict) []llm.Message {
+	positions = strings.TrimSpace(positions)
+	synopsis = strings.TrimSpace(synopsis)
+	if len(decisions) == 0 && positions == "" && synopsis == "" && len(contradictions) == 0 {
 		return messages
 	}
-	var b strings.Builder
-	if len(decisions) > 0 {
-		b.WriteString("## The user's standing decisions\n\n")
-		for _, d := range decisions {
-			b.WriteString("- ")
-			b.WriteString(d.Statement)
-			if len(d.DecidedOn) >= 10 {
-				b.WriteString(" (")
-				b.WriteString(d.DecidedOn[:10])
-				b.WriteString(")")
-			}
-			b.WriteString("\n")
-		}
+	stamp := ""
+	if asOf != "" {
+		stamp = " (as of " + asOf + ")"
 	}
-	if len(contradictions) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString("## Open contradictions in the user's records\n\n")
-		for _, c := range contradictions {
-			b.WriteString("- ")
-			if c.Entity != "" {
-				b.WriteString(c.Entity)
-				b.WriteString(" — ")
+
+	// Sections in priority order: standing facts → active tensions → narrative.
+	var sections []string
+
+	// Standing facts: the synthesized positions (A-2b, cached → stamped) when present,
+	// otherwise the raw standing-decision list (live) — never both (#3).
+	if positions != "" {
+		sections = append(sections, "## Where the user stands (from their confirmed decisions"+stamp+")\n\n"+positions+"\n")
+	} else if len(decisions) > 0 {
+		var d strings.Builder
+		d.WriteString("## The user's standing decisions\n\n")
+		for _, dec := range decisions {
+			d.WriteString("- ")
+			d.WriteString(dec.Statement)
+			if len(dec.DecidedOn) >= 10 {
+				d.WriteString(" (")
+				d.WriteString(dec.DecidedOn[:10])
+				d.WriteString(")")
 			}
-			b.WriteString(c.Attribute)
-			vals := make([]string, 0, len(c.Members))
-			for _, m := range c.Members {
+			d.WriteString("\n")
+		}
+		sections = append(sections, d.String())
+	}
+
+	// Open contradictions (durable cache → stamped).
+	if len(contradictions) > 0 {
+		var c strings.Builder
+		c.WriteString("## Open contradictions in the user's records" + stamp + "\n\n")
+		for _, cf := range contradictions {
+			c.WriteString("- ")
+			if cf.Entity != "" {
+				c.WriteString(cf.Entity)
+				c.WriteString(" — ")
+			}
+			c.WriteString(cf.Attribute)
+			vals := make([]string, 0, len(cf.Members))
+			for _, m := range cf.Members {
 				if m.Value != "" {
 					vals = append(vals, m.Value)
 				}
 			}
 			if len(vals) > 0 {
-				b.WriteString(": ")
-				b.WriteString(strings.Join(vals, " vs "))
+				c.WriteString(": ")
+				c.WriteString(strings.Join(vals, " vs "))
 			}
-			if c.Verdict.Reason != "" {
-				b.WriteString(" — ")
-				b.WriteString(c.Verdict.Reason)
+			if cf.Verdict.Reason != "" {
+				c.WriteString(" — ")
+				c.WriteString(cf.Verdict.Reason)
 			}
-			b.WriteString("\n")
+			c.WriteString("\n")
 		}
+		sections = append(sections, c.String())
 	}
-	if s := strings.TrimSpace(synopsis); s != "" {
+
+	// The rolling life synopsis (nightly cache → stamped). Narrative context — lowest
+	// priority, so the first to be dropped under budget.
+	if synopsis != "" {
+		sections = append(sections, "## The story so far"+stamp+"\n\n"+synopsis+"\n")
+	}
+
+	// Assemble within the budget: always keep the first (highest-priority) section;
+	// append the rest only while they fit (#2).
+	var b strings.Builder
+	for _, s := range sections {
+		if b.Len() > 0 && b.Len()+len(s) > brainContextCharBudget {
+			break
+		}
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString("## The story so far\n\n")
 		b.WriteString(s)
-		b.WriteString("\n")
 	}
 	block := b.String()
+	if block == "" {
+		return messages
+	}
 
 	hasSystem := len(messages) > 0 && messages[0].Role == "system"
 	out := make([]llm.Message, 0, len(messages)+1)
@@ -1308,6 +1368,9 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 			MailDate:    r.MailDate,
 			MailSubject: r.MailSubject,
 			Date:        r.Date,
+			OwnerOrigin: string(r.OwnerOrigin),
+			Tier:        string(r.Tier),
+			Validity:    string(r.Validity),
 		})
 		totalChars += excerptChars
 	}
@@ -1348,6 +1411,16 @@ func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*
 }
 
 // buildMessagesWithContext injects RAG context into the message list.
+// sourceStratum returns the authority lens label for a RAG source (A-1 multi-lens),
+// or "" for the baseline (the user's own current capture). Validity (superseded /
+// contested) takes precedence over tier, so a stale or contested item is never shown
+// as authoritative.
+func sourceStratum(s RAGSource) string {
+	return retrieval.StratumLabel(
+		retrieval.AuthorityTier(s.Tier), retrieval.Validity(s.Validity), retrieval.OwnerOrigin(s.OwnerOrigin),
+	)
+}
+
 func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragContext *RAGContext) []llm.Message {
 	if len(ragContext.Sources) == 0 {
 		return messages
@@ -1373,12 +1446,16 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 		if source.Date != "" {
 			header += " (date : " + source.Date + ")"
 		}
+		if tag := sourceStratum(source); tag != "" {
+			header += " [" + tag + "]"
+		}
 		contextBuilder.WriteString(header + "\n")
 		contextBuilder.WriteString(source.Excerpt)
 		contextBuilder.WriteString("\n\n")
 	}
 
 	contextBuilder.WriteString("---\nCite les sources avec [Document N], [Email N] ou [Note N] quand tu utilises ces informations.")
+	contextBuilder.WriteString("\nEach source is tagged by authority: a decision you confirmed [your decision] outranks your own captures, which outrank [external] third-party sources; [superseded] and [contested] sources are weaker. When tagged sources disagree on the same point, keep them distinct — state what you decided, what external sources assert, and what is unconfirmed — and attribute each to its tag rather than blending them into one answer.")
 
 	contextString := contextBuilder.String()
 

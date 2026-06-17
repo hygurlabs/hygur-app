@@ -136,6 +136,16 @@ type RetrievalConfig struct {
 	// to the EntitySearch result set. Below it, fallback or abstention applies.
 	// Default 0.5.
 	EntitySearchMinScore float64 `mapstructure:"entity_search_min_score" yaml:"entity_search_min_score,omitempty"`
+
+	// AuthorityRerank enables the M2 authority re-score (boost confirmed+current,
+	// demote superseded, surface conflicts). Default true; a no-op until decision/
+	// conflict records exist. Kill-switch: HYGUR_RETRIEVAL_AUTHORITY_RERANK=false.
+	AuthorityRerank bool `mapstructure:"authority_rerank" yaml:"authority_rerank,omitempty"`
+
+	// AttentionRerank enables the P-2 attention re-score (small boost for often/
+	// recently-cited items, from the item_access bus). Default true; a no-op until
+	// the bus has data. Kill-switch: HYGUR_RETRIEVAL_ATTENTION_RERANK=false.
+	AttentionRerank bool `mapstructure:"attention_rerank" yaml:"attention_rerank,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.

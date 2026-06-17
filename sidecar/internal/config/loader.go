@@ -150,6 +150,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("retrieval.use_judge", false)
 	v.SetDefault("retrieval.entity_search_fallback", true)
 	v.SetDefault("retrieval.entity_search_min_score", 0.5)
+	v.SetDefault("retrieval.authority_rerank", true)
+	v.SetDefault("retrieval.attention_rerank", true)
 
 	// DailyBrief defaults — opt-in. 48 h window so the brief catches the last
 	// two days of activity rather than collapsing on a quiet 24 h.

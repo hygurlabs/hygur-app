@@ -113,6 +113,12 @@ type SearchKnowledgeBaseSource struct {
 	// the content instead of guessing from the received date.
 	DueDates []string `json:"due_dates,omitempty"`
 	Amounts  []string `json:"amounts,omitempty"`
+	// Stratum is the authority lens (A-1 multi-lens): "your decision" / "external" /
+	// "superseded" / "contested" / "proposed decision", or "" for the user's own
+	// current capture. Lets the LLM attribute each source to its lens on THIS path
+	// too (the fast-path labels via buildMessagesWithContext); the attribution
+	// principle lives in the base system prompt.
+	Stratum string `json:"stratum,omitempty"`
 }
 
 // metaStrings coerces a metadata value (stored as a JSON array, so it comes back
@@ -242,6 +248,7 @@ func (t *SearchKnowledgeBaseTool) Execute(ctx context.Context, args json.RawMess
 			Date:        r.Date,
 			DueDates:    metaStrings(r.Metadata, "extracted_due_dates"),
 			Amounts:     metaStrings(r.Metadata, "extracted_amounts"),
+			Stratum:     retrieval.StratumLabel(r.Tier, r.Validity, r.OwnerOrigin),
 		})
 		totalChars += len(excerpt)
 	}

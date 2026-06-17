@@ -268,3 +268,14 @@ type LabelLister interface {
 	// ListLabels returns all available labels/folders.
 	ListLabels(ctx context.Context) ([]Label, error)
 }
+
+// MessageIDLister is an optional interface for connectors that can cheaply
+// enumerate every message currently in a mailbox by Message-ID (envelope-only,
+// no bodies). It is the authoritative "present" set used by deletion
+// reconciliation. serverCount is the folder's reported message count; the caller
+// compares it against len(ids) as an integrity check and treats any error as
+// "enumeration incomplete — do not reconcile" (fail-safe: absence is never
+// inferred from a partial listing).
+type MessageIDLister interface {
+	ListMessageIDs(ctx context.Context, mailbox string) (ids []string, serverCount int, err error)
+}

@@ -44,25 +44,38 @@ func writeResultsTable(w io.Writer, sr strategyReport) {
 	}
 
 	if includeJudge {
-		fmt.Fprintln(w, "| # | Source | Score | Judge | Title | Excerpt |")
-		fmt.Fprintln(w, "|---|--------|-------|-------|-------|---------|")
+		fmt.Fprintln(w, "| # | Source | Auth | Score | Judge | Title | Excerpt |")
+		fmt.Fprintln(w, "|---|--------|------|-------|-------|-------|---------|")
 	} else {
-		fmt.Fprintln(w, "| # | Source | Score | Title | Excerpt |")
-		fmt.Fprintln(w, "|---|--------|-------|-------|---------|")
+		fmt.Fprintln(w, "| # | Source | Auth | Score | Title | Excerpt |")
+		fmt.Fprintln(w, "|---|--------|------|-------|-------|---------|")
 	}
 
 	for _, r := range sr.Results {
 		title := mdEscape(r.Title)
 		excerpt := mdEscape(r.Excerpt)
+		auth := authCell(r.Tier, r.Validity)
 		if includeJudge {
 			judgeCell := fmt.Sprintf("%d — %s", r.JudgeScore, mdEscape(r.JudgeNote))
-			fmt.Fprintf(w, "| %d | %s | %.3f | %s | %s | %s |\n",
-				r.Rank, r.SourceType, r.Score, judgeCell, title, excerpt)
+			fmt.Fprintf(w, "| %d | %s | %s | %.3f | %s | %s | %s |\n",
+				r.Rank, r.SourceType, auth, r.Score, judgeCell, title, excerpt)
 		} else {
-			fmt.Fprintf(w, "| %d | %s | %.3f | %s | %s |\n",
-				r.Rank, r.SourceType, r.Score, title, excerpt)
+			fmt.Fprintf(w, "| %d | %s | %s | %.3f | %s | %s |\n",
+				r.Rank, r.SourceType, auth, r.Score, title, excerpt)
 		}
 	}
+}
+
+// authCell renders the authority tag compactly: tier alone when current,
+// "tier/validity" otherwise, "—" when unannotated (e.g. judge/intent strategies).
+func authCell(tier, validity string) string {
+	if tier == "" {
+		return "—"
+	}
+	if validity == "" || validity == "current" {
+		return tier
+	}
+	return tier + "/" + validity
 }
 
 // mdEscape replaces characters that would break markdown table rendering.

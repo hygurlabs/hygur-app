@@ -147,16 +147,31 @@ export interface Decision {
   tags: Tag[];
   created_at: string;
   updated_at: string;
+  // Angle A-2a — set when this decision updates an earlier one (same matter decided
+  // again with a divergent value). updates_statement is the predecessor's statement.
+  updates_decision_id?: string;
+  updates_statement?: string;
 }
 
 /** The daily composed "state of your world" (GET /digest) — assembles already-
  *  computed signals: where things stand, open contradictions, decisions to
  *  confirm, tasks due soon. */
+/** One "Coming up" entry (Conséquence/prospection): a recurring obligation's next
+ *  occurrence, or a standing decision's future-dated horizon. */
+export interface Upcoming {
+  kind: string; // "recurrence" | "decision"
+  title: string;
+  at: string; // RFC3339 — the upcoming date
+  detail: string; // "every 31d" | "decision"
+}
+
 export interface Digest {
   synopsis: string;
+  positions?: string; // Angle A-2b — grounded summary of the user's standing positions
   contradictions: ReconciledConflict[];
   proposed_decisions: Decision[];
   due_tasks: Task[];
+  upcoming?: Upcoming[];
 }
 
 /** One cited side of a reconciled claim conflict (W6 REDUCE). */

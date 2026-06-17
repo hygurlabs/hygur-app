@@ -395,6 +395,32 @@ CREATE TABLE IF NOT EXISTS reconcile_verdicts (
 );
 `,
 	},
+	// Migration 22 adds the recycle bin for deletion reconciliation. When a synced
+	// source (e.g. mail) reports an item is gone from the server, we MOVE its
+	// knowledge_items row here then delete it — the cascade removes chunks/sections/
+	// vectors/FTS/claims/tags, so the item vanishes from EVERY read surface at once
+	// (no per-query "absent" filter to forget), while staying restorable. A grace
+	// period (miss_count) defers the physical purge so a transient bad enumeration
+	// can't destroy data; a reappearing item is re-ingested and its row dropped.
+	{
+		Version: 22,
+		Name:    "kb_recycle",
+		SQL: `
+CREATE TABLE IF NOT EXISTS kb_recycle (
+    content_id      TEXT PRIMARY KEY,
+    source_type     TEXT NOT NULL,
+    source_path     TEXT,
+    title           TEXT NOT NULL DEFAULT '',
+    normalized_text TEXT NOT NULL DEFAULT '',
+    metadata        TEXT,
+    source_ref      TEXT NOT NULL DEFAULT '',
+    item_created_at DATETIME,
+    removed_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    miss_count      INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_kb_recycle_source_ref ON kb_recycle(source_ref);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

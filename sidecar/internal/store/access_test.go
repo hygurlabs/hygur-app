@@ -49,4 +49,24 @@ func TestBumpItemAccessAndStats(t *testing.T) {
 	if sz, err := db.DBSizeBytes(ctx); err != nil || sz <= 0 {
 		t.Errorf("DBSizeBytes = %d (err %v)", sz, err)
 	}
+
+	// ItemAccessByIDs: the P-2 reader sees what BumpItemAccess wrote, and absent ids
+	// are simply not in the map.
+	got, err := db.ItemAccessByIDs(ctx, []string{"mail:a", "note:b", "never:z"})
+	if err != nil {
+		t.Fatalf("ItemAccessByIDs: %v", err)
+	}
+	if got["mail:a"].HitCount != 2 || got["note:b"].HitCount != 1 {
+		t.Errorf("read-back hit counts wrong: %+v", got)
+	}
+	if _, ok := got["never:z"]; ok {
+		t.Error("an un-accessed id must be absent from the map")
+	}
+	if got["mail:a"].LastAccessedAt.IsZero() {
+		t.Error("LastAccessedAt should be parsed, not zero")
+	}
+	// Empty input → empty map, no error.
+	if m, err := db.ItemAccessByIDs(ctx, nil); err != nil || len(m) != 0 {
+		t.Errorf("empty ids → empty map, got %+v (err %v)", m, err)
+	}
 }

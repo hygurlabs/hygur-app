@@ -3,13 +3,16 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/extract"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -83,8 +86,20 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 	if err != nil {
 		return nil, 0, err
 	}
-	candidates := contradict.DetectClaimConflicts(items, contradictionSince())
+	since := contradictionSince()
+	captureCandidates := contradict.DetectClaimConflicts(items, since)
+	// G4: anchor standing decisions as cross-thread (entity, attribute) candidates so
+	// a fresh capture contradicting a confirmed decision surfaces through the SAME
+	// reconcile pipeline (and a "supersedes" verdict means the decision is overtaken).
+	decItems, decidedAt := d.standingDecisionItems(ctx, projectID)
+	decisionConflicts := contradict.DetectDecisionConflicts(decItems, decidedAt, items, since)
+	candidates := append(captureCandidates, decisionConflicts...)
 	reconciled := d.reconcileCached(ctx, candidates)
+	// Observability: one structured line per scan — greppable to see if the scan ran,
+	// what it found (incl. G4 decision candidates), and how many survived reconcile.
+	d.logger.Info().Str("scope", projectID).Int("items", len(items)).
+		Int("capture_candidates", len(captureCandidates)).Int("decision_candidates", len(decisionConflicts)).
+		Int("reconciled", len(reconciled)).Msg("contradiction scan")
 	if reconciled == nil {
 		reconciled = []contradict.ReconciledConflict{}
 	}
@@ -152,4 +167,117 @@ func (d *DailyBrief) contradictionItems(ctx context.Context, projectID string) (
 		}
 	}
 	return items, nil
+}
+
+// standingDecisionItems loads the standing decisions in scope as knowledge_items,
+// ensuring each carries extracted claims (extracted once on the small indexing
+// model, then cached in metadata), plus a content_id → decided-on map. These feed
+// DetectDecisionConflicts (G4). Fail-open: a decision that can't be loaded or
+// extracted is skipped. projectID "" = all standing decisions.
+func (d *DailyBrief) standingDecisionItems(ctx context.Context, projectID string) ([]*store.KnowledgeItem, map[string]string) {
+	decs, err := d.store.ListDecisions(ctx, projectID, store.DecisionStanding)
+	if err != nil || len(decs) == 0 {
+		return nil, nil
+	}
+	idx := d.indexing
+	if idx == nil {
+		idx = d.llm // the small model is preferred but not required
+	}
+	items := make([]*store.KnowledgeItem, 0, len(decs))
+	decidedAt := make(map[string]string, len(decs))
+	var extracted, failed int
+	for _, dec := range decs {
+		it, gerr := d.store.GetKnowledgeItem(ctx, dec.ID)
+		if gerr != nil || it == nil {
+			continue
+		}
+		decidedAt[it.ContentID] = dec.DecidedOn
+		// Ensure the decision's own claim is extracted + cached (off the chat budget).
+		if !hasExtractedClaims(it.Metadata) && idx != nil {
+			text := strings.TrimSpace(it.Title + "\n" + it.NormalizedText)
+			claims, eerr := contradict.ExtractClaims(ctx, idx, text)
+			switch {
+			case eerr != nil:
+				failed++
+				d.logger.Warn().Err(eerr).Str("decision", it.ContentID).Msg("G4 decision-claim extraction failed (fail-open)")
+			case len(claims) > 0:
+				if it.Metadata == nil {
+					it.Metadata = map[string]any{}
+				}
+				it.Metadata["extracted_claims"] = claims
+				if uerr := d.store.UpdateKnowledgeItem(ctx, it); uerr != nil {
+					d.logger.Debug().Err(uerr).Str("decision", it.ContentID).Msg("persist decision claims")
+				}
+				extracted++
+			}
+		}
+		items = append(items, it)
+	}
+	if extracted+failed > 0 {
+		d.logger.Info().Int("standing", len(decs)).Int("extracted", extracted).Int("failed", failed).Msg("G4 decision-claim extraction")
+	}
+	return items, decidedAt
+}
+
+func hasExtractedClaims(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	_, ok := m["extracted_claims"]
+	return ok
+}
+
+// Upcoming is one entry in the prospection surface ("Coming up"): a recurring
+// obligation's next occurrence, or a standing decision's future-dated horizon.
+type Upcoming struct {
+	Kind   string `json:"kind"`   // "recurrence" | "decision"
+	Title  string `json:"title"`
+	At     string `json:"at"`     // RFC3339 — the upcoming date
+	Detail string `json:"detail"` // "every 31d" | "decision"
+}
+
+// UpcomingItems is the prospection surface (Conséquence): recurring subjects whose
+// next occurrence is within ~withinDays (not >1w overdue), plus standing decisions
+// carrying a future-dated obligation in their text. Fully deterministic (no LLM,
+// no claim extraction) — sorted soonest-first. Nil-safe.
+func (d *DailyBrief) UpcomingItems(ctx context.Context, withinDays int) []Upcoming {
+	if d == nil || d.store == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	from, horizon := now.AddDate(0, 0, -7), now.AddDate(0, 0, withinDays)
+	inWindow := func(t time.Time) bool { return !t.Before(from) && !t.After(horizon) }
+
+	var out []Upcoming
+
+	// Recurring obligations (mail + notes).
+	if items, err := d.contradictionItems(ctx, ""); err == nil {
+		for _, r := range contradict.DetectRecurrence(items, 3) {
+			if t, perr := time.Parse(time.RFC3339, r.NextAt); perr == nil && inWindow(t) {
+				out = append(out, Upcoming{Kind: "recurrence", Title: r.Title, At: r.NextAt, Detail: fmt.Sprintf("every %dd", r.PeriodDays)})
+			}
+		}
+	}
+
+	// Decision horizons: the soonest future date in each standing decision's text.
+	if decs, err := d.store.ListDecisions(ctx, "", store.DecisionStanding); err == nil {
+		for _, dec := range decs {
+			var soonest time.Time
+			for _, ds := range extract.ExtractDueDates(dec.Statement + "\n" + dec.Rationale) {
+				t, ok := contradict.ParseDueDate(ds)
+				if !ok || !inWindow(t) {
+					continue
+				}
+				if soonest.IsZero() || t.Before(soonest) {
+					soonest = t
+				}
+			}
+			if !soonest.IsZero() {
+				out = append(out, Upcoming{Kind: "decision", Title: dec.Statement, At: soonest.Format(time.RFC3339), Detail: "decision"})
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].At < out[j].At })
+	return out
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/scheduler"
@@ -52,6 +53,11 @@ type DecisionResponse struct {
 	Tags       []TagResponse `json:"tags"`
 	CreatedAt  string        `json:"created_at"`
 	UpdatedAt  string        `json:"updated_at"`
+	// Angle A-2a — self-model: set when this decision updates an earlier one (the same
+	// matter decided again with a divergent value). UpdatesStatement is the predecessor's
+	// statement, for a "updates your earlier decision: ‹…›" marker. Computed read-side.
+	UpdatesDecisionID string `json:"updates_decision_id,omitempty"`
+	UpdatesStatement  string `json:"updates_statement,omitempty"`
 }
 
 func (h *DecisionHandler) toResponse(ctx context.Context, d *store.Decision) DecisionResponse {
@@ -86,11 +92,61 @@ func (h *DecisionHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list decisions")
 		return
 	}
+	evo := h.decisionEvolution(r.Context()) // A-2a: which decision updates an earlier one
 	out := make([]DecisionResponse, 0, len(decisions))
 	for _, d := range decisions {
-		out = append(out, h.toResponse(r.Context(), d))
+		resp := h.toResponse(r.Context(), d)
+		if pred, ok := evo[d.ID]; ok {
+			resp.UpdatesDecisionID = pred.id
+			resp.UpdatesStatement = pred.statement
+		}
+		out = append(out, resp)
 	}
 	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"decisions": out})
+}
+
+// predecessorRef is the earlier decision a successor updates (id + statement).
+type predecessorRef struct {
+	id        string
+	statement string
+}
+
+// decisionEvolution computes, across ALL standing decisions, which one updates an
+// earlier one — the same (entity, attribute) decided again with a divergent value
+// (Angle A-2a). Read-side and LLM-free: it reads the claims G4 has already cached on
+// each decision; a decision without cached claims simply doesn't participate, and the
+// markers warm up after the nightly contradiction scan. Returns successor id →
+// predecessor. Best-effort: any error yields no markers (the list still renders).
+func (h *DecisionHandler) decisionEvolution(ctx context.Context) map[string]predecessorRef {
+	decs, err := h.store.ListDecisions(ctx, "", store.DecisionStanding)
+	if err != nil || len(decs) < 2 {
+		return nil
+	}
+	items := make([]*store.KnowledgeItem, 0, len(decs))
+	decidedAt := make(map[string]string, len(decs))
+	statement := make(map[string]string, len(decs))
+	for _, d := range decs {
+		it, gerr := h.store.GetKnowledgeItem(ctx, d.ID)
+		if gerr != nil || it == nil {
+			continue
+		}
+		at := d.DecidedOn
+		if at == "" {
+			at = d.CreatedAt // fall back so a dateless decision still orders
+		}
+		items = append(items, it)
+		decidedAt[it.ContentID] = at
+		statement[d.ID] = d.Statement
+	}
+	evos := contradict.DetectDecisionEvolution(items, decidedAt)
+	if len(evos) == 0 {
+		return nil
+	}
+	out := make(map[string]predecessorRef, len(evos))
+	for _, e := range evos {
+		out[e.SuccessorID] = predecessorRef{id: e.PredecessorID, statement: statement[e.PredecessorID]}
+	}
+	return out
 }
 
 // Get handles GET /decisions/{id}

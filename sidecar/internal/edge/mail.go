@@ -239,6 +239,89 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 	return st, state, nil
 }
 
+// Reconcile builds the authoritative set of message refs currently present on the
+// server for this provider — the input to center-side deletion reconciliation. It
+// enumerates every non-spam mailbox by Message-ID (envelope-only, no bodies) and,
+// for a catch-all mailbox that bundles spam (Proton "All Mail"), subtracts the
+// spam refs so a message marked spam AFTER it was indexed is treated as absent.
+//
+// complete is false (refs nil) when the connector can't enumerate by Message-ID,
+// or ANY mailbox listing fails its integrity check. On an incomplete set the
+// caller MUST NOT reconcile — absence is never inferred from a partial listing.
+func (ms *MailSync) Reconcile(ctx context.Context, conn mail.MailConnector, mailboxes []string) (refs []string, complete bool) {
+	lister, ok := conn.(mail.MessageIDLister)
+	if !ok {
+		return nil, false // connector can't enumerate cheaply → skip, fail-safe
+	}
+	if len(mailboxes) == 0 {
+		mailboxes = []string{""} // provider default (all)
+	}
+	seen := map[string]struct{}{}
+	for _, mbox := range mailboxes {
+		if isSpamMailbox(mbox) {
+			continue // never treat a spam folder as "present"
+		}
+		ids, _, err := lister.ListMessageIDs(ctx, mbox)
+		if err != nil {
+			return nil, false // integrity gate: a failed/partial listing aborts the pass
+		}
+		for _, id := range ids {
+			if id != "" {
+				seen[ms.provider+":"+id] = struct{}{}
+			}
+		}
+	}
+	// Catch-all bundles spam (Proton "All Mail"); subtract spam refs so a now-spam
+	// message reads as absent and gets reconciled out.
+	for ref := range ms.spamMessageRefs(ctx, lister, mailboxes) {
+		delete(seen, ref)
+	}
+	refs = make([]string, 0, len(seen))
+	for r := range seen {
+		refs = append(refs, r)
+	}
+	return refs, true
+}
+
+// spamMessageRefs gathers the Spam/Junk message refs ONLY when a catch-all mailbox
+// is being reconciled (Proton surfaces spam inside "All Mail"). Mirrors the
+// ingest-time spam guard (spamThreadIDs) but at message granularity. Fail-open: a
+// missing/mis-named spam folder yields an empty set, so good mail is never dropped.
+func (ms *MailSync) spamMessageRefs(ctx context.Context, lister mail.MessageIDLister, mailboxes []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	catchAll := false
+	for _, mb := range mailboxes {
+		if isCatchAllMailbox(mb) {
+			catchAll = true
+			break
+		}
+	}
+	if !catchAll {
+		return out
+	}
+	names := spamFolderNames
+	if env := strings.TrimSpace(os.Getenv("HYGUR_SPAM_FOLDERS")); env != "" {
+		names = nil
+		for _, p := range strings.Split(env, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				names = append(names, p)
+			}
+		}
+	}
+	for _, name := range names {
+		ids, _, err := lister.ListMessageIDs(ctx, name)
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			if id != "" {
+				out[ms.provider+":"+id] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
 // messageText assembles the plain text the center will index: subject + sender +
 // date headers, then the normalized body (plain text, or stripped HTML for
 // HTML-only mail). The subject is always included so a mail is findable by it

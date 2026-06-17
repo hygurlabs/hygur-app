@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookOpen, CheckSquare, Gavel, Scale } from "lucide-react";
+import { BookOpen, CalendarClock, CheckSquare, Compass, Gavel, Scale } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
 import { EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
@@ -15,11 +15,18 @@ export function Digest() {
   const { data, isLoading } = useQuery({ queryKey: ["digest"], queryFn: () => api.digest() });
 
   const synopsis = data?.synopsis?.trim() ?? "";
+  const positions = data?.positions?.trim() ?? "";
   const contradictions = data?.contradictions ?? [];
   const decisions = data?.proposed_decisions ?? [];
   const tasks = data?.due_tasks ?? [];
+  const upcoming = data?.upcoming ?? [];
   const nothing =
-    !synopsis && contradictions.length === 0 && decisions.length === 0 && tasks.length === 0;
+    !synopsis &&
+    !positions &&
+    contradictions.length === 0 &&
+    decisions.length === 0 &&
+    tasks.length === 0 &&
+    upcoming.length === 0;
 
   return (
     <Page>
@@ -42,6 +49,32 @@ export function Digest() {
               <div className="prose-answer font-display text-[15px] leading-[1.7] text-text [&_p]:mb-2">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{synopsis}</ReactMarkdown>
               </div>
+            </Section>
+          )}
+
+          {positions && (
+            <Section icon={Compass} title="Where you stand" to="/decisions">
+              <div className="prose-answer font-display text-[15px] leading-[1.7] text-text [&_p]:mb-2">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{positions}</ReactMarkdown>
+              </div>
+            </Section>
+          )}
+
+          {upcoming.length > 0 && (
+            <Section icon={CalendarClock} title={`Coming up · ${upcoming.length}`}>
+              <ul className="flex flex-col gap-2">
+                {upcoming.map((u, i) => (
+                  <li
+                    key={`${u.title}-${u.at}-${i}`}
+                    className="flex items-baseline justify-between gap-3 text-[14px]"
+                  >
+                    <span className="text-text">{u.title}</span>
+                    <span className="tnum shrink-0 text-[12px] text-muted">
+                      ~{fmtDate(u.at)} · {u.detail}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </Section>
           )}
 
@@ -117,7 +150,7 @@ function Section({
 }: {
   icon: typeof BookOpen;
   title: string;
-  to: string;
+  to?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -127,9 +160,11 @@ function Section({
           <Icon size={14} strokeWidth={1.9} />
           {title}
         </h2>
-        <Link to={to} className="text-[12.5px] text-accent transition-colors hover:underline">
-          Open
-        </Link>
+        {to && (
+          <Link to={to} className="text-[12.5px] text-accent transition-colors hover:underline">
+            Open
+          </Link>
+        )}
       </div>
       {children}
     </section>

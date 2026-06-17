@@ -74,12 +74,15 @@ func main() {
 	}
 
 	searcher := retrieval.NewUnifiedSearcher(db, llmClient)
+	authoritySearcher := retrieval.NewUnifiedSearcher(db, llmClient)
+	authoritySearcher.SetAuthorityRerank(true)
 	r := &runner{
-		searcher:   searcher,
-		llm:        llmClient,
-		db:         db,
-		topK:       *topK,
-		strategies: strategies,
+		searcher:          searcher,
+		authoritySearcher: authoritySearcher,
+		llm:               llmClient,
+		db:                db,
+		topK:              *topK,
+		strategies:        strategies,
 	}
 
 	reports := make([]queryReport, 0, len(queries))
@@ -121,10 +124,10 @@ func parseStrategies(list string) ([]string, error) {
 			continue
 		}
 		switch p {
-		case "baseline", "judge", "intent":
+		case "baseline", "judge", "intent", "authority":
 			out = append(out, p)
 		default:
-			return nil, fmt.Errorf("unknown strategy %q (supported: baseline, judge, intent)", p)
+			return nil, fmt.Errorf("unknown strategy %q (supported: baseline, judge, intent, authority)", p)
 		}
 	}
 	if len(out) == 0 {

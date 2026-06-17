@@ -27,6 +27,11 @@ type UnifiedResult struct {
 	Title      string         `json:"title"`
 	Date       string         `json:"date,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+	// Authority annotation (M1a) — deterministic tier/validity from the decision
+	// graph, set by annotateAuthority just before return. Empty when unannotated.
+	Tier        AuthorityTier `json:"tier,omitempty"`
+	Validity    Validity      `json:"validity,omitempty"`
+	OwnerOrigin OwnerOrigin   `json:"owner_origin,omitempty"` // owner vs external (Porto attribution)
 	// Mail-specific
 	MailFrom    string `json:"mail_from,omitempty"`
 	MailDate    string `json:"mail_date,omitempty"`
@@ -175,6 +180,28 @@ type UnifiedSearcher struct {
 	useJudge             bool
 	entitySearchFallback bool
 	entitySearchMinScore float64
+
+	// M2 authority re-score (off by default → annotate-only, no ranking change).
+	useAuthorityRerank bool
+	authorityWeights   AuthorityWeights
+
+	// P-2 attention re-score (off by default): a small boost for often/recently-used
+	// items, read from the item_access bus.
+	useAttentionRerank bool
+}
+
+// SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
+// items). Off by default; a no-op until the item_access bus has data.
+func (us *UnifiedSearcher) SetAttentionRerank(on bool) { us.useAttentionRerank = on }
+
+// SetAuthorityRerank enables the M2 authority re-score (boost what "fait foi",
+// demote the superseded loser, surface unresolved conflicts). Off by default so
+// existing callers keep pure-relevance order; uses DefaultAuthorityWeights.
+func (us *UnifiedSearcher) SetAuthorityRerank(on bool) {
+	us.useAuthorityRerank = on
+	if on && (us.authorityWeights == AuthorityWeights{}) {
+		us.authorityWeights = DefaultAuthorityWeights()
+	}
 }
 
 // NewUnifiedSearcher creates a new UnifiedSearcher instance.
@@ -207,6 +234,8 @@ type RetrievalOptions struct {
 	UseJudge             bool
 	EntitySearchFallback bool
 	EntitySearchMinScore float64
+	AuthorityRerank      bool // M2: re-score by authority (boost what "fait foi")
+	AttentionRerank      bool // P-2: re-score by attention (boost often/recently-used)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -219,6 +248,8 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	if opts.EntitySearchMinScore > 0 {
 		us.entitySearchMinScore = opts.EntitySearchMinScore
 	}
+	us.SetAuthorityRerank(opts.AuthorityRerank)
+	us.SetAttentionRerank(opts.AttentionRerank)
 }
 
 // Search performs a semantic search across knowledge base and mail.
@@ -423,7 +454,10 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	if searchKnowledge {
 		g.Go(func() error {
 			var err error
-			knowledgeTypes := []string{"file", "note", "markdown", "pdf", "txt", "docx"}
+			// Includes decisions so "ce qui fait foi" can actually surface (and be
+			// boosted by the M2 re-score); without it, decision items are never in
+			// the candidate pool. (task/event are still excluded — separate gap.)
+			knowledgeTypes := []string{"file", "note", "markdown", "pdf", "txt", "docx", store.SourceTypeDecision}
 			knowledgeVecResults, err = us.store.SearchChunksVecBySourceType(gCtx, embedding, fetchLimit, knowledgeTypes)
 			return err
 		})
@@ -771,6 +805,13 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 
 	// Re-sort by final score (scoring may have reordered results).
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+
+	// Authority: annotate (M1a/M1b) then re-score (M2) BEFORE TopK so a
+	// high-authority item can be promoted into the top-K, not merely reordered
+	// within it. The re-score is a no-op unless authority rerank is enabled.
+	us.annotateAuthority(ctx, results)
+	us.applyAuthorityRescore(results)
+	us.applyAttentionRescore(ctx, results) // P-2: attention nudges within the authority band
 
 	// Apply TopK after freshness re-ranking.
 	if len(results) > req.TopK {

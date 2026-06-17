@@ -78,6 +78,51 @@ func (c *Client) PushText(ctx context.Context, in IngestText) (string, error) {
 	return out.Status, nil
 }
 
+// ReconcileResult is the center's reconcile-pass outcome.
+type ReconcileResult struct {
+	Status   string `json:"status"`
+	Recycled int    `json:"recycled"`
+	Restored int    `json:"restored"`
+	Purged   int    `json:"purged"`
+}
+
+// Reconcile posts the authoritative set of message refs currently present on the
+// server for one provider; the center recycles KB items no longer present and
+// restores any that reappeared. complete attests the enumeration was whole — the
+// center only takes the destructive path when it is true. graceMisses defers the
+// physical purge (0 → server default).
+func (c *Client) Reconcile(ctx context.Context, provider string, seenRefs []string, complete bool, graceMisses int) (ReconcileResult, error) {
+	body, err := json.Marshal(map[string]any{
+		"provider":     provider,
+		"seen_refs":    seenRefs,
+		"complete":     complete,
+		"grace_misses": graceMisses,
+	})
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/knowledge/reconcile", bytes.NewReader(body))
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hygur-Token", c.token)
+	req.Header.Set("X-Hygur-API", apiVersion)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return ReconcileResult{}, fmt.Errorf("reconcile HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var out ReconcileResult
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out, nil
+}
+
 // Health checks the server is reachable + the token works at the unauthenticated
 // /health (cheap reachability probe before a sync).
 func (c *Client) Health(ctx context.Context) error {

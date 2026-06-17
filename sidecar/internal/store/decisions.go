@@ -26,6 +26,14 @@ type Decision struct {
 	UpdatedAt  string   `json:"updated_at"`
 }
 
+// Decision status values (decision_attrs.status). Canonical home — prefer these
+// over bare literals so the authority layer and the write-back agree on spelling.
+const (
+	DecisionProposed   = "proposed"   // detected by the nightly scan, awaiting confirmation (not yet authoritative)
+	DecisionStanding   = "standing"   // active, user-confirmed — "fait foi"
+	DecisionSuperseded = "superseded" // no longer holds
+)
+
 // DecisionDedupKey is the stable key that makes the nightly scan idempotent: the
 // same decision (same source item + same statement) is never re-proposed. Empty
 // for manually-logged decisions (no dedup).
@@ -56,6 +64,37 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(content_id) DO UPDATE SET status = excluded.status, decided_on = excluded.decided_on, source_refs = excluded.source_refs, updated_at = excluded.updated_at`,
 		contentID, status, decidedOn, string(refsJSON), dedupKey, now, now)
 	return err
+}
+
+// DecisionStatuses returns content_id → status for the given ids that carry a
+// decision_attrs row. Ids without a row (i.e. non-decision captures) are simply
+// absent from the map. Used by the authority layer to tag retrieval results in a
+// single batch query rather than N point lookups.
+func (d *DB) DecisionStatuses(ctx context.Context, contentIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(contentIDs))
+	if len(contentIDs) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(contentIDs))
+	args := make([]any, len(contentIDs))
+	for i, id := range contentIDs {
+		ph[i] = "?"
+		args[i] = id
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT content_id, status FROM decision_attrs WHERE content_id IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, st string
+		if err := rows.Scan(&cid, &st); err != nil {
+			return nil, err
+		}
+		out[cid] = st
+	}
+	return out, rows.Err()
 }
 
 // SetDecisionStatus updates only the status (proposed→standing on confirm,
