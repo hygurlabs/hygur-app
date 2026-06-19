@@ -158,6 +158,11 @@ type RetrievalConfig struct {
 	// the bus has data. Kill-switch: HYGUR_RETRIEVAL_ATTENTION_RERANK=false.
 	AttentionRerank bool `mapstructure:"attention_rerank" yaml:"attention_rerank,omitempty"`
 
+	// ImminenceRerank enables the P-2 imminence re-score (small boost for items tied
+	// to a soon-due recurring obligation). Default true; a no-op until an imminent-ids
+	// provider is wired and returns a non-empty set. Kill-switch: HYGUR_RETRIEVAL_IMMINENCE_RERANK=false.
+	ImminenceRerank bool `mapstructure:"imminence_rerank" yaml:"imminence_rerank,omitempty"`
+
 	// EntityIndex enables the brick-1 associative entity lens: EntitySearch also
 	// folds in items whose cached claims mention the queried entity (claim-grounded
 	// recall + precision) on top of the surface match. Default true; a no-op until

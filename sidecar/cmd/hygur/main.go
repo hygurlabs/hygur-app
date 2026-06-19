@@ -596,12 +596,13 @@ func main() {
 	// Create unified searcher for RAG
 	unifiedSearcher := retrieval.NewUnifiedSearcher(db, llmClient)
 	unifiedSearcher.SetRetrievalOptions(retrieval.RetrievalOptions{
-		UseLLMIntent:         cfg.Retrieval.UseLLMIntent,
-		UseJudge:             cfg.Retrieval.UseJudge,
-		EntitySearchFallback: cfg.Retrieval.EntitySearchFallback,
-		EntitySearchMinScore: cfg.Retrieval.EntitySearchMinScore,
+		UseLLMIntent:            cfg.Retrieval.UseLLMIntent,
+		UseJudge:                cfg.Retrieval.UseJudge,
+		EntitySearchFallback:    cfg.Retrieval.EntitySearchFallback,
+		EntitySearchMinScore:    cfg.Retrieval.EntitySearchMinScore,
 		AuthorityRerank:         cfg.Retrieval.AuthorityRerank,
 		AttentionRerank:         cfg.Retrieval.AttentionRerank,
+		ImminenceRerank:         cfg.Retrieval.ImminenceRerank,
 		EntityIndex:             cfg.Retrieval.EntityIndex,
 		EntitySynonymy:          cfg.Retrieval.EntitySynonymy,
 		EntitySynonymyThreshold: cfg.Retrieval.EntitySynonymyThreshold,
@@ -918,6 +919,11 @@ func main() {
 	// and "Brief this project" through it).
 	dailyBrief := scheduler.NewDailyBrief(db, llmClient, broker, cfg.DailyBrief, logger)
 	dailyBrief.SetIndexingClient(indexingClient) // G4 decision-claim extraction on the small model (nil-safe)
+	// P-2 imminence boost: feed the prospection scan (items tied to a soon-due
+	// recurring obligation) to retrieval, cached with a TTL inside the searcher.
+	unifiedSearcher.SetImminentIDsFunc(func(c context.Context) map[string]struct{} {
+		return dailyBrief.ImminentContentIDs(c, 14)
+	})
 	if cfg.DailyBrief.Enabled {
 		dailyBrief.Start(ctx)
 	}

@@ -298,3 +298,33 @@ func (d *DailyBrief) UpcomingItems(ctx context.Context, withinDays int) []Upcomi
 	sort.Slice(out, func(i, j int) bool { return out[i].At < out[j].At })
 	return out
 }
+
+// ImminentContentIDs returns the content_ids of items tied to an obligation due
+// within withinDays — the source items of recurring subjects whose next occurrence
+// is imminent. It is the provider for retrieval's imminence boost (Conséquence →
+// Précision): an item the user is about to need ranks a little higher. Deterministic
+// (no LLM), nil-safe; mirrors UpcomingItems' window but returns the underlying ids.
+func (d *DailyBrief) ImminentContentIDs(ctx context.Context, withinDays int) map[string]struct{} {
+	if d == nil || d.store == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	from, horizon := now.AddDate(0, 0, -7), now.AddDate(0, 0, withinDays)
+	items, err := d.contradictionItems(ctx, "")
+	if err != nil {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, r := range contradict.DetectRecurrence(items, 3) {
+		t, perr := time.Parse(time.RFC3339, r.NextAt)
+		if perr != nil || t.Before(from) || t.After(horizon) {
+			continue
+		}
+		for _, id := range r.SourceIDs {
+			if id != "" {
+				out[id] = struct{}{}
+			}
+		}
+	}
+	return out
+}

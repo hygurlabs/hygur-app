@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -189,6 +190,16 @@ type UnifiedSearcher struct {
 	// items, read from the item_access bus.
 	useAttentionRerank bool
 
+	// P-2 imminence re-score (off by default): a small boost for items tied to an
+	// obligation due very soon. The imminent content-id set is supplied by a provider
+	// (the prospection scan) and cached with a TTL so the scan never runs on the hot
+	// query path more than once per window.
+	useImminenceRerank bool
+	imminentFn         func(context.Context) map[string]struct{}
+	imminentMu         sync.Mutex
+	imminentCache      map[string]struct{}
+	imminentExpires    time.Time
+
 	// Brick 1 associative entity lens (off by default): EntitySearch also folds in
 	// items whose cached claims mention the queried entity. No-op until the
 	// entity_mentions index is populated.
@@ -204,6 +215,20 @@ type UnifiedSearcher struct {
 // SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
 // items). Off by default; a no-op until the item_access bus has data.
 func (us *UnifiedSearcher) SetAttentionRerank(on bool) { us.useAttentionRerank = on }
+
+// SetImminenceRerank enables the P-2 imminence re-score (boost items tied to a soon-due
+// obligation). Off by default; a no-op until an imminent-ids provider is wired and
+// returns a non-empty set.
+func (us *UnifiedSearcher) SetImminenceRerank(on bool) { us.useImminenceRerank = on }
+
+// SetImminentIDsFunc wires the provider that computes the set of content_ids tied to
+// an imminent obligation (the prospection scan). Its result is cached with a TTL.
+func (us *UnifiedSearcher) SetImminentIDsFunc(fn func(context.Context) map[string]struct{}) {
+	us.imminentMu.Lock()
+	us.imminentFn = fn
+	us.imminentCache = nil // force a refresh on next use
+	us.imminentMu.Unlock()
+}
 
 // SetAuthorityRerank enables the M2 authority re-score (boost what "fait foi",
 // demote the superseded loser, surface unresolved conflicts). Off by default so
@@ -241,12 +266,13 @@ func NewUnifiedSearcherWithDetector(s *store.DB, l *llm.Client, detector *intent
 // SetRetrievalOptions to install a non-default configuration after construction
 // (typically wired from config.RetrievalConfig in main.go).
 type RetrievalOptions struct {
-	UseLLMIntent         bool
-	UseJudge             bool
-	EntitySearchFallback bool
-	EntitySearchMinScore float64
+	UseLLMIntent            bool
+	UseJudge                bool
+	EntitySearchFallback    bool
+	EntitySearchMinScore    float64
 	AuthorityRerank         bool    // M2: re-score by authority (boost what "fait foi")
 	AttentionRerank         bool    // P-2: re-score by attention (boost often/recently-used)
+	ImminenceRerank         bool    // P-2: re-score by imminence (boost soon-due obligations)
 	EntityIndex             bool    // brick 1: associative entity lens in EntitySearch
 	EntitySynonymy          bool    // brick 2: embedding synonymy expansion
 	EntitySynonymyThreshold float64 // brick 2: min cosine (default 0.80 if <= 0)
@@ -264,6 +290,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	}
 	us.SetAuthorityRerank(opts.AuthorityRerank)
 	us.SetAttentionRerank(opts.AttentionRerank)
+	us.SetImminenceRerank(opts.ImminenceRerank)
 	us.useEntityIndex = opts.EntityIndex
 	us.useEntitySynonymy = opts.EntitySynonymy
 	us.entitySynonymyThreshold = opts.EntitySynonymyThreshold
@@ -842,6 +869,7 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	us.annotateAuthority(ctx, results)
 	us.applyAuthorityRescore(results)
 	us.applyAttentionRescore(ctx, results) // P-2: attention nudges within the authority band
+	us.applyImminenceRescore(ctx, results) // P-2: imminent obligations nudge within the band
 
 	// Apply TopK after freshness re-ranking.
 	if len(results) > req.TopK {
