@@ -134,6 +134,31 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
 		log.Printf("[ingest] claims metadata update failed for %s: %v", item.ContentID, uerr)
 	}
+	// Keep the associative entity index in step with the freshly-cached claims.
+	if rerr := i.store.ReplaceEntityMentions(ctx, item.ContentID, entityMentionsFromClaims(claims)); rerr != nil {
+		log.Printf("[ingest] entity-index sync failed for %s: %v", item.ContentID, rerr)
+	}
+}
+
+// entityMentionsFromClaims derives the distinct (entity, attribute) index rows
+// from an item's claims, normalizing with the same key the contradiction layer
+// uses so the retrieval read side matches. Claims with an empty entity are
+// skipped (nothing to look up on).
+func entityMentionsFromClaims(claims []contradict.Claim) []store.EntityMention {
+	out := make([]store.EntityMention, 0, len(claims))
+	for _, c := range claims {
+		norm := contradict.NormKey(c.Entity)
+		if norm == "" {
+			continue
+		}
+		out = append(out, store.EntityMention{
+			EntityNorm: norm,
+			EntityRaw:  c.Entity,
+			Attribute:  contradict.NormKey(c.Attribute),
+			AssertedAt: c.AssertedAt,
+		})
+	}
+	return out
 }
 
 // BackfillClaims extracts + caches claims across all eligible mail + notes,
@@ -184,5 +209,40 @@ func (i *Ingestor) BackfillClaims(ctx context.Context) (int, error) {
 		}(it)
 	}
 	wg.Wait()
+	return processed, nil
+}
+
+// BackfillEntityIndex (re)builds the entity_mentions index from the claims
+// already cached on each item — deterministic, no LLM. Run after BackfillClaims
+// (or any time) to populate the index for the existing corpus. Covers the item
+// kinds that carry claims (mail, notes, decisions). Idempotent (ReplaceEntityMentions
+// clears then re-inserts per item). Returns items scanned.
+func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
+	if i.store == nil {
+		return 0, nil
+	}
+	var processed int
+	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote, store.SourceTypeDecision) {
+		const batch = 500
+		for offset := 0; ; offset += batch {
+			page, err := i.store.ListKnowledgeItemsBySourceType(ctx, src, batch, offset)
+			if err != nil {
+				return processed, err
+			}
+			for _, it := range page {
+				if ctx.Err() != nil {
+					return processed, ctx.Err()
+				}
+				mentions := entityMentionsFromClaims(contradict.ClaimsFromMetadata(it.Metadata))
+				if rerr := i.store.ReplaceEntityMentions(ctx, it.ContentID, mentions); rerr != nil {
+					log.Printf("[ingest] entity-index backfill failed for %s: %v", it.ContentID, rerr)
+				}
+				processed++
+			}
+			if len(page) < batch {
+				break
+			}
+		}
+	}
 	return processed, nil
 }

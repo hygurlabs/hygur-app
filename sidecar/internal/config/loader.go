@@ -146,12 +146,18 @@ func setDefaults(v *viper.Viper) {
 	// Retrieval defaults
 	v.SetDefault("retrieval.temporal_scoring_mode", "additive")
 	v.SetDefault("retrieval.current_state_filter_days", 90)
-	v.SetDefault("retrieval.use_llm_intent", false)
+	// Public local-first edition: intent classifier ON by default so the associative
+	// entity lens works out-of-box. Runs on the user's own LLM, in parallel with the
+	// query embedding. Kill-switch: HYGUR_RETRIEVAL_USE_LLM_INTENT=false.
+	v.SetDefault("retrieval.use_llm_intent", true)
 	v.SetDefault("retrieval.use_judge", false)
 	v.SetDefault("retrieval.entity_search_fallback", true)
 	v.SetDefault("retrieval.entity_search_min_score", 0.5)
 	v.SetDefault("retrieval.authority_rerank", true)
 	v.SetDefault("retrieval.attention_rerank", true)
+	v.SetDefault("retrieval.entity_index", true)
+	v.SetDefault("retrieval.entity_synonymy", true)
+	v.SetDefault("retrieval.entity_synonymy_threshold", 0.60)
 
 	// DailyBrief defaults — opt-in. 48 h window so the brief catches the last
 	// two days of activity rather than collapsing on a quiet 24 h.

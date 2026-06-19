@@ -64,3 +64,59 @@ func (h *KnowledgeHandler) BackfillClaims(w http.ResponseWriter, r *http.Request
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
+
+// entityIndexInFlight guards the entity-index backfill (one run at a time).
+var entityIndexInFlight atomic.Bool
+
+// BackfillEntityIndex (re)builds the associative entity index from the claims
+// already cached on each item. POST /knowledge/backfill-entity-index. Deterministic
+// (no LLM); runs in the background and returns immediately. Run /knowledge/backfill-claims
+// first so items actually carry claims to index.
+func (h *KnowledgeHandler) BackfillEntityIndex(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if !entityIndexInFlight.CompareAndSwap(false, true) {
+		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer entityIndexInFlight.Store(false)
+		n, err := h.ingestor.BackfillEntityIndex(context.Background())
+		if err != nil {
+			h.logger.Error().Err(err).Int("scanned", n).Msg("entity-index backfill failed")
+			return
+		}
+		h.logger.Info().Int("scanned", n).Msg("entity-index backfill complete")
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+// entityVectorsInFlight guards the entity-vector backfill (one run at a time).
+var entityVectorsInFlight atomic.Bool
+
+// BackfillEntityVectors embeds distinct entity strings for the brick-2 synonymy
+// expansion. POST /knowledge/backfill-entity-vectors. Runs in the background
+// (uses the embedding endpoint); returns immediately. Run /knowledge/backfill-entity-index
+// first so there are entities to embed.
+func (h *KnowledgeHandler) BackfillEntityVectors(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if !entityVectorsInFlight.CompareAndSwap(false, true) {
+		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer entityVectorsInFlight.Store(false)
+		n, err := h.ingestor.BackfillEntityVectors(context.Background())
+		if err != nil {
+			h.logger.Error().Err(err).Int("embedded", n).Msg("entity-vector backfill failed")
+			return
+		}
+		h.logger.Info().Int("embedded", n).Msg("entity-vector backfill complete")
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}

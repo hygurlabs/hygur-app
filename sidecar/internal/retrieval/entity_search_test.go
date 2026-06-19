@@ -194,6 +194,157 @@ func TestEntitySearch_FocusScope_FiltersOut(t *testing.T) {
 	}
 }
 
+// TestEntitySearch_EntityIndexUnion_RecallsClaimGroundedItem — an item whose
+// title/body never mention the entity, but whose cached claims do (entity_mentions),
+// is recalled ONLY when the entity lens is on. Proves the associative recall and
+// that it's gated by the flag (no regression when off).
+func TestEntitySearch_EntityIndexUnion_RecallsClaimGroundedItem(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// "Acme" appears nowhere in the text — only in the item's claims.
+	insertItem(t, db, "doc-claimed", "Facture mensuelle", "Paiement reçu pour la prestation.", nil)
+	if err := db.ReplaceEntityMentions(ctx, "doc-claimed", []store.EntityMention{
+		{EntityNorm: "acme", EntityRaw: "Acme SARL", Attribute: "vendor", AssertedAt: "2026-06-01T00:00:00Z"},
+	}); err != nil {
+		t.Fatalf("seed index: %v", err)
+	}
+
+	intent := &QueryIntent{Category: IntentFactualEntity, Entity: "Acme", Attribute: "organization"}
+
+	off, err := EntitySearch(ctx, db, intent, EntitySearchOptions{})
+	if err != nil {
+		t.Fatalf("off: %v", err)
+	}
+	for _, r := range off {
+		if r.ContentID == "doc-claimed" {
+			t.Fatalf("doc-claimed must NOT surface with the lens off (surface match misses it)")
+		}
+	}
+
+	on, err := EntitySearch(ctx, db, intent, EntitySearchOptions{UseEntityIndex: true})
+	if err != nil {
+		t.Fatalf("on: %v", err)
+	}
+	found := false
+	for _, r := range on {
+		if r.ContentID == "doc-claimed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("doc-claimed must be recalled by the entity index when the lens is on")
+	}
+}
+
+// TestEntitySearch_NoRegression_VATAmount — the ×1.3 attribute boost still selects
+// the amount-bearing doc as top result with the entity lens ON, even when the OTHER
+// doc is claim-grounded for the same entity. The union must not displace existing
+// factual lookups ("dernière facture TVA avec son montant").
+func TestEntitySearch_NoRegression_VATAmount(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	insertItem(t, db, "doc-with-amount", "Facture Stripe", "Paiement Stripe reçu, TVA incluse.",
+		map[string]any{"extracted_amounts": []string{"42.00 EUR"}})
+	insertItem(t, db, "doc-without-amount", "Mention Stripe", "On utilise Stripe.", nil)
+
+	// Adversarial: the NON-amount doc is the one carrying a claim about Stripe.
+	if err := db.ReplaceEntityMentions(ctx, "doc-without-amount", []store.EntityMention{
+		{EntityNorm: "stripe", EntityRaw: "Stripe", Attribute: "mention"},
+	}); err != nil {
+		t.Fatalf("seed index: %v", err)
+	}
+
+	intent := &QueryIntent{Category: IntentFactualEntity, Entity: "Stripe", Attribute: "amount"}
+	results, err := EntitySearch(ctx, db, intent, EntitySearchOptions{UseEntityIndex: true})
+	if err != nil {
+		t.Fatalf("EntitySearch: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected 2 hits, got %d", len(results))
+	}
+	if results[0].ContentID != "doc-with-amount" {
+		t.Errorf("top = %q, want doc-with-amount (amount boost must survive the entity lens)", results[0].ContentID)
+	}
+}
+
+// TestEntitySearch_NoRegression_NationalNumber — same guard for the
+// national_number attribute (mapped to extracted_phones): the doc carrying the
+// number stays on top with the entity lens on.
+func TestEntitySearch_NoRegression_NationalNumber(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	insertItem(t, db, "doc-with-number", "Dossier Jean", "Coordonnées de Jean.",
+		map[string]any{"extracted_phones": []string{"85.07.30-123.45"}})
+	insertItem(t, db, "doc-without-number", "Note Jean", "Réunion avec Jean.", nil)
+
+	intent := &QueryIntent{Category: IntentFactualEntity, Entity: "Jean", Attribute: "national_number"}
+	results, err := EntitySearch(ctx, db, intent, EntitySearchOptions{UseEntityIndex: true})
+	if err != nil {
+		t.Fatalf("EntitySearch: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected 2 hits, got %d", len(results))
+	}
+	if results[0].ContentID != "doc-with-number" {
+		t.Errorf("top = %q, want doc-with-number (national_number boost must survive the lens)", results[0].ContentID)
+	}
+}
+
+// TestEntitySearch_SynonymyExpansion_RecallsViaProvidedNorms — brick 2 plumbing:
+// an item whose claims mention a SYNONYM of the queried entity (never the entity
+// itself, in text or claims) is recalled only when that synonym norm is folded in
+// via EntityNorms (as the embedding expansion does). The cosine→norms step itself
+// is unit-tested in store; here we prove the lookup honors the expanded set.
+func TestEntitySearch_SynonymyExpansion_RecallsViaProvidedNorms(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	insertItem(t, db, "doc-prestataire", "Note interne", "Le prestataire a livré le matériel.", nil)
+	if err := db.ReplaceEntityMentions(ctx, "doc-prestataire", []store.EntityMention{
+		{EntityNorm: "prestataire", EntityRaw: "le prestataire", Attribute: "vendor"},
+	}); err != nil {
+		t.Fatalf("seed index: %v", err)
+	}
+
+	intent := &QueryIntent{Category: IntentFactualEntity, Entity: "Acme", Attribute: "organization"}
+
+	// Exact-norm lookup ("acme") misses it — neither text nor claims say "Acme".
+	base, err := EntitySearch(ctx, db, intent, EntitySearchOptions{UseEntityIndex: true})
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	for _, r := range base {
+		if r.ContentID == "doc-prestataire" {
+			t.Fatalf("doc-prestataire must NOT surface without the synonym norm")
+		}
+	}
+
+	// With the synonym norm injected (as brick 2 would after cosine expansion).
+	withSyn, err := EntitySearch(ctx, db, intent, EntitySearchOptions{
+		UseEntityIndex: true,
+		EntityNorms:    []string{"prestataire"},
+	})
+	if err != nil {
+		t.Fatalf("withSyn: %v", err)
+	}
+	found := false
+	for _, r := range withSyn {
+		if r.ContentID == "doc-prestataire" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the synonym norm should recall doc-prestataire")
+	}
+}
+
 // TestEntitySearch_FocusScope_EmptyAllowListReturnsNil — an explicit empty
 // allow-list (scope set but resolved zero docs) is a hard abstention, not a
 // missing filter.

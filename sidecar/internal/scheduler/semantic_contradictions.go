@@ -208,6 +208,23 @@ func (d *DailyBrief) standingDecisionItems(ctx context.Context, projectID string
 				if uerr := d.store.UpdateKnowledgeItem(ctx, it); uerr != nil {
 					d.logger.Debug().Err(uerr).Str("decision", it.ContentID).Msg("persist decision claims")
 				}
+				// Keep the associative entity index in step with the decision's claims.
+				ms := make([]store.EntityMention, 0, len(claims))
+				for _, c := range claims {
+					norm := contradict.NormKey(c.Entity)
+					if norm == "" {
+						continue
+					}
+					ms = append(ms, store.EntityMention{
+						EntityNorm: norm,
+						EntityRaw:  c.Entity,
+						Attribute:  contradict.NormKey(c.Attribute),
+						AssertedAt: c.AssertedAt,
+					})
+				}
+				if rerr := d.store.ReplaceEntityMentions(ctx, it.ContentID, ms); rerr != nil {
+					d.logger.Debug().Err(rerr).Str("decision", it.ContentID).Msg("entity-index sync (decision)")
+				}
 				extracted++
 			}
 		}

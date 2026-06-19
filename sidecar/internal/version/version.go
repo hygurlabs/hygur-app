@@ -4,7 +4,7 @@ package version
 
 var (
 	// Version is the semantic version of the application.
-	Version = "0.6.0-mail-refactor"
+	Version = "0.4.1"
 
 	// Commit is the git commit hash at build time.
 	Commit = "unknown"

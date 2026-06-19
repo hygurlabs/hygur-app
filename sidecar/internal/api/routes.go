@@ -88,6 +88,8 @@ func (s *Server) setupRoutes() {
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
 			r.Post("/retag", s.handleKnowledgeRetag)
 			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
+			r.Post("/backfill-entity-index", s.handleKnowledgeBackfillEntityIndex)
+			r.Post("/backfill-entity-vectors", s.handleKnowledgeBackfillEntityVectors)
 			// Deletion reconciliation: the edge agent posts the full set of refs
 			// currently present on the server; items no longer present are recycled.
 			r.Post("/reconcile", s.handleKnowledgeReconcile)
@@ -457,6 +459,26 @@ func (s *Server) handleKnowledgeRetag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKnowledgeBackfillClaims(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.BackfillClaims(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillEntityIndex handles POST /knowledge/backfill-entity-index
+// (brick 1: rebuild the associative entity index from cached claims).
+func (s *Server) handleKnowledgeBackfillEntityIndex(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillEntityIndex(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillEntityVectors handles POST /knowledge/backfill-entity-vectors
+// (brick 2: embed distinct entities for synonymy expansion).
+func (s *Server) handleKnowledgeBackfillEntityVectors(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillEntityVectors(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
