@@ -421,6 +421,48 @@ CREATE TABLE IF NOT EXISTS kb_recycle (
 CREATE INDEX IF NOT EXISTS idx_kb_recycle_source_ref ON kb_recycle(source_ref);
 `,
 	},
+	// Migration 23 — entity_mentions: a queryable index of the (entity, attribute)
+	// pairs each item asserts a claim about. Claims are already extracted at
+	// indexing time (extracted_claims in metadata) but were inert JSON; this lifts
+	// the entity into a lookup table so retrieval can fan out from a queried entity
+	// to every item that mentions it (the associative lens), and so a later
+	// embedding-synonymy pass can expand the lookup set. ON DELETE CASCADE keeps the
+	// index consistent with the recycle-bin purge — a deleted item's mentions vanish
+	// with its row. Populated from the cached claims (deterministic, no LLM).
+	{
+		Version: 23,
+		Name:    "entity_mentions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS entity_mentions (
+    entity_norm TEXT NOT NULL,
+    entity_raw  TEXT NOT NULL DEFAULT '',
+    content_id  TEXT NOT NULL REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    attribute   TEXT NOT NULL DEFAULT '',
+    asserted_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (entity_norm, content_id, attribute)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_mentions_norm ON entity_mentions(entity_norm);
+CREATE INDEX IF NOT EXISTS idx_entity_mentions_content ON entity_mentions(content_id);
+`,
+	},
+	// Migration 24 — entity_vectors: one embedding per normalized entity, for the
+	// brick-2 synonymy expansion. A queried entity is embedded and matched by cosine
+	// against these so surface-different mentions of the same thing (e.g. an
+	// anglicism and its French equivalent) resolve to one lookup set. The model is
+	// pinned per row so a fleet embedding-model change never compares across vector
+	// spaces. No FK: entity_norm is a shared canonical string, not a knowledge_items
+	// key; orphan vectors (all mentions deleted) are tiny and harmless.
+	{
+		Version: 24,
+		Name:    "entity_vectors",
+		SQL: `
+CREATE TABLE IF NOT EXISTS entity_vectors (
+    entity_norm TEXT PRIMARY KEY,
+    embedding   BLOB NOT NULL,
+    model       TEXT NOT NULL DEFAULT ''
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -24,6 +25,14 @@ type EntitySearchOptions struct {
 	// whose content_id is in the list. An empty slice (non-nil) yields no
 	// results. Nil disables the filter.
 	AllowedContentIDs []string
+	// UseEntityIndex turns on the brick-1 associative entity lens: items whose
+	// cached claims mention the queried entity are folded in (claim-grounded
+	// recall + precision) on top of the surface match. Off → legacy behavior.
+	UseEntityIndex bool
+	// EntityNorms are additional normalized entities (brick-2 synonyms of the
+	// queried one) to fold into the index lookup, alongside the queried entity's
+	// own norm. Empty → only the queried entity is looked up.
+	EntityNorms []string
 }
 
 func (o *EntitySearchOptions) defaults() {
@@ -140,37 +149,52 @@ func EntitySearch(ctx context.Context, db *store.DB, intent *QueryIntent, opts E
 	searchSQL += " ORDER BY updated_at DESC LIMIT ?"
 	args = append(args, opts.MaxScan)
 
+	now := time.Now()
+	wantedKeys := attributeMetadataKeys[intent.Attribute]
+
+	// Brick 1 — associative entity index. Items whose cached claims mention the
+	// queried entity are claim-grounded hits: a stronger, normalized signal than an
+	// incidental body substring, and they recall items the surface LIKE may miss.
+	// claimSet flags them for scoring; missing ones are fetched in a second pass.
+	// No-op (byte-identical to the legacy path) when the flag is off or the index
+	// is empty — so existing factual lookups can't regress.
+	claimSet := map[string]bool{}
+	if opts.UseEntityIndex {
+		norms := append([]string{contradict.NormKey(entity)}, opts.EntityNorms...)
+		if cids, cerr := db.EntityMentionContentIDs(ctx, norms, opts.MaxScan); cerr == nil {
+			for _, cid := range cids {
+				claimSet[cid] = true
+			}
+		}
+	}
+
 	rows, err := db.SQLDB().QueryContext(ctx, searchSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity search: query: %w", err)
 	}
-	defer rows.Close()
-
-	now := time.Now()
-	wantedKeys := attributeMetadataKeys[intent.Attribute]
-
-	var pool []entityCandidate
-
-	for rows.Next() {
-		item := &store.KnowledgeItem{}
-		var sourcePath sql.NullString
-		var metadataStr sql.NullString
-		if err := rows.Scan(&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
-			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("entity search: scan: %w", err)
-		}
-		if sourcePath.Valid {
-			item.SourcePath = &sourcePath.String
-		}
-		if metadataStr.Valid && metadataStr.String != "" {
-			_ = json.Unmarshal([]byte(metadataStr.String), &item.Metadata)
-		}
-
-		s := scoreEntityMatch(item, entity, wantedKeys, now)
-		pool = append(pool, entityCandidate{item: item, score: s.score, matches: s.matches})
+	pool, err := scanEntityCandidates(rows, entity, wantedKeys, claimSet, now)
+	rows.Close()
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("entity search: iterate: %w", err)
+
+	// Second pass: claim-grounded items the surface query didn't already return.
+	if len(claimSet) > 0 {
+		inPool := make(map[string]bool, len(pool))
+		for _, c := range pool {
+			inPool[c.item.ContentID] = true
+		}
+		missing := make([]string, 0, len(claimSet))
+		for cid := range claimSet {
+			if !inPool[cid] {
+				missing = append(missing, cid)
+			}
+		}
+		extra, eerr := entityIndexCandidates(ctx, db, missing, entity, wantedKeys, claimSet, now, opts.AllowedContentIDs)
+		if eerr != nil {
+			return nil, eerr
+		}
+		pool = append(pool, extra...)
 	}
 
 	// Sort by score descending, secondary by updated_at descending (already
@@ -236,7 +260,7 @@ type entityScore struct {
 // Then ×1.3 if any wantedKeys is present and non-empty.
 // Then linearly blended with recency score (Wr=0.3) so a fresh body match can
 // outrank a stale title match.
-func scoreEntityMatch(item *store.KnowledgeItem, entity string, wantedKeys []string, now time.Time) entityScore {
+func scoreEntityMatch(item *store.KnowledgeItem, entity string, wantedKeys []string, claimHit bool, now time.Time) entityScore {
 	matches := []string{}
 	base := 0.0
 
@@ -283,6 +307,14 @@ func scoreEntityMatch(item *store.KnowledgeItem, entity string, wantedKeys []str
 					break
 				}
 			}
+		}
+	}
+	// Claim-grounded: the item's cached claims mention this entity (normalized,
+	// not an incidental substring) — at least as strong as a Tier 2 NER hit.
+	if claimHit {
+		matches = append(matches, "claim")
+		if base < 0.9 {
+			base = 0.9
 		}
 	}
 	if base == 0 && containsFold(item.NormalizedText, lower) {
@@ -375,4 +407,61 @@ func sortStableByScore(pool []entityCandidate) {
 			pool[j-1], pool[j] = pool[j], pool[j-1]
 		}
 	}
+}
+
+// scanEntityCandidates scores each scanned row via scoreEntityMatch, flagging
+// claim-grounded items (those in claimSet). Shared by the surface query and the
+// entity-index second pass so both score identically.
+func scanEntityCandidates(rows *sql.Rows, entity string, wantedKeys []string, claimSet map[string]bool, now time.Time) ([]entityCandidate, error) {
+	var pool []entityCandidate
+	for rows.Next() {
+		item := &store.KnowledgeItem{}
+		var sourcePath, metadataStr sql.NullString
+		if err := rows.Scan(&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
+			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("entity search: scan: %w", err)
+		}
+		if sourcePath.Valid {
+			item.SourcePath = &sourcePath.String
+		}
+		if metadataStr.Valid && metadataStr.String != "" {
+			_ = json.Unmarshal([]byte(metadataStr.String), &item.Metadata)
+		}
+		s := scoreEntityMatch(item, entity, wantedKeys, claimSet[item.ContentID], now)
+		pool = append(pool, entityCandidate{item: item, score: s.score, matches: s.matches})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("entity search: iterate: %w", err)
+	}
+	return pool, nil
+}
+
+// entityIndexCandidates fetches and scores the claim-grounded items the surface
+// query didn't already return (the recall half of the entity lens). Honors an
+// active focus allow-list so the lens can't widen scope past it.
+func entityIndexCandidates(ctx context.Context, db *store.DB, ids []string, entity string, wantedKeys []string, claimSet map[string]bool, now time.Time, allowed []string) ([]entityCandidate, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	query := `SELECT content_id, source_type, source_path, title, normalized_text, metadata,
+	                 version_id, created_at, updated_at
+	          FROM knowledge_items WHERE content_id IN (` + ph + `)`
+	args := make([]any, 0, len(ids)+len(allowed))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if len(allowed) > 0 {
+		aph := strings.TrimSuffix(strings.Repeat("?,", len(allowed)), ",")
+		query += " AND content_id IN (" + aph + ")"
+		for _, a := range allowed {
+			args = append(args, a)
+		}
+	}
+	rows, err := db.SQLDB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entity search: index query: %w", err)
+	}
+	defer rows.Close()
+	return scanEntityCandidates(rows, entity, wantedKeys, claimSet, now)
 }

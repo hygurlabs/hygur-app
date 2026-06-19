@@ -595,8 +595,11 @@ func main() {
 		UseJudge:             cfg.Retrieval.UseJudge,
 		EntitySearchFallback: cfg.Retrieval.EntitySearchFallback,
 		EntitySearchMinScore: cfg.Retrieval.EntitySearchMinScore,
-		AuthorityRerank:      cfg.Retrieval.AuthorityRerank,
-		AttentionRerank:      cfg.Retrieval.AttentionRerank,
+		AuthorityRerank:         cfg.Retrieval.AuthorityRerank,
+		AttentionRerank:         cfg.Retrieval.AttentionRerank,
+		EntityIndex:             cfg.Retrieval.EntityIndex,
+		EntitySynonymy:          cfg.Retrieval.EntitySynonymy,
+		EntitySynonymyThreshold: cfg.Retrieval.EntitySynonymyThreshold,
 	})
 
 	// Create search handler with unified search

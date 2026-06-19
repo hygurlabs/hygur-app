@@ -256,6 +256,16 @@ func mapStr(m map[string]any, k string) string {
 	return strings.TrimSpace(s)
 }
 
+// NormKey is the exported entity/attribute normalization key. The entity index
+// (store.entity_mentions) uses it so the write side (ingest) and read side
+// (retrieval) normalize identically — a divergence here would silently break
+// lookups.
+func NormKey(s string) string { return normKey(s) }
+
+// ClaimsFromMetadata exposes the cached-claim reader so the entity-index backfill
+// can derive mentions from already-extracted claims without an LLM call.
+func ClaimsFromMetadata(m map[string]any) []Claim { return claimsFromMetadata(m) }
+
 // normKey lowercases and reduces to space-separated alphanumeric words — the
 // grouping/equality key for entities, attributes, and values.
 func normKey(s string) string {

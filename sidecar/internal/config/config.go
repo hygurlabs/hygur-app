@@ -146,6 +146,27 @@ type RetrievalConfig struct {
 	// recently-cited items, from the item_access bus). Default true; a no-op until
 	// the bus has data. Kill-switch: HYGUR_RETRIEVAL_ATTENTION_RERANK=false.
 	AttentionRerank bool `mapstructure:"attention_rerank" yaml:"attention_rerank,omitempty"`
+
+	// EntityIndex enables the brick-1 associative entity lens: EntitySearch also
+	// folds in items whose cached claims mention the queried entity (claim-grounded
+	// recall + precision) on top of the surface match. Default true; a no-op until
+	// the entity_mentions index is populated. Kill-switch: HYGUR_RETRIEVAL_ENTITY_INDEX=false.
+	EntityIndex bool `mapstructure:"entity_index" yaml:"entity_index,omitempty"`
+
+	// EntitySynonymy enables the brick-2 synonymy expansion: the queried entity is
+	// embedded and matched by cosine against entity_vectors so surface-different
+	// mentions (e.g. an anglicism and its French equivalent) resolve to one lookup
+	// set. Requires EntityIndex. Default true; a no-op until entity_vectors is
+	// populated. Kill-switch: HYGUR_RETRIEVAL_ENTITY_SYNONYMY=false.
+	EntitySynonymy bool `mapstructure:"entity_synonymy" yaml:"entity_synonymy,omitempty"`
+
+	// EntitySynonymyThreshold is the minimum cosine similarity for a stored entity
+	// to count as a synonym of the queried one. Default 0.60 — calibrated on the
+	// home corpus with nomic-embed-text-v2: bare entity-string embeddings need a
+	// lower bar than passage embeddings (0.80 was inert, self-match only; 0.60
+	// resolves real surface variants — "Tesla"/"Tesla Belgium BV" — with no
+	// observed cross-entity false merges). Re-calibrate if the embedding model changes.
+	EntitySynonymyThreshold float64 `mapstructure:"entity_synonymy_threshold" yaml:"entity_synonymy_threshold,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.

@@ -188,6 +188,17 @@ type UnifiedSearcher struct {
 	// P-2 attention re-score (off by default): a small boost for often/recently-used
 	// items, read from the item_access bus.
 	useAttentionRerank bool
+
+	// Brick 1 associative entity lens (off by default): EntitySearch also folds in
+	// items whose cached claims mention the queried entity. No-op until the
+	// entity_mentions index is populated.
+	useEntityIndex bool
+
+	// Brick 2 synonymy expansion (off by default): embed the queried entity and
+	// fold in entity_norms within entitySynonymyThreshold cosine. Requires
+	// useEntityIndex; a no-op until entity_vectors is populated.
+	useEntitySynonymy       bool
+	entitySynonymyThreshold float64
 }
 
 // SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
@@ -234,8 +245,11 @@ type RetrievalOptions struct {
 	UseJudge             bool
 	EntitySearchFallback bool
 	EntitySearchMinScore float64
-	AuthorityRerank      bool // M2: re-score by authority (boost what "fait foi")
-	AttentionRerank      bool // P-2: re-score by attention (boost often/recently-used)
+	AuthorityRerank         bool    // M2: re-score by authority (boost what "fait foi")
+	AttentionRerank         bool    // P-2: re-score by attention (boost often/recently-used)
+	EntityIndex             bool    // brick 1: associative entity lens in EntitySearch
+	EntitySynonymy          bool    // brick 2: embedding synonymy expansion
+	EntitySynonymyThreshold float64 // brick 2: min cosine (default 0.80 if <= 0)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -250,6 +264,12 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	}
 	us.SetAuthorityRerank(opts.AuthorityRerank)
 	us.SetAttentionRerank(opts.AttentionRerank)
+	us.useEntityIndex = opts.EntityIndex
+	us.useEntitySynonymy = opts.EntitySynonymy
+	us.entitySynonymyThreshold = opts.EntitySynonymyThreshold
+	if us.entitySynonymyThreshold <= 0 {
+		us.entitySynonymyThreshold = 0.80
+	}
 }
 
 // Search performs a semantic search across knowledge base and mail.
@@ -393,9 +413,19 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	if llmIntent != nil && llmIntent.Category == IntentFactualEntity && strings.TrimSpace(llmIntent.Entity) != "" {
 		log.Printf("[UnifiedSearch] routed to entity_search (entity=%q attribute=%q)",
 			llmIntent.Entity, llmIntent.Attribute)
-		entityOpts := EntitySearchOptions{TopK: req.TopK}
+		entityOpts := EntitySearchOptions{TopK: req.TopK, UseEntityIndex: us.useEntityIndex}
 		if focusActive {
 			entityOpts.AllowedContentIDs = mapKeys(focusAllowList)
+		}
+		// Brick 2 — embed the queried entity and fold its cosine-near entities into
+		// the index lookup (FR↔EN / surface-different mentions of the same thing).
+		if us.useEntityIndex && us.useEntitySynonymy && us.llm != nil {
+			if qvec, eerr := us.llm.GenerateEmbedding(ctx, llmIntent.Entity); eerr == nil {
+				if norms, nerr := us.store.SimilarEntityNorms(ctx, qvec, us.llm.GetEmbeddingModel(), us.entitySynonymyThreshold, 10); nerr == nil && len(norms) > 0 {
+					entityOpts.EntityNorms = norms
+					log.Printf("[UnifiedSearch] entity synonymy: %d related entities for %q (τ=%.2f)", len(norms), llmIntent.Entity, us.entitySynonymyThreshold)
+				}
+			}
 		}
 		eResults, eErr := EntitySearch(ctx, us.store, llmIntent, entityOpts)
 		if eErr != nil {
