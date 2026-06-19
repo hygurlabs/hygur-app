@@ -32,6 +32,10 @@ type GmailConnector struct {
 	connected bool
 }
 
+// Compile-time assertion: Gmail can cheaply enumerate present message refs for
+// deletion reconciliation.
+var _ mailpkg.MessageIDLister = (*GmailConnector)(nil)
+
 // NewGmailConnector creates a new Gmail connector with the provided OAuth2 credentials.
 // The connector must have a token set via SetToken before Connect can be called.
 func NewGmailConnector(clientID, clientSecret, redirectURL string) *GmailConnector {
@@ -317,6 +321,63 @@ func (c *GmailConnector) ListThreads(ctx context.Context, opts mailpkg.ListOptio
 	}
 
 	return threads, nil
+}
+
+// ListMessageIDs implements mail.MessageIDLister for deletion reconciliation: it
+// cheaply enumerates the thread IDs currently present in the account (IDs only,
+// no bodies). The Gmail unit Hygur indexes is the THREAD (content_id
+// "email:<threadID>"), so the returned ids are thread IDs.
+//
+// Scope is the safety crux. The default threads.list (no labelIds,
+// IncludeSpamTrash defaulting to false) returns ALL mail EXCEPT Spam and Trash —
+// archived mail is INCLUDED, only trashed/spam/deleted is absent. That is exactly
+// the correct "present" set: an archived message must never be inferred as
+// deleted. The mailbox argument is ignored (the sweep is always account-wide).
+//
+// serverCount is Gmail's approximate resultSizeEstimate. Any pagination error
+// returns a non-nil err so the caller treats the enumeration as incomplete and
+// does NOT reconcile (absence is never inferred from a partial listing).
+func (c *GmailConnector) ListMessageIDs(ctx context.Context, _ string) (ids []string, serverCount int, err error) {
+	c.mu.RLock()
+	if !c.connected || c.service == nil {
+		c.mu.RUnlock()
+		return nil, 0, mailpkg.ErrNotConnected
+	}
+	service := c.service
+	c.mu.RUnlock()
+
+	const pageSize = int64(500) // IDs-only pages can be large
+	var pageToken string
+	estimate := 0
+	for {
+		req := service.Users.Threads.List("me").
+			Context(ctx).
+			MaxResults(pageSize).
+			Fields("threads/id,nextPageToken,resultSizeEstimate")
+		if pageToken != "" {
+			req = req.PageToken(pageToken)
+		}
+		resp, derr := req.Do()
+		if derr != nil {
+			return nil, 0, c.mapError(derr)
+		}
+		for _, t := range resp.Threads {
+			if t.Id != "" {
+				ids = append(ids, t.Id)
+			}
+		}
+		if int(resp.ResultSizeEstimate) > estimate {
+			estimate = int(resp.ResultSizeEstimate)
+		}
+		pageToken = resp.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	if estimate < len(ids) {
+		estimate = len(ids)
+	}
+	return ids, estimate, nil
 }
 
 // listThreadsByLabel fetches all threads for a single Gmail label ID, applying

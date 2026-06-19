@@ -784,6 +784,7 @@ func (c *MailConnector) syncLegacy(ctx context.Context, opts plugin.SyncOptions)
 		Timeout:            30 * time.Second,
 		Limit:              limit,
 		ReconcileDeletions: c.reconcileDeletions,
+		Provider:           activeSource,
 	}
 	c.applyIncrementalWindow(ctx, &cfg, activeSource, activeSource, opts.Full)
 
@@ -1034,8 +1035,18 @@ func (c *MailConnector) syncAccountInner(ctx context.Context, accountID string, 
 		AccountID:          sess.AccountID,
 		LabelIDs:           labelIDs,
 		ReconcileDeletions: c.reconcileDeletions,
+		Provider:           sess.Provider,
 	}
 	c.applyIncrementalWindow(ctx, &cfg, sess.AccountID, sess.Provider, opts.Full)
+
+	// Gmail uses the recycle-bin (soft, reversible) reconcile driven by a correctly
+	// scoped present-set enumeration (all-mail−trash−spam), NOT the legacy in-sweep
+	// hard delete — whose per-mailbox `seen` could wrongly prune archived mail. So
+	// suppress the legacy path for Gmail and run recycleReconcile after the sweep.
+	gmailRecycle := sess.Provider == "gmail" && c.reconcileDeletions && opts.Full
+	if gmailRecycle {
+		cfg.ReconcileDeletions = false
+	}
 
 	mbIndexer := mailpkg.NewMailboxIndexer(indexer, sess.Conn)
 	start := time.Now()
@@ -1067,6 +1078,13 @@ func (c *MailConnector) syncAccountInner(ctx context.Context, accountID string, 
 		totalEmbeddingFailed += stats.EmbeddingErrors
 	}
 
+	// Recycle-bin deletion reconciliation for Gmail — only after a clean full sweep
+	// (a failed sync must not drive deletions). The body sync above already
+	// re-indexed every present thread, so reappeared items are active again.
+	if gmailRecycle && lastErr == nil {
+		c.recycleReconcile(ctx, sess.Conn, sess.Provider, sess.AccountID)
+	}
+
 	c.accounts.mu.Lock()
 	if lastErr != nil || (totalEmbeddingFailed > 0 && totalEmbeddingFailed*2 > totalProcessed+totalFailed) {
 		sess.Health.Status = plugin.StatusDegraded
@@ -1093,6 +1111,59 @@ func (c *MailConnector) syncAccountInner(ctx context.Context, accountID string, 
 		Failed:    totalFailed,
 		Duration:  time.Since(start),
 	}, nil
+}
+
+// recycleReconcile soft-deletes (recycle bin) the provider's KB mail no longer
+// present on the server, using the connector's cheap full present-set enumeration
+// (MessageIDLister). Run AFTER a full sweep, so present items are already
+// re-indexed: a reappeared item just needs its stale recycle row dropped (no
+// re-ingest). Fail-safe — a connector that can't enumerate, an enumeration error,
+// or an empty present-set against a non-empty KB all abort without deleting.
+func (c *MailConnector) recycleReconcile(ctx context.Context, conn mailpkg.MailConnector, provider, accountID string) {
+	lister, ok := conn.(mailpkg.MessageIDLister)
+	if !ok || c.store == nil {
+		return
+	}
+	// Bring this account's existing items into the source_ref world (idempotent).
+	if n, err := c.store.BackfillMailSourceRefs(ctx, provider, accountID); err != nil {
+		c.logger.Warn().Err(err).Str("provider", provider).Msg("reconcile: source_ref backfill failed")
+	} else if n > 0 {
+		c.logger.Info().Int("backfilled", n).Str("provider", provider).Msg("reconcile: stamped source_ref on existing mail")
+	}
+
+	ids, _, err := lister.ListMessageIDs(ctx, "")
+	if err != nil {
+		c.logger.Warn().Err(err).Str("provider", provider).Msg("reconcile: enumeration incomplete; skipping (fail-safe)")
+		return
+	}
+	prefix := provider + ":"
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			seen[prefix+id] = struct{}{}
+		}
+	}
+	// Never wipe the corpus on an empty present-set while the KB still holds items.
+	if len(seen) == 0 {
+		if n, e := c.store.CountActiveBySourceRefPrefix(ctx, prefix); e == nil && n > 0 {
+			c.logger.Warn().Str("provider", provider).Int("active", n).Msg("reconcile: refused empty present-set")
+			return
+		}
+	}
+	plan, err := c.store.ReconcileMailRefs(ctx, prefix, seen, 3)
+	if err != nil {
+		c.logger.Warn().Err(err).Str("provider", provider).Msg("reconcile: failed")
+		return
+	}
+	// Reappeared items are active again (the full sweep re-indexed them) → drop the
+	// now-stale recycle rows rather than re-ingesting from the bin.
+	for _, e := range plan.Restore {
+		_ = c.store.DeleteRecycle(ctx, e.ContentID)
+	}
+	if plan.Recycled+plan.Purged > 0 {
+		c.logger.Info().Str("provider", provider).Int("recycled", plan.Recycled).Int("purged", plan.Purged).
+			Int("seen", len(seen)).Msg("reconcile: applied (recycle)")
+	}
 }
 
 // markAccountError updates a session's health to reflect a connection error.

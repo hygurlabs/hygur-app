@@ -34,6 +34,73 @@ func activeExists(t *testing.T, db *DB, ctx context.Context, contentID string) b
 	return it != nil
 }
 
+func sourceRefOf(t *testing.T, db *DB, ctx context.Context, contentID string) string {
+	t.Helper()
+	it, err := db.GetKnowledgeItem(ctx, contentID)
+	if err != nil || it == nil {
+		t.Fatalf("get %s: %v", contentID, err)
+	}
+	if it.Metadata == nil {
+		return ""
+	}
+	s, _ := it.Metadata["source_ref"].(string)
+	return s
+}
+
+func TestBackfillMailSourceRefs(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mk := func(cid, acct, ref string) {
+		md := map[string]any{}
+		if acct != "" {
+			md["account_id"] = acct
+		}
+		if ref != "" {
+			md["source_ref"] = ref
+		}
+		if err := db.InsertKnowledgeItem(ctx, &KnowledgeItem{
+			ContentID: cid, SourceType: "mail", Title: cid, NormalizedText: "body " + cid,
+			Metadata: md, VersionID: "v1", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", cid, err)
+		}
+	}
+	mk("email:t1", "acctA", "")                  // → stamped gmail:t1
+	mk("email:t2", "acctA", "gmail:preexisting") // already has a ref → untouched
+	mk("email:t3", "acctB", "")                  // other account → untouched
+	mk("note:n1", "acctA", "")                   // not mail → untouched
+
+	n, err := db.BackfillMailSourceRefs(ctx, "gmail", "acctA")
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("stamped %d items, want 1", n)
+	}
+	if got := sourceRefOf(t, db, ctx, "email:t1"); got != "gmail:t1" {
+		t.Fatalf("t1 source_ref = %q, want gmail:t1", got)
+	}
+	if got := sourceRefOf(t, db, ctx, "email:t2"); got != "gmail:preexisting" {
+		t.Fatalf("t2 source_ref changed to %q", got)
+	}
+	if got := sourceRefOf(t, db, ctx, "email:t3"); got != "" {
+		t.Fatalf("t3 (other account) wrongly stamped %q", got)
+	}
+	if got := sourceRefOf(t, db, ctx, "note:n1"); got != "" {
+		t.Fatalf("note (non-mail) wrongly stamped %q", got)
+	}
+	// Idempotent.
+	if n2, _ := db.BackfillMailSourceRefs(ctx, "gmail", "acctA"); n2 != 0 {
+		t.Fatalf("second backfill stamped %d, want 0", n2)
+	}
+}
+
 func TestMoveToRecycleAndRestore(t *testing.T) {
 	db, err := NewDB(":memory:")
 	if err != nil {

@@ -162,6 +162,30 @@ type ReconcilePlan struct {
 	Restore  []RecycleEntry
 }
 
+// BackfillMailSourceRefs stamps a provider-scoped source_ref ("<provider>:<threadID>")
+// on this account's mail items that lack one, so locally-ingested mail (which the
+// indexer historically stored without a source_ref) becomes visible to recycle-bin
+// deletion reconciliation. The threadID is the content_id minus its "email:" prefix.
+// Account-scoped so it can never mislabel another provider's mail; idempotent
+// (only touches rows with an empty/absent source_ref). Returns the row count.
+func (d *DB) BackfillMailSourceRefs(ctx context.Context, provider, accountID string) (int, error) {
+	if provider == "" || accountID == "" {
+		return 0, nil
+	}
+	res, err := d.db.ExecContext(ctx, `
+		UPDATE knowledge_items
+		SET metadata = json_set(metadata, '$.source_ref', ? || substr(content_id, 7))
+		WHERE content_id LIKE 'email:%'
+		  AND json_extract(metadata, '$.account_id') = ?
+		  AND COALESCE(json_extract(metadata, '$.source_ref'), '') = ''`,
+		provider+":", accountID)
+	if err != nil {
+		return 0, fmt.Errorf("backfill mail source_refs: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // ReconcileMailRefs is the deterministic, transactional half of deletion
 // reconciliation for one source prefix (e.g. "proton:") given the authoritative
 // set of message refs currently present on the server. It NEVER decides anything

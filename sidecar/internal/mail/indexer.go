@@ -195,7 +195,10 @@ func (idx *EmailIndexer) extractAttachmentText(ctx context.Context, messages []M
 // and optionally generates embeddings.
 // accountID tags the resulting KnowledgeItem with the owner account; pass ""
 // when the account is unknown or not relevant.
-func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messages []Message, accountID string) (*IndexResult, error) {
+// provider (optional) stamps a provider-scoped source_ref ("<provider>:<threadID>",
+// e.g. "gmail:..."), the key used by recycle-bin deletion reconciliation; omit it
+// (legacy callers) to leave source_ref unset.
+func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messages []Message, accountID string, provider ...string) (*IndexResult, error) {
 	if idx.store == nil {
 		return nil, fmt.Errorf("store is required")
 	}
@@ -310,6 +313,11 @@ func (idx *EmailIndexer) IndexThread(ctx context.Context, thread *Thread, messag
 	}
 	if accountID != "" {
 		metadata["account_id"] = accountID
+	}
+	// source_ref: provider-scoped reconcile key ("<provider>:<threadID>"). Additive —
+	// only set when the caller knows the provider; legacy callers leave it unset.
+	if len(provider) > 0 && provider[0] != "" {
+		metadata["source_ref"] = provider[0] + ":" + thread.ID
 	}
 
 	// Tier 1 entity extraction (regex, ~0ms). Writes IBAN, amounts, structured
@@ -455,6 +463,10 @@ type BatchIndexConfig struct {
 
 	// AccountID tags every indexed KnowledgeItem with the owner account.
 	AccountID string
+
+	// Provider, when set ("gmail"|"proton"|…), stamps a provider-scoped source_ref
+	// on each indexed item, enabling recycle-bin deletion reconciliation.
+	Provider string
 
 	// ReconcileDeletions, when true AND Limit==0 (a full unbounded sweep),
 	// removes previously-indexed mail of this account that wasn't seen in the
@@ -716,7 +728,7 @@ func (mi *MailboxIndexer) processThreadsConcurrently(ctx context.Context, thread
 			}
 
 			// Index the thread
-			result, err := mi.IndexThread(threadCtx, &t, messages, config.AccountID)
+			result, err := mi.IndexThread(threadCtx, &t, messages, config.AccountID, config.Provider)
 			if err != nil {
 				mu.Lock()
 				stats.Errors++
