@@ -40,6 +40,7 @@ import (
 	"github.com/hygur/sidecar/internal/mail/gmail"
 	"github.com/hygur/sidecar/internal/mail/proton"
 	"github.com/hygur/sidecar/internal/plugin"
+	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/scheduler"
 	"github.com/hygur/sidecar/internal/secret"
@@ -178,6 +179,10 @@ func main() {
 		level = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(level)
+
+	// Couche B kill-switch (HYGUR_PROSE_TIDY): the deterministic prose cleanup is
+	// process-wide, set once here from config (default on).
+	prose.SetEnabled(cfg.Prose.Tidy)
 
 	embURL := cfg.LMStudio.EmbeddingURL
 	if embURL == "" {

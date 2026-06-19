@@ -165,6 +165,9 @@ func setDefaults(v *viper.Viper) {
 
 	// Mail: only notify on mail received within the last 14 days.
 	v.SetDefault("mail.notify_recency_days", 14)
+
+	// Prose cleanup (Couche B) is default-on; HYGUR_PROSE_TIDY=false disables it.
+	v.SetDefault("prose.tidy", true)
 }
 
 // SaveConnectorsConfig persiste la map des ConnectorSettings dans config.yaml

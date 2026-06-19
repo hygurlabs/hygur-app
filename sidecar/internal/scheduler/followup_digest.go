@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/llm"
+	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -384,7 +385,7 @@ var (
 
 // followupReportSystemPrompt asks for a short, human, grounded report — the same
 // "facts before reply" discipline as the digest, but in natural prose.
-const followupReportSystemPrompt = `You are a personal assistant. From ONLY the messages below (recent mail and notes), give the user a short, natural read of what's going on and what to focus on next.
+const followupReportPromptBase = `You are a personal assistant. From ONLY the messages below (recent mail and notes), give the user a short, natural read of what's going on and what to focus on next.
 
 Write three short paragraphs separated by a blank line: an overview of the active topics; what needs attention (deadlines, pending replies, and any genuine contradiction); then a concrete priority for the next few days.
 
@@ -392,6 +393,9 @@ Rules:
 - Use only what the messages say; never invent or distort.
 - Ignore spam, marketing and phishing — never present them as actions.
 - Plain prose, no headings or bullets, 2-4 sentences per paragraph. Minimal reasoning.`
+
+// followupReportSystemPrompt = base + the shared prose-voice block.
+var followupReportSystemPrompt = llm.WithVoice(followupReportPromptBase)
 
 // StreamFollowUpReport streams a short, grounded natural-language report of
 // recent mail + notes to `emit`, paragraph by paragraph as the model writes it.
@@ -443,7 +447,8 @@ func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, projectID string,
 		return streamErr // partial output left uncached → regenerated next time
 	}
 	if full := strings.TrimSpace(stripReasoningTags(sb.String())); full != "" {
-		cacheReport(key, full)
+		// Couche B: tidy the cached copy (replayed on every hit within the TTL).
+		cacheReport(key, prose.Tidy(full, ""))
 	}
 	return nil
 }

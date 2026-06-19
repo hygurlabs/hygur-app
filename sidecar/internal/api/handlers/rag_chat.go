@@ -272,7 +272,9 @@ func todayGuidance() string {
 }
 
 func injectFormatGuidance(messages []llm.Message) []llm.Message {
-	guidance := todayGuidance() + "\n\n" + baseFormatGuidance
+	// Couche A: the shared prose-voice block rides on the base persona. Chat is
+	// streamed, so it gets the voice guidance only (no deterministic post-pass).
+	guidance := todayGuidance() + "\n\n" + baseFormatGuidance + "\n\n" + llm.ProseVoiceGuidance
 	if len(messages) > 0 && messages[0].Role == "system" {
 		merged := guidance + "\n\n" + messages[0].Content
 		out := make([]llm.Message, len(messages))

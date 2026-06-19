@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hygur/sidecar/internal/llm"
+	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -27,7 +28,7 @@ const (
 
 // positionsSystemPrompt — strict, generic, no enumerated cases. The guardrail is in
 // the rules: summarize only what was decided, attribute nothing beyond it.
-const positionsSystemPrompt = `You are Hygur, reflecting the user's standing positions back to them, strictly from their own confirmed decisions.
+const positionsPromptBase = `You are Hygur, reflecting the user's standing positions back to them, strictly from their own confirmed decisions.
 
 You are given the user's CONFIRMED DECISIONS (numbered: statement, optional reasoning, date). Write a short, plain-prose summary (<= 120 words) of where they currently stand — the positions they have actually decided.
 
@@ -38,6 +39,9 @@ Rules:
 - Group related decisions into the same thread where they clearly belong; keep distinct matters distinct.
 - If there is only one decision, state it plainly. If there is nothing of substance, write nothing at all.
 - A sober, readable register in your own plain voice. No heading, no preamble — only the prose.`
+
+// positionsSystemPrompt = base + the shared prose-voice block.
+var positionsSystemPrompt = llm.WithVoice(positionsPromptBase)
 
 // PositionsSynopsis returns the grounded "standing positions" summary (A-2b). The
 // cache is keyed by a fingerprint of the standing decisions, so a hit means the
@@ -126,5 +130,6 @@ func (d *DailyBrief) generatePositions(ctx context.Context, decs []*store.Decisi
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(sb.String()), nil
+	// Couche B: deterministic cleanup before the content-addressed cache.
+	return prose.Tidy(strings.TrimSpace(sb.String()), ""), nil
 }

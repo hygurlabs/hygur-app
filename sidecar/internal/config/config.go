@@ -43,6 +43,17 @@ type Config struct {
 	// per-device JWT). Defaults to "local" so the bundled/embedded mode is
 	// unchanged.
 	Auth AuthConfig `mapstructure:"auth" yaml:"auth,omitempty"`
+
+	// Prose configures the deterministic prose-cleanup pass applied to
+	// user-facing outputs (mail drafts, chronicle, positions, follow-up report).
+	Prose ProseConfig `mapstructure:"prose" yaml:"prose,omitempty"`
+}
+
+// ProseConfig configures the deterministic prose-cleanup pass (internal/prose).
+type ProseConfig struct {
+	// Tidy enables the cleanup (preamble stripping + French typography). Default
+	// true; conservative (never rewrites meaning). Kill-switch: HYGUR_PROSE_TIDY=false.
+	Tidy bool `mapstructure:"tidy" yaml:"tidy,omitempty"`
 }
 
 // AuthConfig configures how the server authenticates requests.

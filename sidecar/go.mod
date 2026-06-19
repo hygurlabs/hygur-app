@@ -3,6 +3,7 @@ module github.com/hygur/sidecar
 go 1.26.2
 
 require (
+	github.com/abadojack/whatlanggo v1.0.1
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-webauthn/webauthn v0.17.4

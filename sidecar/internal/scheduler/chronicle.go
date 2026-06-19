@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/llm"
+	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
@@ -34,7 +35,7 @@ const (
 // chronicleSystemPrompt — narrative voice, strictly grounded (anti-fiction is the
 // prime directive), continuity via the synopsis, numbered source anchors, and a
 // marker-delimited synopsis update. Generic principles, no enumerated cases.
-const chronicleSystemPrompt = `You are Hygur, quietly chronicling the user's life from their own records, chapter by chapter. Write the next entry of the chapter named at the top.
+const chronicleSystemPromptBase = `You are Hygur, quietly chronicling the user's life from their own records, chapter by chapter. Write the next entry of the chapter named at the top.
 
 You are given the CHAPTER, THE STORY SO FAR (a short synopsis) and NEW TRACES from the recent period (numbered; mail, notes, events — dated). Write ONE entry, in flowing narrative prose — a short-story / journal voice, never a bullet list. Recount what happened in this period as a story: the people, the decisions, what moved, what is still pending.
 
@@ -48,11 +49,17 @@ Rules:
 
 After the entry, output a line containing exactly ` + chronicleSynopsisMarker + ` and then an updated "story so far" (<= 120 words): the durable threads and current state, folding in this entry. Keep it tight.`
 
-// chronicleClosingPrompt writes the farewell entry that closes a chapter, from the
+// chronicleSystemPrompt = base + the shared prose-voice block.
+var chronicleSystemPrompt = llm.WithVoice(chronicleSystemPromptBase)
+
+// chronicleClosingPromptBase writes the farewell entry that closes a chapter, from the
 // story-so-far + the user's optional closing note. Grounded, no synopsis update.
-const chronicleClosingPrompt = `You are Hygur, closing a chapter of the user's chronicle. Write a brief CLOSING entry — a few sentences of flowing prose wrapping up where things landed and how this chapter ends.
+const chronicleClosingPromptBase = `You are Hygur, closing a chapter of the user's chronicle. Write a brief CLOSING entry — a few sentences of flowing prose wrapping up where things landed and how this chapter ends.
 
 Use ONLY the story-so-far and the user's closing note below; never invent. A sober, readable register in your own plain voice — no heading, no bullet list. It is a farewell to the chapter, so it may be lightly reflective, but stay grounded in what's given.`
+
+// chronicleClosingPrompt = base + the shared prose-voice block.
+var chronicleClosingPrompt = llm.WithVoice(chronicleClosingPromptBase)
 
 // ChronicleWriter appends nightly acts to chapters.
 type ChronicleWriter struct {
@@ -231,7 +238,7 @@ func (w *ChronicleWriter) generateClosing(ctx context.Context, synopsis, note st
 		w.logger.Warn().Err(err).Msg("chronicle closing generate failed")
 		return "", err
 	}
-	return strings.TrimSpace(sb.String()), nil
+	return prose.Tidy(strings.TrimSpace(sb.String()), ""), nil
 }
 
 // writeChapter appends one act to chap from its in-window items. Returns whether
@@ -375,7 +382,8 @@ func (w *ChronicleWriter) generate(ctx context.Context, title, synopsis, traces,
 		return "", "", err
 	}
 	parts := strings.SplitN(sb.String(), chronicleSynopsisMarker, 2)
-	act := strings.TrimSpace(parts[0])
+	// Couche B: tidy the prose act only — never the machine synopsis after the marker.
+	act := prose.Tidy(strings.TrimSpace(parts[0]), "")
 	newSynopsis := ""
 	if len(parts) == 2 {
 		newSynopsis = strings.TrimSpace(parts[1])

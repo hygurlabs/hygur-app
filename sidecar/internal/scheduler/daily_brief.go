@@ -13,9 +13,18 @@ import (
 	"github.com/hygur/sidecar/internal/config"
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/llm"
+	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
+
+// dailyBriefPromptBase is the daily-brief system prompt. Reasoning-capable
+// backends emit scratch thinking before visible content; the prompt asks them to
+// keep it short (the empty-brief regression guard).
+const dailyBriefPromptBase = "You are a personal assistant. You produce a short, prioritised brief that puts what truly matters first: actions to take, decisions to make, upcoming deadlines. You ignore noise. Keep internal reasoning very brief and reply in Markdown, in English."
+
+// dailyBriefSystemPrompt = base + the shared prose-voice block.
+var dailyBriefSystemPrompt = llm.WithVoice(dailyBriefPromptBase)
 
 // DailyBrief produces a single LLM-generated digest of recent knowledge-base
 // activity. Designed to run once per day at a configurable local-time hour.
@@ -201,7 +210,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			// guidance they burn the entire token budget in `reasoning`
 			// and return `content: null` — the empty-brief regression. The
 			// system prompt asks the model to keep reasoning short.
-			{Role: "system", Content: "You are a personal assistant. You produce a short, prioritised brief that puts what truly matters first: actions to take, decisions to make, upcoming deadlines. You ignore noise. Keep internal reasoning very brief and reply in Markdown, in English."},
+			{Role: "system", Content: dailyBriefSystemPrompt},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -218,7 +227,9 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 	reasoningLen := 0
 	if err == nil && resp != nil && len(resp.Choices) > 0 && resp.Choices[0].Message != nil {
 		msg := resp.Choices[0].Message
-		briefText = stripReasoningTags(msg.Content)
+		// Couche B: the brief is English by contract → only the preamble strip
+		// applies (French typography is gated off); markdown layout is preserved.
+		briefText = prose.Tidy(stripReasoningTags(msg.Content), "en")
 		reasoningLen = len(msg.Reasoning)
 		finishReason = resp.Choices[0].FinishReason
 	}
