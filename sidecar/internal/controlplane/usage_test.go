@@ -46,6 +46,37 @@ func TestTenantUsageSnapshots_AndPricing(t *testing.T) {
 	}
 }
 
+func TestEvaluateFleetBudget(t *testing.T) {
+	// Today = 800k tokens (chat 500k+200k + ingest 100k).
+	today := PeriodCost{ChatIn: 500_000, ChatOut: 200_000, Ingest: 100_000}
+	cases := []struct {
+		name        string
+		budget      int
+		wantStatus  string
+		wantDisable bool
+	}{
+		{"disabled when budget unset", 0, FleetBudgetOK, true},
+		{"ok well under budget", 2_000_000, FleetBudgetOK, false},
+		{"warn at 80%", 1_000_000, FleetBudgetWarn, false}, // 800k/1M = 0.80
+		{"over at 100%", 800_000, FleetBudgetOver, false},   // 800k/800k = 1.0
+		{"over above 100%", 500_000, FleetBudgetOver, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fb := EvaluateFleetBudget(today, c.budget)
+			if fb.Status != c.wantStatus {
+				t.Fatalf("status = %q, want %q (ratio %.3f)", fb.Status, c.wantStatus, fb.Ratio)
+			}
+			if fb.TodayTokens != 800_000 {
+				t.Fatalf("today tokens = %d, want 800000", fb.TodayTokens)
+			}
+			if c.wantDisable && fb.Ratio != 0 {
+				t.Fatalf("disabled budget should have ratio 0, got %.3f", fb.Ratio)
+			}
+		})
+	}
+}
+
 func approxEq(a, b float64) bool {
 	d := a - b
 	if d < 0 {

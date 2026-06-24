@@ -152,6 +152,7 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 var successPage = template.Must(template.New("s").Parse(`<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+{{if not .Ready}}<meta http-equiv="refresh" content="8">{{end}}
 <title>Hygur Cloud</title><style>
 body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0f0f10;color:#e9e9ea;display:grid;place-items:center;min-height:100vh;margin:0}
 .card{max-width:30rem;padding:2.5rem;text-align:center}
@@ -162,9 +163,10 @@ code{display:block;font-size:1.4rem;letter-spacing:.12em;background:#1b1b1d;bord
 {{if .Ready}}<h1>Welcome to Hygur Cloud</h1>
 <p>Your private space is ready. Open the Hygur app and paste this one-time enrollment code:</p>
 <code>{{.Code}}</code>
-<p class="muted">The code expires in 30 minutes. Lost it? Reload this page.</p>
+<p class="muted">The code expires in 30 minutes and works once. Still on this page? Reload to get a fresh code.</p>
 {{else}}<h1>Setting up your space…</h1>
-<p>Payment received — we're preparing your private Hygur instance. This takes a moment; refresh this page shortly to get your enrollment code.</p>
+<p>Payment received. We're creating your private, encrypted space — its own database with its own encryption key.</p>
+<p class="muted"><strong>Keep this tab open.</strong> Your one-time enrollment code appears here as soon as your space is ready (usually under a minute). We don't send it by email — this page refreshes itself.</p>
 {{end}}</div></body></html>`))
 
 // handleSuccess is the Stripe post-payment landing. It resolves the checkout

@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -14,15 +15,26 @@ import (
 // via a one-time enroll code, then signs in with the passkey like any device —
 // reusing the existing WebAuthn + JWT machinery, no separate password system.
 type AdminConsole struct {
-	store           *Store
-	svc             *Service
-	operatorAccount string
+	store            *Store
+	svc              *Service
+	operatorAccount  string
+	dailyTokenBudget int // fleet-wide daily token budget (0 = disabled)
 }
 
 // NewAdminConsole builds the admin surface. operatorAccount is the account number
 // of the operator (admin@hygur.ai); an empty value disables /admin/*.
 func NewAdminConsole(store *Store, svc *Service, operatorAccount string) *AdminConsole {
 	return &AdminConsole{store: store, svc: svc, operatorAccount: strings.TrimSpace(operatorAccount)}
+}
+
+// WithDailyTokenBudget sets the fleet-wide daily token budget (HYGUR_GLOBAL_TOKENS_PER_DAY).
+// 0 leaves the fleet budget check disabled. Alert-first: surfaced on the dashboard +
+// logged when crossed; no auto-cut in v1.
+func (a *AdminConsole) WithDailyTokenBudget(tokens int) *AdminConsole {
+	if tokens > 0 {
+		a.dailyTokenBudget = tokens
+	}
+	return a
 }
 
 // Register mounts the admin API behind the operator gate.
@@ -87,9 +99,19 @@ func (a *AdminConsole) handleCost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	captured, _ := a.store.LatestCapture()
+	budget := EvaluateFleetBudget(summary.Today, a.dailyTokenBudget)
+	switch budget.Status {
+	case FleetBudgetOver:
+		slog.Error("fleet token budget exceeded",
+			"today_tokens", budget.TodayTokens, "budget", budget.TokensPerDay, "ratio", budget.Ratio)
+	case FleetBudgetWarn:
+		slog.Warn("fleet token budget warning",
+			"today_tokens", budget.TodayTokens, "budget", budget.TokensPerDay, "ratio", budget.Ratio)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary":      summary,
 		"tenants":      tenants,
+		"budget":       budget,
 		"captured_at":  captured,
 		"generated_at": now.UTC().Format(time.RFC3339),
 	})

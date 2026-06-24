@@ -219,3 +219,39 @@ func TestBilling_RejectsBadSignature(t *testing.T) {
 		t.Error("bad signature must not queue provisioning")
 	}
 }
+
+// TestSuccessPage_Copy guards the §C enrollment copy: the "not ready" page tells
+// the user to keep the tab open, states the TRUE security story (per-space DB +
+// its own encryption key), self-refreshes, and never fabricates browser-side
+// crypto (no "session key" / "derive" theater). The "ready" page shows the code
+// once and does NOT auto-refresh (so reloading doesn't silently re-mint).
+func TestSuccessPage_Copy(t *testing.T) {
+	render := func(data map[string]any) string {
+		var sb strings.Builder
+		if err := successPage.Execute(&sb, data); err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		return sb.String()
+	}
+
+	notReady := render(map[string]any{"Ready": false})
+	for _, want := range []string{"Keep this tab open", "encryption key", "don't send it by email", `http-equiv="refresh"`} {
+		if !strings.Contains(notReady, want) {
+			t.Errorf("not-ready page missing %q", want)
+		}
+	}
+	// Integrity guard: no fabricated browser-side key derivation.
+	for _, banned := range []string{"session key", "derive", "derived"} {
+		if strings.Contains(strings.ToLower(notReady), banned) {
+			t.Errorf("not-ready page must not fabricate crypto (found %q)", banned)
+		}
+	}
+
+	ready := render(map[string]any{"Ready": true, "Code": "ABC-123"})
+	if !strings.Contains(ready, "ABC-123") {
+		t.Error("ready page must show the enrollment code")
+	}
+	if strings.Contains(ready, `http-equiv="refresh"`) {
+		t.Error("ready page must NOT auto-refresh (would re-mint the code)")
+	}
+}

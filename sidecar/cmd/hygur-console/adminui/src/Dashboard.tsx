@@ -68,6 +68,13 @@ export function Dashboard({ token, onSignOut }: { token: string; onSignOut: () =
 
         {err ? <div className="err">Couldn&apos;t load: {err}</div> : null}
 
+        {data && data.budget && data.budget.status !== "ok" ? (
+          <div className={"budget-banner " + data.budget.status}>
+            <span className="tag">{data.budget.status === "over" ? "Budget exceeded" : "Budget warning"}</span>
+            Fleet tokens today: {fmtInt(data.budget.today_tokens)} / {fmtInt(data.budget.tokens_per_day)} ({Math.round(data.budget.ratio * 100)}%).
+          </div>
+        ) : null}
+
         <div className="kpis">
           <MetricTile label="Spend · MTD">{data ? money(data.summary.month.cost) : <Skeleton w={100} h={30} />}</MetricTile>
           <MetricTile label="Run-rate · /day">{data ? money(data.summary.run_rate_per_day) : <Skeleton w={80} h={30} />}</MetricTile>

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,7 +139,12 @@ func runServe(args []string) {
 	// Operator admin surface (cost dashboard API), gated by the operator account's
 	// passkey-minted token. HYGUR_OPERATOR_ACCOUNT = admin@hygur.ai's account number.
 	if op := strings.TrimSpace(os.Getenv("HYGUR_OPERATOR_ACCOUNT")); op != "" {
-		controlplane.NewAdminConsole(store, svc, op).Register(root)
+		ac := controlplane.NewAdminConsole(store, svc, op)
+		if budget := envInt("HYGUR_GLOBAL_TOKENS_PER_DAY", 0); budget > 0 {
+			ac.WithDailyTokenBudget(budget)
+			fmt.Printf("hygur-console: fleet daily token budget = %d (alert-first, no auto-cut)\n", budget)
+		}
+		ac.Register(root)
 		if err := registerAdminSPA(root); err != nil {
 			die(fmt.Errorf("admin SPA: %w", err))
 		}
@@ -299,6 +305,16 @@ func runDevice(args []string) {
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return def
+}
+
+// envInt reads an integer env var, falling back to def when unset or unparseable.
+func envInt(k string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }

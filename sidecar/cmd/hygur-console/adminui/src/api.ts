@@ -24,9 +24,17 @@ export interface TenantCost {
   month: PeriodCost;
 }
 
+export interface FleetBudget {
+  tokens_per_day: number; // configured daily budget (0 = unset/disabled)
+  today_tokens: number;
+  ratio: number;
+  status: "ok" | "warn" | "over";
+}
+
 export interface CostResponse {
   summary: CostSummary;
   tenants: TenantCost[];
+  budget: FleetBudget;
   captured_at: string;
   generated_at: string;
 }

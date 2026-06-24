@@ -162,6 +162,47 @@ type TenantCost struct {
 	Month    PeriodCost `json:"month"`
 }
 
+// Fleet-wide daily token-budget status (alert-first; no auto-cut in v1). The
+// per-tenant cap already bounds each tenant; this is the fleet early-warning so a
+// broad spike can't quietly inflate the inference bill.
+const (
+	FleetBudgetOK   = "ok"
+	FleetBudgetWarn = "warn" // ≥80% of the daily budget
+	FleetBudgetOver = "over" // ≥100% of the daily budget
+
+	fleetBudgetWarnRatio = 0.80
+)
+
+// FleetBudget is today's fleet-wide token total measured against the configured
+// daily budget. TokensPerDay==0 means unset → the check is disabled (Status "ok").
+type FleetBudget struct {
+	TokensPerDay int     `json:"tokens_per_day"` // configured budget (0 = unset/disabled)
+	TodayTokens  int     `json:"today_tokens"`   // chat in+out + ingest, today
+	Ratio        float64 `json:"ratio"`          // today / budget (0 when disabled)
+	Status       string  `json:"status"`         // ok | warn | over
+}
+
+// EvaluateFleetBudget compares today's fleet token total (chat in+out + ingest)
+// against the daily budget. A budget ≤0 disables the check (Status "ok", Ratio 0).
+func EvaluateFleetBudget(today PeriodCost, budgetTokensPerDay int) FleetBudget {
+	fb := FleetBudget{
+		TokensPerDay: budgetTokensPerDay,
+		TodayTokens:  today.ChatIn + today.ChatOut + today.Ingest,
+		Status:       FleetBudgetOK,
+	}
+	if budgetTokensPerDay <= 0 {
+		return fb
+	}
+	fb.Ratio = float64(fb.TodayTokens) / float64(budgetTokensPerDay)
+	switch {
+	case fb.Ratio >= 1.0:
+		fb.Status = FleetBudgetOver
+	case fb.Ratio >= fleetBudgetWarnRatio:
+		fb.Status = FleetBudgetWarn
+	}
+	return fb
+}
+
 func (p FleetPricing) cost(chatIn, chatOut, ingest int) float64 {
 	return float64(chatIn)/1e6*p.ChatInPer1M +
 		float64(chatOut)/1e6*p.ChatOutPer1M +
