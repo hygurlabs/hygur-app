@@ -136,6 +136,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("lm_studio.indexing_reasoning_effort", "")
 	v.SetDefault("lm_studio.rerank_url", "")
 	v.SetDefault("lm_studio.rerank_model", "")
+	// Audio transcription endpoint/model (Whisper). audio_chat_asr default true =
+	// Sparky/local unchanged; set false on a managed no-audio chat model.
+	v.SetDefault("lm_studio.audio_url", "")
+	v.SetDefault("lm_studio.audio_model", "")
+	v.SetDefault("lm_studio.audio_chat_asr", true)
 
 	// Store defaults
 	v.SetDefault("store.path", DefaultStorePath)

@@ -106,6 +106,42 @@ func TestParseAudio_PostsMultipart(t *testing.T) {
 	}
 }
 
+// TestAudioParser_BearerAndWhisperModel verifies the Infomaniak cutover path:
+// WithAuth sends the Bearer header and WithWhisperModel sets the model id.
+func TestAudioParser_BearerAndWhisperModel(t *testing.T) {
+	var gotAuth, gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		mr := multipart.NewReader(r.Body, params["boundary"])
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			if part.FormName() == "model" {
+				b, _ := io.ReadAll(part)
+				gotModel = string(b)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"ok"}`))
+	}))
+	defer srv.Close()
+
+	// NewAudioParser → chat-ASR off → straight to the Whisper transcription POST.
+	p := NewAudioParser(srv.URL).WithAuth("tok123").WithWhisperModel("Whisper V3")
+	if _, _, err := p.Parse(context.Background(), strings.NewReader("fake-audio-bytes")); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if gotAuth != "Bearer tok123" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok123")
+	}
+	if gotModel != "Whisper V3" {
+		t.Errorf("model field = %q, want %q", gotModel, "Whisper V3")
+	}
+}
+
 // TestParseAudio_FailSoftOnHTTPError verifies that a 500 response from the
 // server results in an empty string and no error (fail-soft contract).
 func TestParseAudio_FailSoftOnHTTPError(t *testing.T) {

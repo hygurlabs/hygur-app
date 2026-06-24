@@ -276,6 +276,16 @@ type LMStudioConfig struct {
 	// VisionModel is the model id sent to VisionURL (e.g. "nemotron-omni").
 	// Falls back to ModelDefault when empty.
 	VisionModel string `mapstructure:"vision_model"`
+	// AudioURL is an optional audio-transcription endpoint (Whisper-compatible
+	// /v1/audio/transcriptions). Falls back to HYGUR_AUDIO_ENDPOINT env, then URL.
+	AudioURL string `mapstructure:"audio_url"`
+	// AudioModel is the transcription model id sent to AudioURL (e.g. Infomaniak
+	// "Whisper V3"). Empty → "whisper-1".
+	AudioModel string `mapstructure:"audio_model"`
+	// AudioChatASR transcribes via the multimodal chat model first (audio-capable
+	// models only). Default true (local/Sparky). Set false on a managed backend
+	// whose chat model has no audio (e.g. gemma-4-31B) → go straight to Whisper.
+	AudioChatASR bool `mapstructure:"audio_chat_asr"`
 
 	// NoChatTemplateKwargs omits chat_template_kwargs (e.g. {"enable_thinking":
 	// false}) from chat requests. Set true for hosted backends that reject unknown

@@ -40,8 +40,10 @@ Follow these specific instructions for formatting the answer:
 // to a Whisper-compatible /v1/audio/transcriptions endpoint. All errors are
 // fail-soft: it logs warnings and returns empty text rather than failing.
 type AudioParser struct {
-	llmBaseURL string
-	model      string // chat model for ASR (empty → Whisper fallback only)
+	llmBaseURL   string
+	model        string // chat model for ASR (empty → Whisper fallback only)
+	whisperModel string // model id for /v1/audio/transcriptions (empty → "whisper-1")
+	apiKey       string // Bearer for hosted backends (Infomaniak); empty → no auth (Sparky/local)
 }
 
 // NewAudioParser creates an AudioParser using the Whisper transcription path.
@@ -54,6 +56,19 @@ func NewAudioParser(llmBaseURL string) *AudioParser {
 // Whisper if the chat ASR fails.
 func NewAudioParserWithModel(endpoint, model string) *AudioParser {
 	return &AudioParser{llmBaseURL: strings.TrimSuffix(endpoint, "/"), model: model}
+}
+
+// WithAuth sets the Bearer API key sent to the audio endpoints. Hosted backends
+// (Infomaniak) require it; empty = no auth (the local/Sparky default).
+func (p *AudioParser) WithAuth(apiKey string) *AudioParser { p.apiKey = apiKey; return p }
+
+// WithWhisperModel overrides the transcription model id sent to
+// /v1/audio/transcriptions (e.g. Infomaniak "Whisper V3"); empty keeps "whisper-1".
+func (p *AudioParser) WithWhisperModel(m string) *AudioParser {
+	if m != "" {
+		p.whisperModel = m
+	}
+	return p
 }
 
 // SupportedExtensions returns the file extensions this parser handles.
@@ -85,7 +100,7 @@ func (p *AudioParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Me
 	// Primary path: native ASR via a multimodal chat model (Gemma) with Google's
 	// ASR prompt + an input_audio block (audio after the text prompt).
 	if p.model != "" {
-		text, err := transcribeViaChat(ctx, p.llmBaseURL, p.model, data, sniffAudioFormat(data))
+		text, err := transcribeViaChat(ctx, p.llmBaseURL, p.model, data, sniffAudioFormat(data), p.apiKey)
 		if err == nil && strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text), meta, nil
 		}
@@ -107,7 +122,7 @@ func (p *AudioParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Me
 	}
 	tmpFile.Close()
 
-	text, err := transcribeFile(ctx, p.llmBaseURL, tmpPath)
+	text, err := transcribeFile(ctx, p.llmBaseURL, tmpPath, p.whisperModel, p.apiKey)
 	if err != nil {
 		slog.WarnContext(ctx, "audio.parse: transcription failed", "err", err)
 		return "", meta, nil
@@ -118,7 +133,7 @@ func (p *AudioParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Me
 // transcribeViaChat sends audio to a multimodal chat model (e.g. gemma-4-12B-it)
 // using Google's ASR prompt and an OpenAI input_audio block (audio AFTER the
 // text prompt, per the multimodal-ordering guidance). Returns the transcription.
-func transcribeViaChat(ctx context.Context, endpoint, model string, data []byte, format string) (string, error) {
+func transcribeViaChat(ctx context.Context, endpoint, model string, data []byte, format, apiKey string) (string, error) {
 	lang := os.Getenv("HYGUR_ASR_LANGUAGE")
 	if lang == "" {
 		lang = "French"
@@ -150,6 +165,9 @@ func transcribeViaChat(ctx context.Context, endpoint, model string, data []byte,
 		return "", fmt.Errorf("audio chat ASR: request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
@@ -205,7 +223,7 @@ func ParseAudio(ctx context.Context, path string, llmBaseURL string) (ingest.Met
 		return meta, nil
 	}
 
-	text, err := transcribeFile(ctx, strings.TrimSuffix(llmBaseURL, "/"), path)
+	text, err := transcribeFile(ctx, strings.TrimSuffix(llmBaseURL, "/"), path, "", "")
 	if err != nil {
 		slog.WarnContext(ctx, "audio: transcription failed", "path", path, "err", err)
 		return meta, nil
@@ -216,7 +234,7 @@ func ParseAudio(ctx context.Context, path string, llmBaseURL string) (ingest.Met
 
 // transcribeFile posts the audio file at path to the Whisper transcription
 // endpoint. It returns the transcribed text or a wrapped error.
-func transcribeFile(ctx context.Context, baseURL, path string) (string, error) {
+func transcribeFile(ctx context.Context, baseURL, path, whisperModel, apiKey string) (string, error) {
 	lang := os.Getenv("HYGUR_WHISPER_LANG")
 	if lang == "" {
 		lang = "fr"
@@ -231,8 +249,12 @@ func transcribeFile(ctx context.Context, baseURL, path string) (string, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
-	// Add model field.
-	if err := mw.WriteField("model", defaultWhisperModel); err != nil {
+	// Add model field (configurable; e.g. Infomaniak "Whisper V3").
+	model := whisperModel
+	if model == "" {
+		model = defaultWhisperModel
+	}
+	if err := mw.WriteField("model", model); err != nil {
 		return "", fmt.Errorf("audio: write model field: %w", err)
 	}
 
@@ -260,6 +282,9 @@ func transcribeFile(ctx context.Context, baseURL, path string) (string, error) {
 		return "", fmt.Errorf("audio: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)

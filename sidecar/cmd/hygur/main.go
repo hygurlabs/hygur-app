@@ -366,9 +366,21 @@ func main() {
 	// HYGUR_ASR_LANGUAGE sets the transcription language (default "French").
 	audioURL := os.Getenv("HYGUR_AUDIO_ENDPOINT")
 	if audioURL == "" {
+		audioURL = cfg.LMStudio.AudioURL
+	}
+	if audioURL == "" {
 		audioURL = cfg.LMStudio.URL
 	}
-	ingestor.RegisterParser(parsers.NewAudioParserWithModel(audioURL, cfg.LMStudio.ModelDefault))
+	// chat-ASR via the multimodal chat model (Sparky/local default); disabled on a
+	// managed backend whose chat model has no audio (gemma-4-31B) → Whisper only.
+	audioChatModel := ""
+	if cfg.LMStudio.AudioChatASR {
+		audioChatModel = cfg.LMStudio.ModelDefault
+	}
+	ingestor.RegisterParser(
+		parsers.NewAudioParserWithModel(audioURL, audioChatModel).
+			WithAuth(cfg.LMStudio.APIKey).
+			WithWhisperModel(cfg.LMStudio.AudioModel))
 
 	// Create the semantic (vector-only) searcher used by the legacy /knowledge/search endpoint.
 	searcher := retrieval.NewHybridSearcher(db, llmClient)

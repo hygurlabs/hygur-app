@@ -60,7 +60,7 @@ func TestTranscribeViaChat_PromptThenAudio(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out, err := transcribeViaChat(context.Background(), srv.URL, "gemma4-12b", []byte("\x00\x00\x00\x20ftypM4A audio-bytes"), "m4a")
+	out, err := transcribeViaChat(context.Background(), srv.URL, "gemma4-12b", []byte("\x00\x00\x00\x20ftypM4A audio-bytes"), "m4a", "")
 	if err != nil {
 		t.Fatalf("transcribeViaChat: %v", err)
 	}
