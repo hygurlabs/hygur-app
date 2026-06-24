@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,38 @@ import (
 
 	"github.com/hygur/sidecar/internal/config"
 )
+
+// TestChat_BreakerOpensAfterConsecutiveOutages is the B1 wiring test: a backend
+// that always 503s makes Chat return ErrLLMUnavailable; after `threshold`
+// consecutive outages the breaker opens and the next call fast-fails WITHOUT
+// touching the server.
+func TestChat_BreakerOpensAfterConsecutiveOutages(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := NewClientWithHTTP(srv.URL, 2*time.Second, 0, http.DefaultClient) // 0 retries → 1 hit per call
+	req := ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}
+
+	for i := 0; i < defaultBreakerThreshold; i++ {
+		if _, err := c.Chat(context.Background(), req); !errors.Is(err, ErrLLMUnavailable) {
+			t.Fatalf("call %d: err=%v, want ErrLLMUnavailable", i, err)
+		}
+	}
+	if got := atomic.LoadInt32(&hits); got != int32(defaultBreakerThreshold) {
+		t.Fatalf("server hits = %d, want %d", got, defaultBreakerThreshold)
+	}
+	// Breaker is now open → fast-fail, server untouched.
+	if _, err := c.Chat(context.Background(), req); !errors.Is(err, ErrLLMUnavailable) {
+		t.Fatalf("open-breaker call: err=%v, want ErrLLMUnavailable", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != int32(defaultBreakerThreshold) {
+		t.Fatalf("breaker must fast-fail without hitting the server: hits=%d, want %d", got, defaultBreakerThreshold)
+	}
+}
 
 // Helper function to create a test client pointing to a test server.
 func newTestClient(t *testing.T, server *httptest.Server) *Client {

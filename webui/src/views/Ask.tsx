@@ -53,6 +53,9 @@ interface Turn {
   sources?: RagSource[];
   activity?: string;
   error?: string;
+  // Set when the inference backend was down and only retrieved sources are shown
+  // (no AI synthesis). The deterministic layer still answered with the facts.
+  degraded?: boolean;
   // Attachments carried on a user turn so they persist across the conversation
   // (F1): follow-up questions about an attached image keep its context.
   attachments?: AttachmentRef[];
@@ -598,7 +601,8 @@ export function Ask() {
             }));
           },
           onError: (message) => patchLast((t) => ({ ...t, error: message })),
-          onDone: () => patchLast((t) => ({ ...t, activity: undefined })),
+          onDone: (degraded) =>
+            patchLast((t) => ({ ...t, activity: undefined, degraded: !!degraded })),
         },
         ctrl.signal,
         { focusScope },
@@ -1457,6 +1461,13 @@ function AssistantTurn({
         <div className="mb-2 flex items-center gap-2 text-[13px] text-muted">
           <span className="size-1.5 animate-pulse rounded-full bg-accent" />
           {turn.activity}
+        </div>
+      )}
+
+      {turn.degraded && (
+        <div className="mb-2 flex items-center gap-2 text-[12.5px] text-muted">
+          <span className="size-1.5 rounded-full bg-amber-500" />
+          Offline mode — AI synthesis paused; showing what Hygur found.
         </div>
       )}
 

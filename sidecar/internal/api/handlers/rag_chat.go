@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -269,6 +270,16 @@ func todayGuidance() string {
 			"question, compute date_from/date_to from today and keep only sources inside the window. "+
 			"If none fall inside, say so rather than presenting out-of-window documents as if they were.",
 		time.Now().Format("2006-01-02"))
+}
+
+// degradedChatMessage is the user-facing text sent when the inference backend is
+// unavailable (B2 fail-soft). It names the limit plainly and points to the sources
+// Hygur retrieved, or asks to retry when there were none.
+func degradedChatMessage(hasSources bool) string {
+	if hasSources {
+		return "AI synthesis is temporarily unavailable. Here are the most relevant sources I found for your question."
+	}
+	return "AI synthesis is temporarily unavailable. Please try again in a moment."
 }
 
 func injectFormatGuidance(messages []llm.Message) []llm.Message {
@@ -886,9 +897,23 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.logger.Error().Err(streamErr).Msg("chat stream error")
-		writeSSEError(w, "LLM_STUDIO_ERROR", streamErr.Error())
-		flusher.Flush()
+		// Graceful degradation (algo-first): when the inference backend is down,
+		// don't surface a hard error. The retrieval layer already ran — any
+		// sources found this turn were streamed as rag_context events — so send
+		// a plain message + a `degraded` marker and let the UI keep the sources
+		// panel. No prose, but the facts Hygur found stay visible.
+		if errors.Is(streamErr, llm.ErrLLMUnavailable) {
+			h.logger.Warn().Err(streamErr).Int("sources", len(turnSources)).
+				Msg("chat degraded: LLM unavailable, returning retrieved sources only")
+			msg := degradedChatMessage(len(turnSources) > 0)
+			assistantBuf.WriteString(msg)
+			_ = writeSSE(map[string]any{"delta": msg, "done": false})
+			_ = writeSSE(map[string]any{"degraded": true, "done": true})
+		} else {
+			h.logger.Error().Err(streamErr).Msg("chat stream error")
+			writeSSEError(w, "LLM_STUDIO_ERROR", streamErr.Error())
+			flusher.Flush()
+		}
 	} else {
 		// Final `done` event with usage, mirroring the pre-tool-loop wire format.
 		doneEvent := map[string]any{"done": true}

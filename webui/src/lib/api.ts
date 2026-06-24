@@ -561,7 +561,8 @@ export interface ChatHandlers {
   onDelta?: (delta: string) => void;
   onTool?: (name: string) => void;
   onError?: (message: string) => void;
-  onDone?: () => void;
+  /** degraded=true when the inference backend was down and only retrieved sources are shown. */
+  onDone?: (degraded?: boolean) => void;
 }
 
 export interface ChatOptions {
@@ -667,7 +668,7 @@ export async function streamChat(
         handlers.onDelta?.(evt.delta);
       }
       if (evt.done === true) {
-        handlers.onDone?.();
+        handlers.onDone?.(evt.degraded === true);
       }
     },
     onerror(err) {

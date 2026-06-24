@@ -216,6 +216,59 @@ func TestRAGChatHandler_WithRAGEnabled(t *testing.T) {
 	_ = mockIntent
 }
 
+func TestDegradedChatMessage(t *testing.T) {
+	if msg := degradedChatMessage(true); !strings.Contains(msg, "sources") {
+		t.Errorf("with sources should point to them: %q", msg)
+	}
+	if msg := degradedChatMessage(false); !strings.Contains(msg, "try again") {
+		t.Errorf("without sources should ask to retry: %q", msg)
+	}
+}
+
+// TestRAGChatHandler_DegradesWhenLLMUnavailable is the B2/B3 wiring test: when
+// the inference backend is down, the chat handler emits a `degraded` SSE event
+// + a plain message instead of a hard LLM error (algo-first fail-soft).
+func TestRAGChatHandler_DegradesWhenLLMUnavailable(t *testing.T) {
+	// Backend always 503 → the client returns llm.ErrLLMUnavailable.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	client := createMockLLMClient(srv.URL)
+	handler := NewRAGChatHandler(client, nil, nil, DefaultRAGConfig, zerolog.Nop())
+
+	reqBody := `{"messages":[{"role":"user","content":"hello"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (SSE)", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "LLM_STUDIO_ERROR") {
+		t.Errorf("degraded path must not emit a hard error; body=%q", body)
+	}
+
+	var sawDegraded, sawMessage bool
+	for _, e := range parseSSEEvents(t, body) {
+		if d, ok := e["degraded"].(bool); ok && d {
+			sawDegraded = true
+		}
+		if s, ok := e["delta"].(string); ok && strings.Contains(s, "temporarily unavailable") {
+			sawMessage = true
+		}
+	}
+	if !sawDegraded {
+		t.Errorf("expected a degraded SSE event; body=%q", body)
+	}
+	if !sawMessage {
+		t.Errorf("expected the degraded message delta; body=%q", body)
+	}
+}
+
 func TestRAGChatHandler_RAGDisabledInRequest(t *testing.T) {
 	// Create mock LM Studio server
 	chunks := []string{"Hello", " world!"}

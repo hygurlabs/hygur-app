@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,13 @@ import (
 
 	"github.com/hygur/sidecar/internal/config"
 )
+
+// ErrLLMUnavailable signals that the inference backend is unreachable — either
+// the circuit-breaker is open (fast-fail) or all retries were exhausted on a
+// transport error / retryable 5xx. Callers use errors.Is(err, ErrLLMUnavailable)
+// to degrade gracefully to the deterministic layer instead of surfacing a hard
+// error (Hygur is algo-first: "l'algo se souvient, le modèle met les mots").
+var ErrLLMUnavailable = errors.New("LLM temporarily unavailable")
 
 // defaultEmbeddingTimeout is used when no explicit embedding timeout is configured.
 const defaultEmbeddingTimeout = 5 * time.Minute
@@ -63,6 +71,10 @@ type Client struct {
 	// reranking. Auth reuses apiKey (Bearer).
 	rerankURL   string
 	rerankModel string
+	// breaker fast-fails the chat/inference path while the backend is down so a
+	// surface (chat, brief…) can degrade to the deterministic layer immediately
+	// instead of waiting out timeouts. Guards Chat + streamWith only.
+	breaker *circuitBreaker
 }
 
 // prepareRequest applies the backend-compatibility transforms to a chat request
@@ -456,6 +468,7 @@ func NewClient(cfg *config.LMStudioConfig) *Client {
 		reasoningEffort:        cfg.ReasoningEffort,
 		rerankURL:              strings.TrimSuffix(cfg.RerankURL, "/"),
 		rerankModel:            cfg.RerankModel,
+		breaker:                newCircuitBreaker(),
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
@@ -477,6 +490,7 @@ func NewClientWithHTTP(baseURL string, timeout time.Duration, maxRetries int, ht
 		maxRetries:          maxRetries,
 		embeddingModel:      "",
 		embeddingMaxTokens:  DefaultEmbeddingMaxTokens,
+		breaker:             newCircuitBreaker(),
 		httpClient:          httpClient,
 		embeddingHTTPClient: httpClient,
 		streamHTTPClient:    httpClient,
@@ -525,6 +539,9 @@ func (c *Client) StreamChatRich(ctx context.Context, req ChatRequest, handler St
 // dispatch to a stream parser). The supplied parser owns reading the response
 // body; this function closes it after the parser returns.
 func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.Reader) error) error {
+	if !c.breaker.allow(time.Now()) {
+		return ErrLLMUnavailable
+	}
 	req.Stream = true
 	// Only opt into the terminal usage chunk when we have somewhere to record
 	// it — keeps the request identical to before for callers without a recorder.
@@ -598,17 +615,24 @@ func (c *Client) streamWith(ctx context.Context, req ChatRequest, parse func(io.
 			// Stream errors are not retried since we may have already sent partial data
 			return err
 		}
+		c.breaker.record(true, time.Now())
 		return nil
 	}
 
+	// All retries exhausted on a transport error / retryable 5xx → the backend is
+	// down. Trip the breaker and wrap so callers can degrade gracefully.
+	c.breaker.record(false, time.Now())
 	if lastErr != nil {
-		return fmt.Errorf("all retries exhausted: %w", lastErr)
+		return fmt.Errorf("%w: all retries exhausted: %v", ErrLLMUnavailable, lastErr)
 	}
-	return fmt.Errorf("all retries exhausted")
+	return fmt.Errorf("%w: all retries exhausted", ErrLLMUnavailable)
 }
 
 // Chat sends a non-streaming chat request and returns the complete response.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if !c.breaker.allow(time.Now()) {
+		return nil, ErrLLMUnavailable
+	}
 	req.Stream = false
 	req = c.prepareRequest(req)
 
@@ -668,13 +692,17 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		}
 
 		c.recordChatUsage(chatResp.Usage)
+		c.breaker.record(true, time.Now())
 		return &chatResp, nil
 	}
 
+	// All retries exhausted on a transport error / retryable 5xx → the backend is
+	// down. Trip the breaker and wrap so callers can degrade gracefully.
+	c.breaker.record(false, time.Now())
 	if lastErr != nil {
-		return nil, fmt.Errorf("all retries exhausted: %w", lastErr)
+		return nil, fmt.Errorf("%w: all retries exhausted: %v", ErrLLMUnavailable, lastErr)
 	}
-	return nil, fmt.Errorf("all retries exhausted")
+	return nil, fmt.Errorf("%w: all retries exhausted", ErrLLMUnavailable)
 }
 
 // ListModels returns the list of available models.
