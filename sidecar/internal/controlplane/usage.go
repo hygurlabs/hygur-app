@@ -177,17 +177,20 @@ const (
 // daily budget. TokensPerDay==0 means unset → the check is disabled (Status "ok").
 type FleetBudget struct {
 	TokensPerDay int     `json:"tokens_per_day"` // configured budget (0 = unset/disabled)
-	TodayTokens  int     `json:"today_tokens"`   // chat in+out + ingest, today
+	TodayTokens  int     `json:"today_tokens"`   // chat in+out today (ingest excluded)
 	Ratio        float64 `json:"ratio"`          // today / budget (0 when disabled)
 	Status       string  `json:"status"`         // ok | warn | over
 }
 
-// EvaluateFleetBudget compares today's fleet token total (chat in+out + ingest)
-// against the daily budget. A budget ≤0 disables the check (Status "ok", Ratio 0).
+// EvaluateFleetBudget compares today's fleet CHAT token total (in+out) against the
+// daily budget. Ingest/indexing is excluded: it's the cheap bucket and spikes at
+// onboarding (a day-1 backfill must not trip the alert), and this mirrors the
+// per-tenant cap, which is also chat-only. The budget tracks the chat margin lever
+// (per-token inference). A budget ≤0 disables the check (Status "ok", Ratio 0).
 func EvaluateFleetBudget(today PeriodCost, budgetTokensPerDay int) FleetBudget {
 	fb := FleetBudget{
 		TokensPerDay: budgetTokensPerDay,
-		TodayTokens:  today.ChatIn + today.ChatOut + today.Ingest,
+		TodayTokens:  today.ChatIn + today.ChatOut, // chat only; ingest excluded
 		Status:       FleetBudgetOK,
 	}
 	if budgetTokensPerDay <= 0 {

@@ -47,8 +47,9 @@ func TestTenantUsageSnapshots_AndPricing(t *testing.T) {
 }
 
 func TestEvaluateFleetBudget(t *testing.T) {
-	// Today = 800k tokens (chat 500k+200k + ingest 100k).
-	today := PeriodCost{ChatIn: 500_000, ChatOut: 200_000, Ingest: 100_000}
+	// Today = 800k CHAT tokens (500k+300k). Ingest is deliberately huge (1M) to
+	// prove it is EXCLUDED from the budget total — only chat counts toward the cap.
+	today := PeriodCost{ChatIn: 500_000, ChatOut: 300_000, Ingest: 1_000_000}
 	cases := []struct {
 		name        string
 		budget      int

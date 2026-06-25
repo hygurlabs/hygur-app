@@ -97,10 +97,11 @@ func TestAdminCost_BudgetSurfaced(t *testing.T) {
 	fixed := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return fixed }
 
-	// Today's fleet usage = 1.2M tokens (chat 800k+300k + ingest 100k).
+	// Today's fleet CHAT usage = 1.1M (800k+300k). Ingest 5M is deliberately large
+	// to prove it is EXCLUDED from the budget total (only chat trips the cap).
 	if err := store.UpsertTenantUsage(fixed, TenantUsageDay{
 		TenantID: "home", Account: "42", Day: fixed.Format("2006-01-02"),
-		ChatIn: 800_000, ChatOut: 300_000, Ingest: 100_000,
+		ChatIn: 800_000, ChatOut: 300_000, Ingest: 5_000_000,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -136,9 +137,9 @@ func TestAdminCost_BudgetSurfaced(t *testing.T) {
 		return cr
 	}
 
-	// 1M budget < 1.2M used → over.
-	if cr := fetch(1_000_000); cr.Budget.Status != FleetBudgetOver || cr.Budget.TodayTokens != 1_200_000 {
-		t.Fatalf("over: got status=%q today=%d, want over/1200000", cr.Budget.Status, cr.Budget.TodayTokens)
+	// 1M budget < 1.1M chat used → over (the 5M ingest is ignored).
+	if cr := fetch(1_000_000); cr.Budget.Status != FleetBudgetOver || cr.Budget.TodayTokens != 1_100_000 {
+		t.Fatalf("over: got status=%q today=%d, want over/1100000", cr.Budget.Status, cr.Budget.TodayTokens)
 	}
 	// No budget → disabled, status ok.
 	if cr := fetch(0); cr.Budget.Status != FleetBudgetOK || cr.Budget.TokensPerDay != 0 {
