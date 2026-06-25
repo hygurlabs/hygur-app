@@ -339,6 +339,10 @@ func (a Account) IsActive(now time.Time) bool {
 
 // CreateEnrollCode mints a one-time enrollment code for an account+device label,
 // valid for ttl. Returns the PLAINTEXT code (shown once); only its hash is stored.
+// Minting INVALIDATES any prior live (unused) code for the same account+label in
+// the same tx, so only the latest code is ever redeemable — this caps concurrent
+// codes per account and stops the Stripe success page from accumulating unlimited
+// 30-min codes on every refresh.
 func (s *Store) CreateEnrollCode(now time.Time, accountNumber, label string, ttl time.Duration) (string, error) {
 	if _, err := s.GetAccount(accountNumber); err != nil {
 		return "", err
@@ -347,10 +351,23 @@ func (s *Store) CreateEnrollCode(now time.Time, accountNumber, label string, ttl
 	if err != nil {
 		return "", err
 	}
-	_, err = s.db.Exec(`INSERT INTO enroll_codes(code_hash,account_number,label,expires_at,used_at) VALUES(?,?,?,?,NULL)`,
-		hashToken(code), accountNumber, label, now.Add(ttl).UTC().Format(rfc))
+	tx, err := s.db.Begin()
 	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Expire prior unused codes for this account+label (mark them used now).
+	if _, err := tx.Exec(
+		`UPDATE enroll_codes SET used_at=? WHERE account_number=? AND label=? AND used_at IS NULL`,
+		now.UTC().Format(rfc), accountNumber, label); err != nil {
+		return "", fmt.Errorf("controlplane: invalidate prior enroll codes: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO enroll_codes(code_hash,account_number,label,expires_at,used_at) VALUES(?,?,?,?,NULL)`,
+		hashToken(code), accountNumber, label, now.Add(ttl).UTC().Format(rfc)); err != nil {
 		return "", fmt.Errorf("controlplane: create enroll code: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
 	}
 	return code, nil
 }
@@ -612,7 +629,7 @@ func hashToken(s string) string {
 }
 
 // randomCode returns a short, human-relayable one-time code (Crockford-ish base32,
-// no padding) — ~50 bits, fine for a short-lived single-use enrollment code.
+// no padding) — 80 bits (10 bytes), fine for a short-lived single-use enrollment code.
 func randomCode() (string, error) {
 	b := make([]byte, 10)
 	if _, err := rand.Read(b); err != nil {

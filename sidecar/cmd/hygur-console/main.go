@@ -10,13 +10,16 @@
 //
 // Config (env): HYGUR_CONSOLE_DB (path), HYGUR_CONSOLE_DB_KEY (SQLCipher key),
 // HYGUR_AUTH_PRIVATE_KEY (issuer key PEM, for `serve`), HYGUR_CONSOLE_DOMAIN
-// (tenant domain, default hygur.ai), HYGUR_CONSOLE_ADDR (default :8090).
+// (tenant domain, default hygur.ai), HYGUR_CONSOLE_ADDR (default :8090),
+// HYGUR_CONSOLE_ALLOWED_HOSTS (comma-separated Host allow-list, anti DNS-rebind;
+// unset = fail open for dev).
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -113,6 +116,14 @@ func runServe(args []string) {
 	die(err)
 
 	root := chi.NewRouter()
+	// Anti DNS-rebind: reject requests whose Host isn't allow-listed. Fail-OPEN
+	// when HYGUR_CONSOLE_ALLOWED_HOSTS is unset (dev), enforce when set. Health/
+	// probe paths are always exempt. Must include the Stripe webhook + success
+	// page host so payments keep flowing.
+	if hg := consoleHostGuard(envOr("HYGUR_CONSOLE_ALLOWED_HOSTS", "")); hg != nil {
+		root.Use(hg)
+		fmt.Println("hygur-console: Host guard enabled (HYGUR_CONSOLE_ALLOWED_HOSTS)")
+	}
 	// The cloud web shell (cloud.hygur.ai) calls enroll + passkey ceremonies
 	// cross-origin; permit it (+ console) here. Loopback is always allowed.
 	rpOrigins := splitCSV(envOr("HYGUR_RP_ORIGINS", "https://cloud.hygur.ai,https://console.hygur.ai"))
@@ -328,4 +339,44 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// consoleHostGuard builds a Host-header allow-list middleware (anti DNS-rebind)
+// from a comma-separated host list. Returns nil (fail-open, dev) when the list is
+// empty so an unset env never breaks local development; when set it rejects any
+// request whose Host isn't listed. Loopback is always allowed; health/probe paths
+// are exempt so k8s probes (Host = pod IP) keep working.
+func consoleHostGuard(hosts string) func(http.Handler) http.Handler {
+	allow := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range splitCSV(hosts) {
+		allow[consoleHostOnly(h)] = true
+	}
+	if len(allow) == 3 { // only the loopback defaults → unset → fail open
+		return nil
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/health", "/healthz", "/version", "/livez", "/readyz":
+				next.ServeHTTP(w, r)
+				return
+			}
+			if !allow[consoleHostOnly(r.Host)] {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"host not allowed"}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// consoleHostOnly lowercases a Host and strips the port (+ IPv6 brackets).
+func consoleHostOnly(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.Trim(host, "[]")
 }

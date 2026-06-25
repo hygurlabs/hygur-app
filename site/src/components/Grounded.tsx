@@ -8,13 +8,13 @@ export function Grounded() {
     <section className="border-b border-hairline">
       <div className="mx-auto max-w-6xl px-5 py-16 sm:px-8 lg:py-20">
         <Reveal>
-          <p className="max-w-2xl text-pretty text-xl leading-snug text-text sm:text-2xl">
+          <h2 className="max-w-2xl text-pretty text-xl leading-snug text-text sm:text-2xl">
             An assistant worth trusting is one you can check.{" "}
             <span className="text-muted">
               Hygur answers from your own world, shows its sources, and tells you
               when they disagree.
             </span>
-          </p>
+          </h2>
         </Reveal>
 
         <ul className="mt-12 grid gap-px overflow-hidden rounded-2xl border border-hairline bg-hairline sm:grid-cols-3">

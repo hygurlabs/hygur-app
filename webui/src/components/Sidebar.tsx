@@ -126,7 +126,7 @@ export function Sidebar({
 
   return (
     <nav
-      className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface2 px-2.5 py-4 transition-transform duration-200 ease-out md:static md:z-auto md:w-[212px] md:translate-x-0 print:hidden ${
+      className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface2 px-2.5 pt-[calc(1rem_+_env(safe-area-inset-top))] pb-[calc(1rem_+_env(safe-area-inset-bottom))] transition-transform duration-200 ease-out md:static md:z-auto md:w-[212px] md:translate-x-0 print:hidden ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
     >

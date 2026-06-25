@@ -25,6 +25,12 @@ type Service struct {
 	accessTTL time.Duration
 	domain    string // tenant endpoint = https://<tenant_id>.<domain>
 	now       func() time.Time
+
+	// Anti-brute-force limiters (in-memory; this is a single process). Generous
+	// limits — a normal user never hits them. enrollLimit is keyed by remote IP
+	// (the enroll endpoint is unauthenticated); linkLimit is keyed by account.
+	enrollLimit *rateLimiter
+	linkLimit   *rateLimiter
 }
 
 // NewService parses the issuer private key (PEM) and wires the service.
@@ -39,7 +45,11 @@ func NewService(store *Store, issuerPrivPEM, domain string, accessTTL time.Durat
 	if domain == "" {
 		domain = "hygur.ai"
 	}
-	return &Service{store: store, signer: priv, accessTTL: accessTTL, domain: domain, now: time.Now}, nil
+	return &Service{
+		store: store, signer: priv, accessTTL: accessTTL, domain: domain, now: time.Now,
+		enrollLimit: newRateLimiter(10, time.Minute), // 10 enroll attempts / minute / IP
+		linkLimit:   newRateLimiter(20, time.Hour),   // 20 link codes / hour / account
+	}, nil
 }
 
 func (s *Service) clock() time.Time {
@@ -105,6 +115,10 @@ func (s *Service) handleLinkCode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if s.linkLimit != nil && !s.linkLimit.allow(claims.Sub) {
+		writeErr(w, http.StatusTooManyRequests, "too many requests")
+		return
+	}
 	acc, err := s.store.GetAccount(claims.Sub)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "no account")
@@ -150,6 +164,10 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 // from the portal callback and receives its access + refresh tokens + the tenant
 // endpoint to connect to.
 func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	if s.enrollLimit != nil && !s.enrollLimit.allow(clientIP(r)) {
+		writeErr(w, http.StatusTooManyRequests, "too many requests")
+		return
+	}
 	var in enrollReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Code == "" {
 		writeErr(w, http.StatusBadRequest, "code required")

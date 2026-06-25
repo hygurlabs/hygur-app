@@ -51,7 +51,7 @@ export function InstallPrompt() {
       <button
         onClick={dismiss}
         aria-label="Dismiss"
-        className="shrink-0 rounded-md p-1 text-faint transition-colors hover:text-text"
+        className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md p-1 text-faint transition-colors hover:text-text"
       >
         <X size={16} strokeWidth={2} />
       </button>

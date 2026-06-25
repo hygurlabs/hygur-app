@@ -2,3 +2,8 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Generated mobile projects (scaffolded by `tauri ios/android init`). Treated as
+# generated for now — revisit if we need to commit per-platform customizations.
+/gen/apple
+/gen/android

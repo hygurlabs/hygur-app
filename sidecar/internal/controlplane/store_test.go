@@ -126,3 +126,38 @@ func TestEnrollAndRefresh(t *testing.T) {
 		t.Error("device should show revoked")
 	}
 }
+
+// TestCreateEnrollCode_InvalidatesPrior verifies that minting a new code for the
+// same account+label invalidates the prior live code (only the latest is
+// redeemable) — caps concurrent codes + fixes success-page refresh-spam. Codes
+// for a different label are left untouched.
+func TestCreateEnrollCode_InvalidatesPrior(t *testing.T) {
+	s := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	acc, _ := s.CreateAccount(now, "u@x.com", "active", nil)
+
+	first, err := s.CreateEnrollCode(now, acc.AccountNumber, "web", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("first CreateEnrollCode: %v", err)
+	}
+	// A code for a different label must survive the next mint.
+	other, _ := s.CreateEnrollCode(now, acc.AccountNumber, "mobile", 30*time.Minute)
+
+	second, err := s.CreateEnrollCode(now, acc.AccountNumber, "web", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("second CreateEnrollCode: %v", err)
+	}
+
+	// The first (same-label) code is now dead.
+	if _, _, err := s.RedeemEnrollCode(now, first); !errors.Is(err, ErrCodeInvalid) {
+		t.Errorf("prior same-label code: want ErrCodeInvalid, got %v", err)
+	}
+	// The latest code still redeems (single-use + atomic preserved).
+	if _, _, err := s.RedeemEnrollCode(now, second); err != nil {
+		t.Errorf("latest code should redeem: %v", err)
+	}
+	// The different-label code is untouched.
+	if _, _, err := s.RedeemEnrollCode(now, other); err != nil {
+		t.Errorf("different-label code should still redeem: %v", err)
+	}
+}

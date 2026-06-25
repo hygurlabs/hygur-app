@@ -4,12 +4,13 @@ import { Badge, Eyebrow, Reveal, cx } from "./ui";
 
 /** Asymmetric 7/5 · 7/5 pinwheel so the editions never read as equal cards.
  *  App is the free local client; Cloud carries the warm "core" highlight;
- *  Marketplace is the ecosystem; Teams is the "soon" teaser. */
+ *  Marketplace is the ecosystem; Teams is the "soon" teaser. Tablets get a
+ *  plain 2-up grid (each card spans 1) before the lg pinwheel. */
 const SPAN: Record<string, string> = {
-  app: "lg:col-span-7",
-  cloud: "lg:col-span-5",
-  marketplace: "lg:col-span-7",
-  teams: "lg:col-span-5",
+  app: "sm:col-span-1 lg:col-span-7",
+  cloud: "sm:col-span-1 lg:col-span-5",
+  marketplace: "sm:col-span-1 lg:col-span-7",
+  teams: "sm:col-span-1 lg:col-span-5",
 };
 
 function badgeTone(edition: Edition, badge: string): "neutral" | "accent" | "core" {
@@ -21,21 +22,20 @@ function badgeTone(edition: Edition, badge: string): "neutral" | "accent" | "cor
 function EditionCard({ edition, delay }: { edition: Edition; delay: number }) {
   const Icon = edition.icon;
   const featured = edition.featured;
-  return (
-    <Reveal as="article" delay={delay} className={cx("group/card", SPAN[edition.id])}>
-      <a
-        href={edition.href ?? GITHUB_URL}
-        target={(edition.href ?? GITHUB_URL).startsWith("http") ? "_blank" : undefined}
-        rel="noreferrer"
-        className={cx(
-          "flex h-full flex-col rounded-2xl border p-7 transition-[transform,border-color,box-shadow] duration-300 sm:p-8",
-          "hover:-translate-y-1 hover:shadow-[var(--shadow-lift)]",
-          featured
-            ? "border-[color:var(--core)]/35 bg-[color:var(--core-glow)]/[0.07] hover:border-[color:var(--core)]/60"
-            : "border-border bg-surface hover:border-accent/45",
-        )}
-      >
-        <div className="flex items-center justify-between gap-4">
+  const actionable = edition.actionable ?? false;
+  const href = edition.href ?? GITHUB_URL;
+
+  const surface = cx(
+    "flex h-full flex-col rounded-2xl border p-7 transition-[transform,border-color,box-shadow] duration-300 sm:p-8",
+    actionable && "hover:-translate-y-1 hover:shadow-[var(--shadow-lift)]",
+    featured
+      ? cx("border-[color:var(--core)]/35 bg-[color:var(--core-glow)]/[0.07]", actionable && "hover:border-[color:var(--core)]/60")
+      : cx("border-border bg-surface", actionable && "hover:border-accent/45"),
+  );
+
+  const body = (
+    <>
+      <div className="flex items-center justify-between gap-4">
           <span
             className={cx(
               "grid h-12 w-12 place-items-center rounded-xl transition-colors",
@@ -75,13 +75,31 @@ function EditionCard({ edition, delay }: { edition: Edition; delay: number }) {
           )}
         >
           {edition.cta}
-          <ArrowRight
-            size={16}
-            strokeWidth={2}
-            className="transition-transform duration-200 group-hover/card:translate-x-1"
-          />
+          {actionable && (
+            <ArrowRight
+              size={16}
+              strokeWidth={2}
+              className="transition-transform duration-200 group-hover/card:translate-x-1"
+            />
+          )}
         </span>
-      </a>
+    </>
+  );
+
+  return (
+    <Reveal as="article" delay={delay} className={cx("group/card", SPAN[edition.id])}>
+      {actionable ? (
+        <a
+          href={href}
+          target={href.startsWith("http") ? "_blank" : undefined}
+          rel="noreferrer"
+          className={surface}
+        >
+          {body}
+        </a>
+      ) : (
+        <div className={surface}>{body}</div>
+      )}
     </Reveal>
   );
 }
@@ -102,7 +120,7 @@ export function Editions() {
           </p>
         </Reveal>
 
-        <div className="mt-12 grid gap-5 lg:grid-cols-12">
+        <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-12">
           {EDITIONS.map((e, i) => (
             <EditionCard key={e.id} edition={e} delay={i * 80} />
           ))}

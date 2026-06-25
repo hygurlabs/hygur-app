@@ -134,6 +134,9 @@ export interface Edition {
   href?: string;
   /** Featured editions get the warm "core" treatment and span wider. */
   featured?: boolean;
+  /** Whether the CTA goes somewhere. "Soon" cards (no real destination) render
+   *  as a static container, not a link, so they don't read as clickable. */
+  actionable?: boolean;
 }
 
 export const EDITIONS: Edition[] = [
@@ -147,6 +150,7 @@ export const EDITIONS: Edition[] = [
     icon: MonitorSmartphone,
     cta: "Get the app",
     href: RELEASES_URL,
+    actionable: true,
   },
   {
     id: "cloud",
@@ -159,8 +163,9 @@ export const EDITIONS: Edition[] = [
       : ["29.90 €/mo · launch", "EU-only · no training", "Coming soon"],
     icon: Cloud,
     cta: CLOUD_OPEN ? "Subscribe" : "Coming soon",
-    // Closed: stay on the page (never open Stripe). Open: the Stripe payment link.
-    href: CLOUD_OPEN ? CLOUD_SUBSCRIBE_URL : "#editions",
+    // Closed: no destination (static card, never opens Stripe). Open: the Stripe payment link.
+    href: CLOUD_OPEN ? CLOUD_SUBSCRIBE_URL : undefined,
+    actionable: CLOUD_OPEN,
     featured: true,
   },
   {
@@ -173,6 +178,7 @@ export const EDITIONS: Edition[] = [
     icon: Blocks,
     cta: "Browse connectors",
     href: "#/connectors",
+    actionable: true,
   },
   {
     id: "teams",
@@ -183,7 +189,7 @@ export const EDITIONS: Edition[] = [
     badges: ["Soon"],
     icon: Network,
     cta: "Coming soon",
-    href: "#editions",
+    actionable: false,
   },
 ];
 

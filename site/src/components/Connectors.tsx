@@ -10,8 +10,8 @@ function ConnectorCard({ c, delay }: { c: Connector; delay: number }) {
     <Reveal as="article" delay={delay}>
       <div
         className={cx(
-          "flex h-full flex-col rounded-2xl border border-border bg-surface p-6 transition-colors",
-          c.soon ? "opacity-90" : "hover:border-accent/45",
+          "flex h-full flex-col rounded-2xl border border-border bg-surface p-6",
+          c.soon && "opacity-90",
         )}
       >
         <div className="flex items-center justify-between gap-3">
@@ -81,7 +81,10 @@ export function Connectors() {
           data stays yours.
         </p>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <h2 className="mt-12 text-sm font-semibold uppercase tracking-[0.12em] text-faint">
+          Available now
+        </h2>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {live.map((c, i) => (
             <ConnectorCard key={c.name} c={c} delay={i * 60} />
           ))}

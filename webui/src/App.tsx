@@ -74,7 +74,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
               <button
                 onClick={() => setNavOpen(true)}
                 aria-label="Open menu"
-                className="rounded-md p-1.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
+                className="flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
               >
                 <Menu size={20} strokeWidth={1.9} />
               </button>
@@ -125,7 +125,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             <button
               onClick={() => setUpdateDismissed(true)}
               aria-label="Dismiss"
-              className="rounded-md p-0.5 text-faint transition-colors hover:text-text"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-md p-0.5 text-faint transition-colors hover:text-text"
             >
               <X size={14} strokeWidth={2} />
             </button>

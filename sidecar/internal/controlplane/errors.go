@@ -72,7 +72,12 @@ func (s *Store) ListRecentErrors(limit int) ([]ClientError, error) {
 // store rings at clientErrorsKeep. Malformed bodies are swallowed (204) so a
 // reporting bug never turns into client-side error noise.
 func RegisterErrorIngest(r chi.Router, store *Store) {
+	limiter := newRateLimiter(30, time.Minute) // 30 reports / minute / IP
 	r.Post("/errors", func(w http.ResponseWriter, req *http.Request) {
+		if !limiter.allow(clientIP(req)) {
+			writeErr(w, http.StatusTooManyRequests, "too many requests")
+			return
+		}
 		req.Body = http.MaxBytesReader(w, req.Body, 16*1024)
 		var body struct {
 			Message    string `json:"message"`

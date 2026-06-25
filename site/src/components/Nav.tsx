@@ -56,7 +56,7 @@ export function Nav() {
         <div className="flex items-center gap-2">
           <a
             href="#/connectors"
-            className="hidden text-sm text-muted transition-colors hover:text-text sm:inline"
+            className="text-sm text-muted transition-colors hover:text-text"
           >
             Connectors
           </a>

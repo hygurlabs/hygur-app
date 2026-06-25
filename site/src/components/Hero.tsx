@@ -57,9 +57,10 @@ export function Hero() {
             <AskTypewriter />
             <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint">
               <span className="font-medium uppercase tracking-wider">Bring your runtime</span>
-              {RUNTIMES.map((r) => (
-                <span key={r} className="font-mono text-[0.72rem] text-muted">
-                  {r}
+              {RUNTIMES.map((r, i) => (
+                <span key={r} className="flex items-center gap-x-2">
+                  {i > 0 && <span aria-hidden className="text-faint">·</span>}
+                  <span className="font-mono text-[0.72rem] text-muted">{r}</span>
                 </span>
               ))}
             </div>

@@ -681,7 +681,7 @@ export function StepMobile() {
           <button
             onClick={() => void generate()}
             disabled={busy}
-            className="text-[12.5px] text-muted transition-colors hover:text-text"
+            className="inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-[12.5px] text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           >
             {busy ? "Generating…" : "New code"}
           </button>

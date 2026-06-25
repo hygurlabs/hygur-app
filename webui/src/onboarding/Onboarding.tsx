@@ -131,17 +131,25 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
           {index > 0 && (
             <button
               onClick={back}
-              className="rounded-lg px-2 py-1.5 text-[13px] text-muted transition-colors hover:text-text"
+              className="inline-flex min-h-11 items-center rounded-lg px-2 py-1.5 text-[13px] text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               Back
             </button>
           )}
         </div>
 
-        <div className="flex flex-1 items-center justify-center gap-2" aria-hidden>
+        <div
+          className="flex flex-1 items-center justify-center gap-2"
+          role="progressbar"
+          aria-valuenow={index + 1}
+          aria-valuemin={1}
+          aria-valuemax={STEPS.length}
+          aria-label={`Step ${index + 1} of ${STEPS.length}`}
+        >
           {STEPS.map((s, i) => (
             <span
               key={s.id}
+              aria-hidden
               className={`h-1.5 rounded-full transition-all ${
                 i === index ? "w-5 bg-accent" : "w-1.5 bg-border"
               }`}
@@ -153,7 +161,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
           {step.skippable && (
             <button
               onClick={next}
-              className="rounded-lg px-2 py-1.5 text-[13px] text-muted transition-colors hover:text-text"
+              className="inline-flex min-h-11 items-center rounded-lg px-2 py-1.5 text-[13px] text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               Skip for now
             </button>

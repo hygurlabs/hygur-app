@@ -3,7 +3,7 @@ import logo from "../assets/logo.jpg";
 
 const RESOURCES = [
   { label: "Source code", href: GITHUB_URL },
-  { label: "License (AGPL-3.0)", href: GITHUB_URL },
+  { label: "License (AGPL-3.0)", href: `${GITHUB_URL}/blob/main/LICENSE` },
 ];
 
 // Internal hash routes — handled client-side, no new tab.

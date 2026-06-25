@@ -177,7 +177,7 @@ p{color:var(--muted);line-height:1.55;margin:.5rem 0}
 .url{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;color:var(--muted);word-break:break-all}
 .btn{display:inline-block;margin:1.25rem 0 .25rem;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem}
 .qr{margin:1.1rem auto .2rem;width:180px;height:180px;border:1px solid var(--border);border-radius:.6rem;padding:.4rem;background:#fff}
-code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;letter-spacing:.1em;background:var(--bg);border:1px solid var(--border);border-radius:.6rem;padding:.85rem;margin:.75rem 0}
+code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;letter-spacing:.1em;background:var(--bg);border:1px solid var(--border);border-radius:.6rem;padding:.85rem;margin:.75rem 0;word-break:break-all}
 .note{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)}
 </style></head><body><div class="card">
 {{if .Ready}}<h1>Welcome to Hygur Cloud</h1>
