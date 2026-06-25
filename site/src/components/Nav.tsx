@@ -55,12 +55,10 @@ export function Nav() {
 
         <div className="flex items-center gap-2">
           <a
-            href={GITHUB_URL}
-            target="_blank"
-            rel="noreferrer"
+            href="#/connectors"
             className="hidden text-sm text-muted transition-colors hover:text-text sm:inline"
           >
-            Self-host
+            Connectors
           </a>
           <Button href={GITHUB_URL} target="_blank" rel="noreferrer" size="md">
             Get the app

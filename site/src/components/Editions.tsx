@@ -2,15 +2,14 @@ import { ArrowRight } from "lucide-react";
 import { EDITIONS, GITHUB_URL, type Edition } from "../lib/content";
 import { Badge, Eyebrow, Reveal, cx } from "./ui";
 
-/** Asymmetric 7/5 · 5/7 pinwheel so the four editions never read as four equal
- *  cards. App + Server are the free foundation; Cloud carries the warm "core"
- *  highlight; Marketplace closes the ecosystem. */
+/** Asymmetric 7/5 · 7/5 pinwheel so the editions never read as equal cards.
+ *  App is the free local client; Cloud carries the warm "core" highlight;
+ *  Marketplace is the ecosystem; Teams is the "soon" teaser. */
 const SPAN: Record<string, string> = {
   app: "lg:col-span-7",
-  server: "lg:col-span-5",
   cloud: "lg:col-span-5",
   marketplace: "lg:col-span-7",
-  teams: "lg:col-span-12", // full-width "soon" teaser closing the grid
+  teams: "lg:col-span-5",
 };
 
 function badgeTone(edition: Edition, badge: string): "neutral" | "accent" | "core" {
@@ -94,12 +93,12 @@ export function Editions() {
         <Reveal as="header" className="max-w-2xl">
           <Eyebrow>The Hygur line</Eyebrow>
           <h2 className="font-display mt-5 text-[clamp(2rem,4vw,3rem)] font-semibold leading-[1.04] text-balance text-text">
-            One core. Four ways to run it.
+            One core. Yours to run, yours to extend.
           </h2>
           <p className="mt-4 text-pretty text-lg leading-relaxed text-muted">
-            Start free on your own machine. Self-host the server, let us host it
-            for you, or extend it with connectors — the data and the model stay
-            under your control the whole way.
+            Run it free on your own machine, or let us host it for you on EU
+            servers. Connect your world with a growing catalogue of connectors.
+            Your data and your model stay yours the whole way.
           </p>
         </Reveal>
 

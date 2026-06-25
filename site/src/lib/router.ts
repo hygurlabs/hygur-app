@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type Route = "home" | "legal" | "privacy" | "terms";
+export type Route = "home" | "legal" | "privacy" | "terms" | "connectors";
 
 /** Hash routing keeps the whole site a single static artifact: it deploys to
  *  plain nginx with no SPA-fallback rewrite, and deep links like
@@ -14,6 +14,7 @@ export function parseHash(): { route: Route; anchor?: string } {
   if (h === "/legal") return { route: "legal" };
   if (h === "/privacy") return { route: "privacy" };
   if (h === "/terms") return { route: "terms" };
+  if (h === "/connectors") return { route: "connectors" };
   return { route: "home", anchor: h && !h.startsWith("/") ? h : undefined };
 }
 

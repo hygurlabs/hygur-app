@@ -32,7 +32,7 @@ export function Footer() {
             </a>
             <p className="mt-4 max-w-xs text-pretty text-sm leading-relaxed text-muted">
               Your local digital twin. A private memory of your documents, mail
-              and notes — powered by your own LLM.
+              and notes, powered by your own LLM.
             </p>
           </div>
 
@@ -41,18 +41,22 @@ export function Footer() {
               Editions
             </h2>
             <ul className="mt-4 space-y-2.5">
-              {EDITIONS.map((e) => (
-                <li key={e.id}>
-                  <a
-                    href={GITHUB_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm text-muted transition-colors hover:text-text"
-                  >
-                    {e.name}
-                  </a>
-                </li>
-              ))}
+              {EDITIONS.map((e) => {
+                const href = e.href ?? GITHUB_URL;
+                const external = href.startsWith("http");
+                return (
+                  <li key={e.id}>
+                    <a
+                      href={href}
+                      target={external ? "_blank" : undefined}
+                      rel={external ? "noreferrer" : undefined}
+                      className="text-sm text-muted transition-colors hover:text-text"
+                    >
+                      {e.name}
+                    </a>
+                  </li>
+                );
+              })}
             </ul>
           </nav>
 

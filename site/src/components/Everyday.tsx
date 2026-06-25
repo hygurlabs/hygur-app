@@ -11,7 +11,7 @@ export function Everyday() {
           <p className="max-w-2xl text-pretty text-xl leading-snug text-text sm:text-2xl">
             Hygur does the remembering, so you move faster.{" "}
             <span className="text-muted">
-              It reads your own world, ranks what matters, and brings it to you —
+              It reads your own world, ranks what matters, and brings it to you
               before you go looking.
             </span>
           </p>

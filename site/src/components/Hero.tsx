@@ -49,8 +49,8 @@ export function Hero() {
 
           <p className="mt-6 max-w-[34rem] text-pretty text-lg leading-relaxed text-muted">
             <span className="font-medium text-text">It remembers everything, so you don't have to.</span>{" "}
-            A private memory of your documents, mail and notes — on your machine,
-            powered by your own LLM.
+            A private memory of your documents, mail and notes. It runs on your
+            machine, powered by your own LLM.
           </p>
 
           <div className="mt-7 max-w-[27rem]">
@@ -70,8 +70,8 @@ export function Hero() {
               <Download size={18} strokeWidth={2} />
               Download the app
             </Button>
-            <Button href={GITHUB_URL} target="_blank" rel="noreferrer" size="lg" variant="ghost">
-              Self-host the server
+            <Button href="#how" size="lg" variant="ghost">
+              See how it works
               <ArrowRight size={17} strokeWidth={2} className="transition-transform duration-200 group-hover/btn:translate-x-0.5" />
             </Button>
           </div>

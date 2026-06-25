@@ -3,7 +3,6 @@ import {
   Cpu,
   PlugZap,
   MonitorSmartphone,
-  Server,
   Cloud,
   Blocks,
   Quote,
@@ -14,10 +13,17 @@ import {
   History,
   CalendarClock,
   Network,
+  Mail,
+  AtSign,
+  Inbox,
+  FolderOpen,
+  Calendar,
+  Gem,
+  NotebookText,
   type LucideIcon,
 } from "lucide-react";
 
-/** App / Server CTAs point to the public repo. */
+/** App CTAs point to the public repo. */
 export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
 
 /** Hygur Cloud subscription — Stripe payment link (Personal, 35 €/mo standard;
@@ -34,7 +40,7 @@ export const CLOUD_OPEN = false;
  *  hero so the conversational product speaks for itself. */
 export const ASK_PROMPTS = [
   "Where do things stand right now?",
-  "What have I decided lately — and why?",
+  "What have I decided lately, and why?",
   "What needs my attention this week?",
 ] as const;
 
@@ -57,7 +63,7 @@ export const PRINCIPLES: Principle[] = [
   {
     icon: Cpu,
     title: "Your model, your rules",
-    body: "Bring any OpenAI-compatible runtime — LM Studio, Ollama, vLLM or llama.cpp. No vendor lock-in.",
+    body: "Bring any OpenAI-compatible runtime: LM Studio, Ollama, vLLM or llama.cpp. No vendor lock-in.",
   },
   {
     icon: PlugZap,
@@ -72,12 +78,12 @@ export const GROUNDING: Principle[] = [
   {
     icon: Quote,
     title: "Answers you can check",
-    body: "Every reply cites your own mail, notes and documents — never the public web, never invented. Dates and amounts are computed, not guessed.",
+    body: "Every reply cites your own mail, notes and documents. Never the public web, never invented. Dates and amounts are computed, not guessed.",
   },
   {
     icon: Scale,
     title: "Catches contradictions",
-    body: "When two of your own sources disagree on the same fact, Hygur surfaces it — both values, quoted and dated — so you decide what still holds.",
+    body: "When two of your own sources disagree on the same fact, Hygur surfaces it, both values quoted and dated, so you decide what still holds.",
   },
   {
     icon: Lock,
@@ -92,7 +98,7 @@ export const DAILY: Principle[] = [
   {
     icon: Sunrise,
     title: "A brief, not an inbox",
-    body: "Each morning, what moved and what needs you today — ranked, so there's nothing to triage.",
+    body: "Each morning, what moved and what needs you today, ranked so there's nothing to triage.",
   },
   {
     icon: ListChecks,
@@ -132,27 +138,17 @@ export const EDITIONS: Edition[] = [
     name: "Hygur App",
     kicker: "Clients",
     tagline: "Desktop and mobile",
-    body: "The local twin in your pocket and on your desk. Ask, search and capture across Mac, Windows and your phone — everything stays on your machine.",
-    badges: ["Free"],
+    body: "The local twin in your pocket and on your desk. Ask, search and capture across Mac, Windows and your phone. It runs on your machine and talks only to the AI runtime you point it at, local or any OpenAI-compatible endpoint.",
+    badges: ["Free", "Open source · AGPL"],
     icon: MonitorSmartphone,
     cta: "Get the app",
-  },
-  {
-    id: "server",
-    name: "Hygur Server",
-    kicker: "Self-host",
-    tagline: "Standalone & headless",
-    body: "The core that holds the data and the brain. Run the open-source binary on your own hardware — LAN, VPN or a box in the corner.",
-    badges: ["Free", "Open source · AGPL"],
-    icon: Server,
-    cta: "Read the source",
   },
   {
     id: "cloud",
     name: "Hygur Cloud",
     kicker: "Managed",
-    tagline: "Hosted Hygur Server — 29.90 €/mo launch price, then 35 €/mo",
-    body: "A managed Hygur Server instance, one per account, running exclusively on EU servers. GPU inference runs at an EU provider that never trains on your data. We run and update it; you keep full control of your data and the model it talks to.",
+    tagline: "Fully managed · 29.90 €/mo launch, then 35 €/mo",
+    body: "A managed Hygur instance, one per account, running exclusively on EU servers. GPU inference runs at an EU provider that never trains on your data. We run and update it; you keep full control of your data and the model it talks to.",
     badges: CLOUD_OPEN
       ? ["Hosted", "29.90 €/mo · launch", "EU-only · no training"]
       : ["29.90 €/mo · launch", "EU-only · no training", "Coming soon"],
@@ -167,20 +163,85 @@ export const EDITIONS: Edition[] = [
     name: "Hygur Marketplace",
     kicker: "Ecosystem",
     tagline: "Connectors catalogue",
-    body: "A growing catalogue of connectors — free and paid — to pull more of your world into Hygur, from mailboxes to calendars to custom sources.",
+    body: "A growing catalogue of connectors that bring more of your world in. Mail, files and calendars today; more tools to come for a richer memory.",
     badges: ["Free & paid"],
     icon: Blocks,
     cta: "Browse connectors",
+    href: "#/connectors",
   },
   {
     id: "teams",
     name: "Hygur Teams",
     kicker: "Soon",
     tagline: "Shared memory for teams & projects",
-    body: "Everyone keeps their private twin. A project gets its own shared memory — a mesh of connected minds — where the team's mail, notes and decisions live together, with provenance and a daily brief.",
+    body: "Everyone keeps their private twin. A project gets its own shared memory, a mesh of connected minds where the team's mail, notes and decisions live together, with provenance and a daily brief.",
     badges: ["Soon"],
     icon: Network,
     cta: "Coming soon",
     href: "#editions",
+  },
+];
+
+export interface Connector {
+  name: string;
+  category: string;
+  body: string;
+  icon: LucideIcon;
+  /** Built but not yet shipped — rendered in the "Coming soon" group. */
+  soon?: boolean;
+}
+
+/** The connector catalogue, mirroring the app's built-in sources. Marketing copy;
+ *  the live list is served by the app's marketplace API. */
+export const CONNECTORS: Connector[] = [
+  {
+    name: "Gmail",
+    category: "Mail",
+    body: "Threads, attachments and labels, synced over OAuth.",
+    icon: AtSign,
+  },
+  {
+    name: "Proton Mail",
+    category: "Mail",
+    body: "Encrypted mail through Proton Bridge, indexed on your own device.",
+    icon: ShieldCheck,
+  },
+  {
+    name: "IMAP",
+    category: "Mail",
+    body: "Any IMAP mailbox: Fastmail, a work account, your own server.",
+    icon: Mail,
+  },
+  {
+    name: "Apple Mail",
+    category: "Mail",
+    body: "Your macOS Mail accounts, read on-device. Nothing leaves the Mac.",
+    icon: Inbox,
+  },
+  {
+    name: "Local files",
+    category: "Files",
+    body: "Watch folders and index PDF, Word, Markdown and plain text.",
+    icon: FolderOpen,
+  },
+  {
+    name: "Calendar",
+    category: "Calendar",
+    body: "Bring events in from any CalDAV or public iCal feed.",
+    icon: Calendar,
+  },
+  {
+    name: "Obsidian",
+    category: "Notes",
+    body: "Your vault, indexed alongside the rest of your world.",
+    icon: Gem,
+    soon: true,
+  },
+  {
+    name: "Notion",
+    category: "Notes",
+    body: "Pages and databases, pulled into your memory.",
+    icon: NotebookText,
+    soon: true,
   },
 ];

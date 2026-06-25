@@ -21,15 +21,13 @@ export function CtaBand() {
             <span className="text-accent">Scale when you want.</span>
           </h2>
           <p className="mt-5 max-w-xl text-pretty text-lg leading-relaxed text-muted">
-            Free on your own machine today. Self-host the server, or move to a
-            managed Hygur Cloud instance when you are ready — your data and your
-            model come with you.
+            Free on your own machine today. When you want it hosted, move to a
+            managed Hygur Cloud instance. Your data and your model come with you.
           </p>
           <p className="mt-4 max-w-xl text-pretty text-sm leading-relaxed text-faint">
             Hygur Cloud runs <strong className="font-medium text-muted">exclusively on EU
-            servers</strong>, with GPU inference at an EU provider that guarantees
-            your data is <strong className="font-medium text-muted">never used for
-            training</strong>. Privacy and Europe, by default.
+            servers</strong>, with GPU inference at an EU provider that
+            <strong className="font-medium text-muted"> never trains on your data</strong>.
           </p>
 
           <a
