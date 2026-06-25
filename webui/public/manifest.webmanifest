@@ -2,7 +2,7 @@
   "name": "Hygur",
   "short_name": "Hygur",
   "description": "Your local-first knowledge assistant.",
-  "lang": "fr",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

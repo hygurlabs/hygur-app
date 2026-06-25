@@ -23,6 +23,7 @@ import { Chronicle } from "./views/Chronicle";
 import { MemoryView } from "./views/Memory";
 import { Tasks } from "./views/Tasks";
 import { FirstRun } from "./views/FirstRun";
+import { InstallPrompt } from "./components/InstallPrompt";
 
 export default function App({ revealOnMount = false }: { revealOnMount?: boolean }) {
   // Left nav is a static column on desktop and an off-canvas drawer on mobile.
@@ -130,6 +131,10 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             </button>
           </div>
         )}
+
+        {/* Mobile-web: nudge to add the PWA to the home screen (self-guards:
+            mobile browser, not already standalone, not the native shell). */}
+        <InstallPrompt />
       </DetailPanelProvider>
     </ActivityProvider>
   );

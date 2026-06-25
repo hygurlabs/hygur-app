@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { markOnboardingComplete } from "../lib/onboarding";
 import { native } from "../lib/native";
 import { isRemote } from "../lib/connection";
+import { mobileOS } from "../lib/platform";
 import { api } from "../lib/api";
 import {
   StepAccounts,
+  StepMobile,
   StepModel,
   StepNotifications,
   StepPermissions,
@@ -29,6 +31,7 @@ const ALL_STEPS: StepDef[] = [
   { id: "model", skippable: true, ownsPrimary: true },
   { id: "accounts", skippable: true, ownsPrimary: true },
   { id: "notifications", skippable: false, ownsPrimary: false, primaryLabel: "Continue" },
+  { id: "mobile", skippable: true, ownsPrimary: false, primaryLabel: "Continue" },
   { id: "ready", skippable: false, ownsPrimary: false, primaryLabel: "Start using Hygur" },
 ];
 
@@ -44,6 +47,9 @@ function visibleSteps(managed: boolean): StepDef[] {
   return ALL_STEPS.filter((s) => {
     if (s.id === "permissions") return native.available;
     if (s.id === "model") return !remote;
+    // "Connect your phone" QR targets a cloud instance and is shown on desktop
+    // only — on a mobile browser the install nudge handles it, so skip it there.
+    if (s.id === "mobile") return remote && mobileOS() === null;
     return true;
   });
 }
@@ -115,6 +121,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
           {step.id === "model" && <StepModel ctx={ctx} />}
           {step.id === "accounts" && <StepAccounts ctx={ctx} cloud={cloud} />}
           {step.id === "notifications" && <StepNotifications />}
+          {step.id === "mobile" && <StepMobile />}
           {step.id === "ready" && <StepReady cloud={cloud} />}
         </div>
       </div>

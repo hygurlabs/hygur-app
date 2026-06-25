@@ -10,9 +10,11 @@ import {
   Mic,
   PlugZap,
   ShieldCheck,
+  Smartphone,
   Sparkles,
 } from "lucide-react";
-import { api } from "../lib/api";
+import { QRCodeSVG } from "qrcode.react";
+import { api, linkDeviceCode } from "../lib/api";
 import { native } from "../lib/native";
 import type { SidecarConfig } from "../lib/types";
 import { Button, TextInput } from "../components/ui";
@@ -637,6 +639,60 @@ export function StepNotifications() {
             />
           ))}
         </Card>
+      )}
+    </div>
+  );
+}
+
+// MARK: - Mobile (cloud)
+
+/** Cloud onboarding: connect the user's phone. The QR encodes the instance URL +
+ *  a one-time enrollment code (cloud.hygur.ai/<slug>?code=…) — scanning it opens
+ *  the phone's browser already signed in, where the install nudge offers "add to
+ *  home screen". Desktop cloud onboarding only (skipped on a mobile browser). */
+export function StepMobile() {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const generate = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const { code, slug } = await linkDeviceCode();
+      setUrl(`https://cloud.hygur.ai/${slug}?code=${encodeURIComponent(code)}`);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+    setBusy(false);
+  };
+  return (
+    <div>
+      <StepHeader
+        icon={<Smartphone size={26} strokeWidth={1.6} />}
+        title="Use Hygur on your phone"
+        subtitle="Scan with your phone's camera to open Hygur there, already signed in. Then add it to your home screen — it works like an app, nothing to install."
+      />
+      {url ? (
+        <div className="flex flex-col items-center gap-3">
+          <div className="rounded-2xl bg-white p-4 shadow-sm">
+            <QRCodeSVG value={url} size={196} />
+          </div>
+          <p className="text-[12px] text-faint">The code works once and expires in 10 minutes.</p>
+          <button
+            onClick={() => void generate()}
+            disabled={busy}
+            className="text-[12.5px] text-muted transition-colors hover:text-text"
+          >
+            {busy ? "Generating…" : "New code"}
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center gap-3">
+          <Button onClick={() => void generate()} disabled={busy}>
+            {busy ? "Generating…" : "Show QR code"}
+          </Button>
+          {err && <p className="text-[12.5px] text-danger">{err}</p>}
+        </div>
       )}
     </div>
   );
