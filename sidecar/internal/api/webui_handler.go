@@ -159,4 +159,5 @@ var webUIPublicFiles = []string{
 	"/icon-192.png",
 	"/icon-512.png",
 	"/manifest.webmanifest",
+	"/sw.js", // Web Push service worker
 }

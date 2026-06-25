@@ -446,6 +446,8 @@ export interface SidecarConfig {
   /** The tenant's friendly slug (= URL + namespace); used for the type-to-confirm
    *  deletion gate and to show the user which space they're in. */
   instance_name?: string;
+  /** Web Push VAPID public key; present = push enabled (the client subscribes). */
+  vapid_public_key?: string;
 }
 
 /** Per-1M-token prices for the cost estimate (GET/PUT /usage). Chat is billed

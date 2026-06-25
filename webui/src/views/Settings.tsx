@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { native } from "../lib/native";
 import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
 import { isDesktop, getDesktopConfig, type DesktopConfig } from "../lib/desktop";
+import { enablePush, disablePush, pushSupported } from "../lib/push";
 import { ModePicker } from "../onboarding/ModePicker";
 import type {
   SidecarConfig,
@@ -589,7 +590,7 @@ export function Settings() {
       {/* Encrypted data export (GDPR portability) — available everywhere, incl.
           managed cloud tenants where it's the user's own way to take their data. */}
       <ExportSection />
-      <NotificationsSection />
+      <NotificationsSection vapidPublicKey={draft.vapid_public_key ?? ""} />
       <PermissionsSection />
     </Page>
   );
@@ -1089,7 +1090,69 @@ const NOTIF_TOGGLES: { key: string; label: string; hint: string }[] = [
   { key: "notify.agendaAlerts", label: "Deadline alerts", hint: "Notify ahead of upcoming deadlines" },
 ];
 
-function NotificationsSection() {
+// WebPushRow enrols the browser for Web Push (notifications when the tab is
+// closed). Shown on the web shell where there's no native notification bridge.
+function WebPushRow({ vapidPublicKey }: { vapidPublicKey: string }) {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    if (!pushSupported()) return;
+    void navigator.serviceWorker
+      .getRegistration()
+      .then((reg) => reg?.pushManager.getSubscription())
+      .then((s) => setOn(!!s))
+      .catch(() => {});
+  }, []);
+
+  const change = async (v: boolean) => {
+    setBusy(true);
+    setMsg("");
+    try {
+      if (v) {
+        const ok = await enablePush(vapidPublicKey);
+        setOn(ok);
+        if (!ok) setMsg("Permission denied or unsupported on this browser.");
+      } else {
+        await disablePush();
+        setOn(false);
+      }
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+    setBusy(false);
+  };
+
+  const test = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const r = await api.testPush();
+      setMsg(`Sent to ${r.sent} device(s) — check your notifications.`);
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <Row label="Browser notifications" hint={msg || "Get your daily brief even when the tab is closed."}>
+        <Toggle checked={on} disabled={busy} onChange={(v) => void change(v)} />
+      </Row>
+      {on && (
+        <Row label="Test" hint="Send a test notification to this browser.">
+          <Button variant="ghost" onClick={() => void test()} disabled={busy}>
+            Send test
+          </Button>
+        </Row>
+      )}
+    </>
+  );
+}
+
+function NotificationsSection({ vapidPublicKey }: { vapidPublicKey: string }) {
   const [state, setState] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState(false);
 
@@ -1110,6 +1173,15 @@ function NotificationsSection() {
   }, []);
 
   if (!native.available) {
+    // Web shell: no native bridge, but the browser can do Web Push when the
+    // tenant has a VAPID key configured.
+    if (pushSupported() && vapidPublicKey) {
+      return (
+        <Section title="Notifications">
+          <WebPushRow vapidPublicKey={vapidPublicKey} />
+        </Section>
+      );
+    }
     return (
       <Section title="Notifications">
         <Row label="Notifications" hint="Available in the Hygur desktop app.">

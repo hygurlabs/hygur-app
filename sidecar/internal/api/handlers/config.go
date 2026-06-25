@@ -29,6 +29,7 @@ type ConfigHandler struct {
 	managed          bool
 	billingPortalURL string
 	instanceName     string
+	vapidPublicKey   string
 	logger           zerolog.Logger
 }
 
@@ -50,6 +51,10 @@ func (h *ConfigHandler) SetBillingPortalURL(v string) { h.billingPortalURL = str
 // SetInstanceName records the tenant's friendly slug (= URL + namespace). The
 // client shows it and uses it for the type-to-confirm deletion gate.
 func (h *ConfigHandler) SetInstanceName(v string) { h.instanceName = strings.TrimSpace(v) }
+
+// SetVAPIDPublicKey exposes the Web Push VAPID public key so the client can
+// subscribe (PushManager.subscribe applicationServerKey). Empty = push disabled.
+func (h *ConfigHandler) SetVAPIDPublicKey(v string) { h.vapidPublicKey = strings.TrimSpace(v) }
 
 // SetOnChange registers a callback fired after a successful PATCH so runtime
 // components (e.g. the mail connector) can pick up changes without a restart.
@@ -93,6 +98,9 @@ type ConfigResponse struct {
 	// InstanceName = the tenant's friendly slug (= URL + namespace), shown to the
 	// user and used for the type-to-confirm deletion gate.
 	InstanceName string `json:"instance_name,omitempty"`
+	// VAPIDPublicKey = Web Push application server key; the client subscribes with
+	// it. Empty/omitted = push disabled.
+	VAPIDPublicKey string `json:"vapid_public_key,omitempty"`
 }
 
 type MailCfgResp struct {
@@ -226,6 +234,7 @@ func (h *ConfigHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		Managed:          h.managed,
 		BillingPortalURL: h.billingPortalURL,
 		InstanceName:     h.instanceName,
+		VAPIDPublicKey:   h.vapidPublicKey,
 	}
 
 	// In a managed cloud tenant the AI runtime is ours: never leak the upstream

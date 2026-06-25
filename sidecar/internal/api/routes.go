@@ -65,6 +65,14 @@ func (s *Server) setupRoutes() {
 		// Model endpoints
 		r.Get("/models", s.handleModels)
 
+		// Web Push (browser notifications, incl. tab-closed). Mounted only when a
+		// VAPID keypair is configured; the handler 503s if push is off.
+		if s.pushHandler != nil {
+			r.Post("/push/subscribe", s.pushHandler.HandleSubscribe)
+			r.Post("/push/unsubscribe", s.pushHandler.HandleUnsubscribe)
+			r.Post("/push/test", s.pushHandler.HandleTest)
+		}
+
 		// Edge (cloud thin client): on-device Proton folder listing + sync
 		// status/trigger. Served LOCALLY (kept off the cloud proxy) because only
 		// this device can reach the local Proton Bridge. 503 in non-thin-client.

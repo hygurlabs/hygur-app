@@ -41,6 +41,7 @@ import (
 	"github.com/hygur/sidecar/internal/mail/proton"
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/prose"
+	"github.com/hygur/sidecar/internal/push"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/scheduler"
 	"github.com/hygur/sidecar/internal/secret"
@@ -596,6 +597,15 @@ func main() {
 	// subscription management, invoices, and cancellation → account deletion.
 	configHandler.SetBillingPortalURL(os.Getenv("HYGUR_STRIPE_PORTAL_URL"))
 	configHandler.SetInstanceName(os.Getenv("HYGUR_TENANT_ID"))
+	// Web Push (browser notifications incl. tab-closed). Disabled when no VAPID
+	// keypair is set — the handler 503s and the client skips subscription.
+	pushSender := push.NewSender(
+		os.Getenv("HYGUR_VAPID_PUBLIC_KEY"),
+		os.Getenv("HYGUR_VAPID_PRIVATE_KEY"),
+		os.Getenv("HYGUR_VAPID_SUBJECT"),
+	)
+	configHandler.SetVAPIDPublicKey(pushSender.PublicKey())
+	pushHandler := handlers.NewPushHandler(db, pushSender, logger)
 	// Apply runtime-relevant config changes from PATCH /config without a restart.
 	configHandler.SetOnChange(func(c *config.Config) {
 		for _, mc := range mailProviders {
@@ -741,6 +751,7 @@ func main() {
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)
+	server.SetPushHandler(pushHandler)
 	// Remote auth mode: verify per-device EdDSA JWTs instead of the loopback
 	// static token. Fail fast on a bad key — silently falling back to local
 	// would mean serving with weaker auth than the operator asked for.

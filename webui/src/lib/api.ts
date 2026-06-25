@@ -471,6 +471,11 @@ export const api = {
 
   // Token usage + cost pricing.
   getTokenUsage: () => getJSON<TokenUsageResponse>("/usage/tokens"),
+
+  // Web Push (browser notifications). subscribePush takes a PushSubscription JSON.
+  subscribePush: (sub: unknown) => postJSON<void>("/push/subscribe", sub),
+  unsubscribePush: (endpoint: string) => postJSON<void>("/push/unsubscribe", { endpoint }),
+  testPush: () => postJSON<{ sent: number }>("/push/test", {}),
   setTokenPricing: (p: TokenPricing) =>
     putJSON<{ status: string }>("/usage/pricing", p),
 

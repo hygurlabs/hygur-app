@@ -463,6 +463,20 @@ CREATE TABLE IF NOT EXISTS entity_vectors (
 );
 `,
 	},
+	// Web-push subscriptions (browser notifications when the tab is closed).
+	// Keyed by the push endpoint URL; p256dh/auth are the per-device crypto keys.
+	{
+		Version: 25,
+		Name:    "push_subscriptions",
+		SQL: `
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint   TEXT PRIMARY KEY,
+    p256dh     TEXT NOT NULL,
+    auth       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
