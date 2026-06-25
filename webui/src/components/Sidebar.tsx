@@ -35,8 +35,8 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: "/", label: "Ask", icon: MessageSquareText, end: true },
   { to: "/digest", label: "Today", icon: Sunrise },
+  { to: "/ask", label: "Ask", icon: MessageSquareText, end: true },
   { to: "/library", label: "Library", icon: Library },
   { to: "/notes", label: "Notes", icon: StickyNote },
   { to: "/projects", label: "Projects", icon: FolderKanban },

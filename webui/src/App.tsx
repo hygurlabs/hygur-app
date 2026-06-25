@@ -83,7 +83,10 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             </div>
             <div className="relative min-h-0 flex-1 overflow-hidden">
               <Routes>
-                <Route path="/" element={<Ask />} />
+                {/* Land on Today (the daily brief + what needs you), not a blank
+                    chat — the psyche's value greets the user first. Ask moves to /ask. */}
+                <Route path="/" element={<Navigate to="/digest" replace />} />
+                <Route path="/ask" element={<Ask />} />
                 <Route path="/digest" element={<Digest />} />
                 {/* Search merged into Library; redirect old links. */}
                 <Route path="/search" element={<Navigate to="/library" replace />} />
