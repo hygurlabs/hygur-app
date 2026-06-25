@@ -603,6 +603,7 @@ func main() {
 		os.Getenv("HYGUR_VAPID_PUBLIC_KEY"),
 		os.Getenv("HYGUR_VAPID_PRIVATE_KEY"),
 		os.Getenv("HYGUR_VAPID_SUBJECT"),
+		logger,
 	)
 	configHandler.SetVAPIDPublicKey(pushSender.PublicKey())
 	pushHandler := handlers.NewPushHandler(db, pushSender, logger)

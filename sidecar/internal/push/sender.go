@@ -6,13 +6,24 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+	"github.com/rs/zerolog"
 )
+
+// hostOf returns just the host of a push endpoint (never log the full endpoint —
+// it contains the per-device secret token).
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Hostname()
+	}
+	return "?"
+}
 
 // allowedPushHostSuffixes are the real browser push services. Restricting the
 // subscription endpoint to these neutralises SSRF: a caller cannot register an
@@ -72,15 +83,21 @@ type Sender struct {
 	publicKey  string
 	privateKey string
 	subscriber string
+	logger     zerolog.Logger
 }
 
 // NewSender builds a Sender. subscriber is the VAPID "sub" (a mailto: or URL);
 // it defaults to a mailto when empty.
-func NewSender(publicKey, privateKey, subscriber string) *Sender {
+func NewSender(publicKey, privateKey, subscriber string, logger zerolog.Logger) *Sender {
 	if subscriber == "" {
 		subscriber = "mailto:admin@hygur.ai"
 	}
-	return &Sender{publicKey: publicKey, privateKey: privateKey, subscriber: subscriber}
+	return &Sender{
+		publicKey:  publicKey,
+		privateKey: privateKey,
+		subscriber: subscriber,
+		logger:     logger.With().Str("component", "push").Logger(),
+	}
 }
 
 // Configured reports whether a VAPID keypair is set (push enabled).
@@ -123,12 +140,21 @@ func (s *Sender) Send(_ context.Context, subs []Subscription, n Notification) (d
 			Keys:     webpush.Keys{P256dh: sub.P256dh, Auth: sub.Auth},
 		}, opts)
 		if err != nil {
+			s.logger.Warn().Err(err).Str("host", hostOf(sub.Endpoint)).Msg("web push: send error")
 			continue
 		}
-		_ = resp.Body.Close()
-		if resp.StatusCode == 404 || resp.StatusCode == 410 {
+		switch {
+		case resp.StatusCode == 404 || resp.StatusCode == 410:
 			dead = append(dead, sub.Endpoint)
+		case resp.StatusCode >= 300:
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			s.logger.Warn().Int("status", resp.StatusCode).Str("host", hostOf(sub.Endpoint)).
+				Str("body", strings.TrimSpace(string(body))).Msg("web push: rejected by push service")
+		default:
+			s.logger.Info().Int("status", resp.StatusCode).Str("host", hostOf(sub.Endpoint)).
+				Msg("web push: accepted by push service")
 		}
+		_ = resp.Body.Close()
 	}
 	return dead
 }

@@ -112,6 +112,7 @@ func (h *PushHandler) HandleTest(w http.ResponseWriter, r *http.Request) {
 	for _, ep := range dead {
 		_ = h.store.DeletePushSubscription(r.Context(), ep)
 	}
+	h.logger.Info().Int("subscriptions", len(subs)).Int("pruned", len(dead)).Msg("push test sent")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]int{"sent": len(subs) - len(dead)})
 }
