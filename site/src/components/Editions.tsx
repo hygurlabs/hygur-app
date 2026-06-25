@@ -10,6 +10,7 @@ const SPAN: Record<string, string> = {
   server: "lg:col-span-5",
   cloud: "lg:col-span-5",
   marketplace: "lg:col-span-7",
+  teams: "lg:col-span-12", // full-width "soon" teaser closing the grid
 };
 
 function badgeTone(edition: Edition, badge: string): "neutral" | "accent" | "core" {

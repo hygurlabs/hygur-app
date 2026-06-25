@@ -48,8 +48,9 @@ export function Hero() {
           </h1>
 
           <p className="mt-6 max-w-[34rem] text-pretty text-lg leading-relaxed text-muted">
-            A private memory of your documents, mail and notes — powered by your
-            own LLM. Everything runs on your machine. No cloud, no account.
+            <span className="font-medium text-text">It remembers everything, so you don't have to.</span>{" "}
+            A private memory of your documents, mail and notes — on your machine,
+            powered by your own LLM.
           </p>
 
           <div className="mt-7 max-w-[27rem]">

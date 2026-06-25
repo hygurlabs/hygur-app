@@ -9,6 +9,11 @@ import {
   Quote,
   Scale,
   Lock,
+  Sunrise,
+  ListChecks,
+  History,
+  CalendarClock,
+  Network,
   type LucideIcon,
 } from "lucide-react";
 
@@ -81,6 +86,31 @@ export const GROUNDING: Principle[] = [
   },
 ];
 
+/** The daily payoff of the psyche layer: what Hygur does for you so you spend
+ *  less time remembering and chasing. Outcome-first, same plain voice. */
+export const DAILY: Principle[] = [
+  {
+    icon: Sunrise,
+    title: "A brief, not an inbox",
+    body: "Each morning, what moved and what needs you today — ranked, so there's nothing to triage.",
+  },
+  {
+    icon: ListChecks,
+    title: "What needs you, first",
+    body: "Decisions to make, deadlines and follow-ups rise to the top before they slip.",
+  },
+  {
+    icon: History,
+    title: "Decisions, remembered",
+    body: "Hygur keeps what you decided and why, and flags it when a later source disagrees.",
+  },
+  {
+    icon: CalendarClock,
+    title: "It sees what's coming",
+    body: "Recurring bills, renewals and obligations surface before they fall due.",
+  },
+];
+
 export interface Edition {
   id: string;
   name: string;
@@ -141,5 +171,16 @@ export const EDITIONS: Edition[] = [
     badges: ["Free & paid"],
     icon: Blocks,
     cta: "Browse connectors",
+  },
+  {
+    id: "teams",
+    name: "Hygur Teams",
+    kicker: "Soon",
+    tagline: "Shared memory for teams & projects",
+    body: "Everyone keeps their private twin. A project gets its own shared memory — a mesh of connected minds — where the team's mail, notes and decisions live together, with provenance and a daily brief.",
+    badges: ["Soon"],
+    icon: Network,
+    cta: "Coming soon",
+    href: "#editions",
   },
 ];

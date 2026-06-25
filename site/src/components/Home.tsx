@@ -1,6 +1,7 @@
 import { Nav } from "./Nav";
 import { Hero } from "./Hero";
 import { Principles } from "./Principles";
+import { Everyday } from "./Everyday";
 import { Grounded } from "./Grounded";
 import { Editions } from "./Editions";
 import { HowItWorks } from "./HowItWorks";
@@ -20,6 +21,7 @@ export function Home() {
       <main>
         <Hero />
         <Principles />
+        <Everyday />
         <Grounded />
         <Editions />
         <HowItWorks />
