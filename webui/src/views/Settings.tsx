@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../lib/api";
+import { api, linkDeviceCode } from "../lib/api";
+import { QRCodeSVG } from "qrcode.react";
 import { native } from "../lib/native";
 import { clearConnection, getConnection, isRemote, setConnection } from "../lib/connection";
 import { isDesktop, getDesktopConfig, type DesktopConfig } from "../lib/desktop";
@@ -593,6 +594,7 @@ export function Settings() {
           managed cloud tenants where it's the user's own way to take their data. */}
       <ExportSection />
       <NotificationsSection vapidPublicKey={draft.vapid_public_key ?? ""} />
+      {draft.managed && <ConnectPhoneSection />}
       <PermissionsSection />
     </Page>
   );
@@ -1158,6 +1160,48 @@ function WebPushRow({ vapidPublicKey }: { vapidPublicKey: string }) {
         </Row>
       )}
     </>
+  );
+}
+
+// ConnectPhoneSection shows a QR that deep-links a phone to this space with a
+// one-time code (WhatsApp-Web style): scanning signs the phone in, no typing.
+function ConnectPhoneSection() {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const generate = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const { code, slug } = await linkDeviceCode();
+      setUrl(`https://cloud.hygur.ai/${slug}?code=${encodeURIComponent(code)}`);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+    setBusy(false);
+  };
+  return (
+    <Section title="Connect a phone">
+      <Row
+        label="Add a device"
+        hint={
+          err ||
+          "Scan with your phone's camera to sign in there — no typing. The code works once and expires in 10 minutes."
+        }
+      >
+        <Button variant="ghost" onClick={() => void generate()} disabled={busy}>
+          {busy ? "Generating…" : url ? "New code" : "Show QR code"}
+        </Button>
+      </Row>
+      {url && (
+        <div className="flex flex-col items-center gap-3 px-4 py-5">
+          <div className="rounded-xl bg-white p-3 shadow-sm">
+            <QRCodeSVG value={url} size={180} />
+          </div>
+          <p className="max-w-full break-all text-center text-[11px] text-faint">{url}</p>
+        </div>
+      )}
+    </Section>
   );
 }
 

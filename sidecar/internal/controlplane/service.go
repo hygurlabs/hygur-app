@@ -64,6 +64,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/token/refresh", s.handleRefresh)
 	r.Post("/token/logout", s.handleLogout)
 	r.Get("/billing/status", s.handleBillingStatus)
+	r.Post("/device/link-code", s.handleLinkCode)
 }
 
 // handleBillingStatus returns the caller's subscription status + the Stripe
@@ -92,6 +93,29 @@ func (s *Service) handleBillingStatus(w http.ResponseWriter, r *http.Request) {
 		"valid_until": validUntil,
 		"portal_url":  os.Getenv("HYGUR_STRIPE_PORTAL_URL"),
 	})
+}
+
+// handleLinkCode mints a short-lived one-time enrollment code for the caller's
+// account so a signed-in user can connect another device (e.g. a phone) by
+// scanning a QR that deep-links to <slug>?code=… (Connect auto-redeems it).
+// Authed by the device access token (its Sub is the account number).
+func (s *Service) handleLinkCode(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.verifyAccessToken(bearer(r))
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	acc, err := s.store.GetAccount(claims.Sub)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "no account")
+		return
+	}
+	code, err := s.store.CreateEnrollCode(s.clock(), acc.AccountNumber, "mobile", 10*time.Minute)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "code generation failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"code": code, "slug": acc.TenantID})
 }
 
 type enrollReq struct {

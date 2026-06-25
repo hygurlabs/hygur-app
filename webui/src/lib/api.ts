@@ -123,6 +123,21 @@ const postJSON = <T>(path: string, body: unknown) =>
 const putJSON = <T>(path: string, body: unknown) =>
   sendJSON<T>("PUT", path, body);
 
+/** Mint a one-time code to connect another device (e.g. a phone). Calls the
+ *  console with the current access token; returns the code + instance slug so
+ *  the client can build a QR deep link. Cloud/managed only. */
+export async function linkDeviceCode(): Promise<{ code: string; slug: string }> {
+  const call = () =>
+    fetch(`${CONSOLE_URL}/device/link-code`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey()}` },
+    });
+  let r = await call();
+  if (r.status === 401 && (await refreshAccessToken())) r = await call();
+  if (!r.ok) throw httpError(r);
+  return (await r.json()) as { code: string; slug: string };
+}
+
 async function del(path: string): Promise<void> {
   const r = await fetchAuthed(path, { method: "DELETE" });
   if (!r.ok) throw httpError(r);
