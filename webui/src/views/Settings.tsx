@@ -565,20 +565,22 @@ export function Settings() {
       <TokenUsageSection managed={!!draft.managed} />
       {/* Managed cloud: subscription management + invoices + cancellation (which
           drives account deletion via Stripe → the reaper). */}
-      {draft.managed && draft.billing_portal_url && (
+      {draft.managed && (
         <Section title="Subscription & data">
-          <Row label="Billing" hint="Manage your subscription, payment method, and monthly invoices.">
-            <a
-              href={draft.billing_portal_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-surface2"
-            >
-              Open billing portal
-            </a>
-          </Row>
+          {draft.billing_portal_url && (
+            <Row label="Billing" hint="Manage your subscription, payment method, and monthly invoices.">
+              <a
+                href={draft.billing_portal_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-surface2"
+              >
+                Open billing portal
+              </a>
+            </Row>
+          )}
           <DeleteSpaceRow
-            portalURL={draft.billing_portal_url}
+            portalURL={draft.billing_portal_url ?? ""}
             instanceName={draft.instance_name ?? ""}
           />
         </Section>
@@ -875,8 +877,15 @@ function PriceField({
 // Stripe portal only activates once the user types their exact space name.
 function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instanceName: string }) {
   const [confirm, setConfirm] = useState("");
-  const target = instanceName || "DELETE";
-  const matched = confirm.trim() === target;
+  const expected = instanceName || "DELETE";
+  const matched = confirm.trim() === expected;
+  // With a billing portal: cancel there (→ deletion). Without one: a GDPR
+  // deletion request by email to the controller, so the action always works.
+  const viaPortal = portalURL !== "";
+  const actionURL = viaPortal
+    ? portalURL
+    : `mailto:privacy@hygur.ai?subject=${encodeURIComponent(`Delete my space${instanceName ? ` (${instanceName})` : ""}`)}`;
+  const label = viaPortal ? "Cancel & delete" : "Request deletion";
   return (
     <div className="px-4 py-3">
       <p className="text-[14px]">Delete my space</p>
@@ -889,23 +898,23 @@ function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instan
         <input
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
-          placeholder={`Type "${target}" to confirm`}
+          placeholder={`Type "${expected}" to confirm`}
           spellCheck={false}
           autoCapitalize="off"
           className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-[13px] outline-none focus:border-danger"
         />
         {matched ? (
           <a
-            href={portalURL}
+            href={actionURL}
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 rounded-lg border border-danger/50 bg-danger/10 px-3 py-1.5 text-center text-[13px] font-medium text-danger hover:bg-danger/20"
           >
-            Cancel &amp; delete
+            {label}
           </a>
         ) : (
           <span className="shrink-0 cursor-not-allowed rounded-lg border border-border px-3 py-1.5 text-center text-[13px] font-medium text-faint">
-            Cancel &amp; delete
+            {label}
           </span>
         )}
       </div>

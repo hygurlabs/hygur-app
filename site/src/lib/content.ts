@@ -28,9 +28,9 @@ export const CLOUD_OPEN = false;
 /** Real example prompts from the app's "Ask Hygur" screen, replayed in the
  *  hero so the conversational product speaks for itself. */
 export const ASK_PROMPTS = [
-  "What's my VAT due for Q1 2026?",
-  "Summarise my last invoices from EDF",
-  "What deadlines do I have this month?",
+  "Where do things stand right now?",
+  "What have I decided lately — and why?",
+  "What needs my attention this week?",
 ] as const;
 
 /** Runtimes Hygur can point at — set in mono as small tokens. */
