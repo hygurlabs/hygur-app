@@ -2,7 +2,6 @@ import { GITHUB_URL, EDITIONS } from "../lib/content";
 import logo from "../assets/logo.jpg";
 
 const RESOURCES = [
-  { label: "GitHub", href: GITHUB_URL },
   { label: "Source code", href: GITHUB_URL },
   { label: "License (AGPL-3.0)", href: GITHUB_URL },
 ];

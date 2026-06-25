@@ -26,6 +26,10 @@ import {
 /** App CTAs point to the public repo. */
 export const GITHUB_URL = "https://github.com/hygurlabs/hygur-app";
 
+/** Download CTAs ("Get Hygur" / "Download the app") point at the latest GitHub
+ *  release, where the signed app builds live. Source/license links stay on the repo. */
+export const RELEASES_URL = "https://github.com/hygurlabs/hygur-app/releases/latest";
+
 /** Hygur Cloud subscription — Stripe payment link (Personal, 35 €/mo standard;
  *  launch offer 29.90 €/mo locked for life for the first 2,000 subscribers). */
 export const CLOUD_SUBSCRIBE_URL = "https://buy.stripe.com/bJe8wIdJRbZHfxa1ou2Fa05";
@@ -142,6 +146,7 @@ export const EDITIONS: Edition[] = [
     badges: ["Free", "Open source · AGPL"],
     icon: MonitorSmartphone,
     cta: "Get the app",
+    href: RELEASES_URL,
   },
   {
     id: "cloud",

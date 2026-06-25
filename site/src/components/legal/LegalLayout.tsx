@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ArrowLeft, ArrowUpRight } from "lucide-react";
-import { GITHUB_URL } from "../../lib/content";
+import { RELEASES_URL } from "../../lib/content";
 import { Button } from "../ui";
 import { Footer } from "../Footer";
 import logo from "../../assets/logo.jpg";
@@ -33,7 +33,7 @@ export function LegalLayout({
             />
             <span className="font-display text-[1.35rem] leading-none text-text">Hygur</span>
           </a>
-          <Button href={GITHUB_URL} target="_blank" rel="noreferrer" variant="ghost">
+          <Button href={RELEASES_URL} target="_blank" rel="noreferrer" variant="ghost">
             Get the app
             <ArrowUpRight size={16} strokeWidth={2} />
           </Button>

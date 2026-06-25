@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
-import { GITHUB_URL } from "../lib/content";
+import { RELEASES_URL } from "../lib/content";
 import { Button } from "./ui";
 import logo from "../assets/logo.jpg";
 
@@ -60,7 +60,7 @@ export function Nav() {
           >
             Connectors
           </a>
-          <Button href={GITHUB_URL} target="_blank" rel="noreferrer" size="md">
+          <Button href={RELEASES_URL} target="_blank" rel="noreferrer" size="md">
             Get the app
             <ArrowUpRight size={16} strokeWidth={2} className="transition-transform duration-200 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5" />
           </Button>

@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowUpRight } from "lucide-react";
-import { CONNECTORS, GITHUB_URL, type Connector } from "../lib/content";
+import { CONNECTORS, RELEASES_URL, type Connector } from "../lib/content";
 import { Badge, Button, Eyebrow, Reveal, cx } from "./ui";
 import { Footer } from "./Footer";
 import logo from "../assets/logo.jpg";
@@ -53,7 +53,7 @@ export function Connectors() {
             />
             <span className="font-display text-[1.35rem] leading-none text-text">Hygur</span>
           </a>
-          <Button href={GITHUB_URL} target="_blank" rel="noreferrer" variant="ghost">
+          <Button href={RELEASES_URL} target="_blank" rel="noreferrer" variant="ghost">
             Get the app
             <ArrowUpRight size={16} strokeWidth={2} />
           </Button>

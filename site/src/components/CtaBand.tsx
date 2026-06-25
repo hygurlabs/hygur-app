@@ -1,5 +1,5 @@
 import { ArrowRight } from "lucide-react";
-import { GITHUB_URL } from "../lib/content";
+import { RELEASES_URL } from "../lib/content";
 import { Reveal } from "./ui";
 
 export function CtaBand() {
@@ -31,7 +31,7 @@ export function CtaBand() {
           </p>
 
           <a
-            href={GITHUB_URL}
+            href={RELEASES_URL}
             target="_blank"
             rel="noreferrer"
             className="group/cta relative mt-8 inline-flex h-13 items-center gap-2 overflow-hidden rounded-full bg-accent px-8 text-base font-medium text-bg shadow-[var(--shadow-soft)] transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-lift)] active:translate-y-px"

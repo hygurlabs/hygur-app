@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { ArrowRight, Download } from "lucide-react";
-import { GITHUB_URL, RUNTIMES } from "../lib/content";
+import { RELEASES_URL, RUNTIMES } from "../lib/content";
 import { Button, Eyebrow } from "./ui";
 import { AskTypewriter } from "./AskTypewriter";
 import { usePrefersReducedMotion } from "../lib/useMotion";
@@ -66,7 +66,7 @@ export function Hero() {
           </div>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Button href={GITHUB_URL} target="_blank" rel="noreferrer" size="lg">
+            <Button href={RELEASES_URL} target="_blank" rel="noreferrer" size="lg">
               <Download size={18} strokeWidth={2} />
               Download the app
             </Button>
