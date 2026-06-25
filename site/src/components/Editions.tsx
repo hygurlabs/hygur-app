@@ -98,7 +98,7 @@ export function Editions() {
           <p className="mt-4 text-pretty text-lg leading-relaxed text-muted">
             Run it free on your own machine, or let us host it for you on EU
             servers. Connect your world with a growing catalogue of connectors.
-            Your data and your model stay yours the whole way.
+            Your data stays yours the whole way.
           </p>
         </Reveal>
 

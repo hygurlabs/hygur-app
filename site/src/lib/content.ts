@@ -153,7 +153,7 @@ export const EDITIONS: Edition[] = [
     name: "Hygur Cloud",
     kicker: "Managed",
     tagline: "Fully managed · 29.90 €/mo launch, then 35 €/mo",
-    body: "A managed Hygur instance, one per account, running exclusively on EU servers. GPU inference runs at an EU provider that never trains on your data. We run and update it; you keep full control of your data and the model it talks to.",
+    body: "A managed Hygur instance, one per account, running exclusively on EU servers. GPU inference runs at an EU provider that never trains on your data. We run and update it; you keep control of your data, and can export or delete it anytime.",
     badges: CLOUD_OPEN
       ? ["Hosted", "29.90 €/mo · launch", "EU-only · no training"]
       : ["29.90 €/mo · launch", "EU-only · no training", "Coming soon"],

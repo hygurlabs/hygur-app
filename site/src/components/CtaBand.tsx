@@ -21,8 +21,9 @@ export function CtaBand() {
             <span className="text-accent">Scale when you want.</span>
           </h2>
           <p className="mt-5 max-w-xl text-pretty text-lg leading-relaxed text-muted">
-            Free on your own machine today. When you want it hosted, move to a
-            managed Hygur Cloud instance. Your data and your model come with you.
+            Free on your own machine today. When you want it hosted, a managed
+            Hygur Cloud instance gives you the same Hygur on EU servers, built
+            from the same sources you connect.
           </p>
           <p className="mt-4 max-w-xl text-pretty text-sm leading-relaxed text-faint">
             Hygur Cloud runs <strong className="font-medium text-muted">exclusively on EU
