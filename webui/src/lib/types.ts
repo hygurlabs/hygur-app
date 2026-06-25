@@ -440,6 +440,12 @@ export interface SidecarConfig {
   /** Hygur-operated cloud tenant: the AI-runtime endpoints are operator-controlled
    *  (redacted server-side). The UI hides the AI-runtime editor when true. */
   managed?: boolean;
+  /** Stripe customer-portal link (managed cloud): manage subscription, view
+   *  invoices, cancel → account deletion. Surfaced in Settings when present. */
+  billing_portal_url?: string;
+  /** The tenant's friendly slug (= URL + namespace); used for the type-to-confirm
+   *  deletion gate and to show the user which space they're in. */
+  instance_name?: string;
 }
 
 /** Per-1M-token prices for the cost estimate (GET/PUT /usage). Chat is billed

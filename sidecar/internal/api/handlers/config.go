@@ -25,9 +25,11 @@ type ConfigHandler struct {
 	configPath string
 	mu         sync.RWMutex
 	onChange   func(*config.Config)
-	credStore  *auth.CredentialStore
-	managed    bool
-	logger     zerolog.Logger
+	credStore        *auth.CredentialStore
+	managed          bool
+	billingPortalURL string
+	instanceName     string
+	logger           zerolog.Logger
 }
 
 func NewConfigHandler(cfg *config.Config, configPath string, logger zerolog.Logger) *ConfigHandler {
@@ -39,6 +41,15 @@ func NewConfigHandler(cfg *config.Config, configPath string, logger zerolog.Logg
 // redacts them (the client must never see our upstream Infomaniak endpoints)
 // and PATCH /config rejects any change to them.
 func (h *ConfigHandler) SetManaged(v bool) { h.managed = v }
+
+// SetBillingPortalURL wires the Stripe customer-portal link (managed cloud only).
+// The client surfaces it for subscription management, invoices, and cancellation
+// (which drives account deletion via the existing subscription.deleted → reaper).
+func (h *ConfigHandler) SetBillingPortalURL(v string) { h.billingPortalURL = strings.TrimSpace(v) }
+
+// SetInstanceName records the tenant's friendly slug (= URL + namespace). The
+// client shows it and uses it for the type-to-confirm deletion gate.
+func (h *ConfigHandler) SetInstanceName(v string) { h.instanceName = strings.TrimSpace(v) }
 
 // SetOnChange registers a callback fired after a successful PATCH so runtime
 // components (e.g. the mail connector) can pick up changes without a restart.
@@ -76,6 +87,12 @@ type ConfigResponse struct {
 	// Managed = Hygur-operated cloud tenant. The client uses this to hide the
 	// AI-runtime editor; the endpoints/models below are redacted server-side.
 	Managed bool `json:"managed"`
+	// BillingPortalURL = Stripe customer-portal link (managed cloud only): manage
+	// subscription, view invoices, cancel (→ deletion). Empty/omitted otherwise.
+	BillingPortalURL string `json:"billing_portal_url,omitempty"`
+	// InstanceName = the tenant's friendly slug (= URL + namespace), shown to the
+	// user and used for the type-to-confirm deletion gate.
+	InstanceName string `json:"instance_name,omitempty"`
 }
 
 type MailCfgResp struct {
@@ -206,7 +223,9 @@ func (h *ConfigHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		Mail: MailCfgResp{
 			ReconcileDeletions: h.cfg.Mail.ReconcileDeletions,
 		},
-		Managed: h.managed,
+		Managed:          h.managed,
+		BillingPortalURL: h.billingPortalURL,
+		InstanceName:     h.instanceName,
 	}
 
 	// In a managed cloud tenant the AI runtime is ours: never leak the upstream

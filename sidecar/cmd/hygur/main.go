@@ -592,6 +592,10 @@ func main() {
 	managedDeployment := strings.EqualFold(os.Getenv("HYGUR_MANAGED"), "true") ||
 		os.Getenv("HYGUR_MANAGED") == "1"
 	configHandler.SetManaged(managedDeployment)
+	// Stripe customer-portal link (managed cloud): the client surfaces it for
+	// subscription management, invoices, and cancellation → account deletion.
+	configHandler.SetBillingPortalURL(os.Getenv("HYGUR_STRIPE_PORTAL_URL"))
+	configHandler.SetInstanceName(os.Getenv("HYGUR_TENANT_ID"))
 	// Apply runtime-relevant config changes from PATCH /config without a restart.
 	configHandler.SetOnChange(func(c *config.Config) {
 		for _, mc := range mailProviders {

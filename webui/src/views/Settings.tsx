@@ -562,6 +562,26 @@ export function Settings() {
       )}
 
       <TokenUsageSection managed={!!draft.managed} />
+      {/* Managed cloud: subscription management + invoices + cancellation (which
+          drives account deletion via Stripe → the reaper). */}
+      {draft.managed && draft.billing_portal_url && (
+        <Section title="Subscription & data">
+          <Row label="Billing" hint="Manage your subscription, payment method, and monthly invoices.">
+            <a
+              href={draft.billing_portal_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-surface2"
+            >
+              Open billing portal
+            </a>
+          </Row>
+          <DeleteSpaceRow
+            portalURL={draft.billing_portal_url}
+            instanceName={draft.instance_name ?? ""}
+          />
+        </Section>
+      )}
       {/* Local at-rest encryption + DB backup/restore are admin operations; on a
           managed cloud tenant the server owns them — hide for standard users. */}
       {!draft.managed && <EncryptionSection />}
@@ -847,6 +867,48 @@ function PriceField({
       }}
       className="w-28 rounded-lg border border-border bg-surface px-2 py-1 text-right text-sm tabular-nums outline-none focus:border-accent"
     />
+  );
+}
+
+// Type-to-confirm deletion gate (AWS-style): the "Cancel & delete" link to the
+// Stripe portal only activates once the user types their exact space name.
+function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instanceName: string }) {
+  const [confirm, setConfirm] = useState("");
+  const target = instanceName || "DELETE";
+  const matched = confirm.trim() === target;
+  return (
+    <div className="px-4 py-3">
+      <p className="text-[14px]">Delete my space</p>
+      <p className="mt-0.5 text-[12.5px] text-muted">
+        Cancelling ends your subscription. Your access continues until the end of the paid period
+        (no refund). When it ends, your encryption key is destroyed immediately and the space is
+        permanently purged after 30 days — this is irreversible.
+      </p>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <input
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder={`Type "${target}" to confirm`}
+          spellCheck={false}
+          autoCapitalize="off"
+          className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-[13px] outline-none focus:border-danger"
+        />
+        {matched ? (
+          <a
+            href={portalURL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 rounded-lg border border-danger/50 bg-danger/10 px-3 py-1.5 text-center text-[13px] font-medium text-danger hover:bg-danger/20"
+          >
+            Cancel &amp; delete
+          </a>
+        ) : (
+          <span className="shrink-0 cursor-not-allowed rounded-lg border border-border px-3 py-1.5 text-center text-[13px] font-medium text-faint">
+            Cancel &amp; delete
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
