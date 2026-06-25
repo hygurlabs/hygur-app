@@ -176,6 +176,7 @@ func runServe(args []string) {
 //	hygur-console provisions resume         # tenants to scale-to-1 (payment recovered)
 //	hygur-console provisions purgeable [--days 30]  # reaped tenants past retention → reclaim PV
 //	hygur-console provisions count          # live tenants (pending+ready) for the cap
+//	hygur-console provisions failures       # \t-sep list of subs stuck in 'failed' provisioning
 //	hygur-console provisions ready     <sub># pod created / resumed → mark ready
 //	hygur-console provisions suspended <sub># pod scaled to 0 → mark suspended
 //	hygur-console provisions failed    <sub># provisioning failed (TERMINAL; use 'requeue' to retry)
@@ -184,7 +185,7 @@ func runServe(args []string) {
 //	hygur-console provisions purged    <sub># PV/host dir reclaimed → mark purged
 func runProvisions(args []string) {
 	if len(args) == 0 {
-		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|purgeable|count|ready|suspended|failed|requeue|gone|purged> [sub_id]"))
+		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|purgeable|count|failures|ready|suspended|failed|requeue|gone|purged> [sub_id]"))
 	}
 	store := openStore()
 	defer store.Close()
@@ -196,6 +197,10 @@ func runProvisions(args []string) {
 	switch args[0] {
 	case "pending", "deprovision", "suspend", "resume":
 		rows, err := store.ListProvisions(args[0])
+		die(err)
+		printRows(rows)
+	case "failures":
+		rows, err := store.ListProvisions("failed")
 		die(err)
 		printRows(rows)
 	case "purgeable":
