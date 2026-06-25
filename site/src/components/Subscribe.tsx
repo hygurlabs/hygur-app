@@ -126,8 +126,7 @@ export function Subscribe() {
           <a className="text-muted underline decoration-border hover:text-text" href="#/privacy">
             Privacy Policy
           </a>
-          . Hygur Cloud is operated by 0x0800 SRL, Chaussée Brunehault 702, 4042 Herstal,
-          Belgium · VAT BE 1021.845.609. Prices include VAT.
+          . Hygur Cloud is operated by 0x0800 SRL · VAT BE 1021.845.609. Prices include VAT.
         </p>
       </main>
 
