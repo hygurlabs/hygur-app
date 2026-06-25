@@ -881,20 +881,21 @@ function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instan
   const [confirm, setConfirm] = useState("");
   const expected = instanceName || "DELETE";
   const matched = confirm.trim() === expected;
-  // With a billing portal: cancel there (→ deletion). Without one: a GDPR
-  // deletion request by email to the controller, so the action always works.
-  const viaPortal = portalURL !== "";
-  const actionURL = viaPortal
-    ? portalURL
-    : `mailto:privacy@hygur.ai?subject=${encodeURIComponent(`Delete my space${instanceName ? ` (${instanceName})` : ""}`)}`;
-  const label = viaPortal ? "Cancel & delete" : "Request deletion";
+  // Cancelling via the Stripe billing portal IS the deletion (per the Terms:
+  // access runs to the end of the paid period, then crypto-shred + purge). There
+  // is no email path — when the portal isn't configured yet, the action is simply
+  // not yet available.
+  const canCancel = portalURL !== "";
   return (
     <div className="px-4 py-3">
       <p className="text-[14px]">Delete my space</p>
       <p className="mt-0.5 text-[12.5px] text-muted">
         Cancelling ends your subscription. Your access continues until the end of the paid period
         (no refund). When it ends, your encryption key is destroyed immediately and the space is
-        permanently purged after 30 days — this is irreversible.
+        permanently purged after 30 days. This cannot be undone.
+      </p>
+      <p className="mt-2 text-[12.5px] text-muted">
+        Want a copy? Export your data before you cancel.
       </p>
       {instanceName ? (
         <p className="mt-2 text-[12.5px] text-muted">
@@ -922,18 +923,22 @@ function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instan
           autoCapitalize="off"
           className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-[13px] outline-none focus:border-danger"
         />
-        {matched ? (
+        {!canCancel ? (
+          <span className="shrink-0 cursor-not-allowed rounded-lg border border-border px-3 py-1.5 text-center text-[13px] font-medium text-faint">
+            Available at launch
+          </span>
+        ) : matched ? (
           <a
-            href={actionURL}
+            href={portalURL}
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 rounded-lg border border-danger/50 bg-danger/10 px-3 py-1.5 text-center text-[13px] font-medium text-danger hover:bg-danger/20"
           >
-            {label}
+            Cancel &amp; delete
           </a>
         ) : (
           <span className="shrink-0 cursor-not-allowed rounded-lg border border-border px-3 py-1.5 text-center text-[13px] font-medium text-faint">
-            {label}
+            Cancel &amp; delete
           </span>
         )}
       </div>
@@ -1329,3 +1334,4 @@ function PermissionsSection() {
     </Section>
   );
 }
+
