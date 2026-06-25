@@ -65,13 +65,31 @@ func (s *Server) setupRoutes() {
 		// Model endpoints
 		r.Get("/models", s.handleModels)
 
-		// Web Push (browser notifications, incl. tab-closed). Mounted only when a
-		// VAPID keypair is configured; the handler 503s if push is off.
-		if s.pushHandler != nil {
-			r.Post("/push/subscribe", s.pushHandler.HandleSubscribe)
-			r.Post("/push/unsubscribe", s.pushHandler.HandleUnsubscribe)
-			r.Post("/push/test", s.pushHandler.HandleTest)
-		}
+		// Web Push (browser notifications, incl. tab-closed). Mounted ALWAYS: the
+		// handler is wired AFTER setupRoutes via SetPushHandler, so we read the
+		// field at request time (a setup-time nil check would drop the routes →
+		// 404). The handler 503s when push isn't configured.
+		r.Post("/push/subscribe", func(w http.ResponseWriter, r *http.Request) {
+			if s.pushHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			s.pushHandler.HandleSubscribe(w, r)
+		})
+		r.Post("/push/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
+			if s.pushHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			s.pushHandler.HandleUnsubscribe(w, r)
+		})
+		r.Post("/push/test", func(w http.ResponseWriter, r *http.Request) {
+			if s.pushHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			s.pushHandler.HandleTest(w, r)
+		})
 
 		// Edge (cloud thin client): on-device Proton folder listing + sync
 		// status/trigger. Served LOCALLY (kept off the cloud proxy) because only
