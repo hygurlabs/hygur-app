@@ -50,6 +50,7 @@ export function Connect() {
   const [endpoint, setEndpoint] = useState("https://app.hygur.eu");
   const [key, setKey] = useState("");
   const [handedOff, setHandedOff] = useState(false);
+  const [showRecover, setShowRecover] = useState(false);
 
   // After a successful sign-in: a desktop handoff hands the session back to the
   // native app (deep link) instead of using the session here; otherwise reload.
@@ -259,7 +260,18 @@ export function Connect() {
               <button type="button" onClick={() => switchTo("advanced")} className="hover:text-text">
                 Advanced — connect with a device key
               </button>
+              <button type="button" onClick={() => setShowRecover((v) => !v)} className="hover:text-text">
+                Lost access?
+              </button>
             </div>
+            {showRecover && (
+              <p className="mt-3 rounded-lg border border-border bg-surface2 px-3.5 py-2.5 text-left text-[12px] leading-relaxed text-muted">
+                Open your space link from your subscription receipt (or your bookmark,
+                <span className="font-medium"> cloud.hygur.ai/your-space</span>) and reload it to get a fresh
+                one-time code. You can also manage your subscription from the billing portal linked in that
+                receipt. Tip: add a passkey next time so you can sign in from any device.
+              </p>
+            )}
           </>
         ) : mode === "enroll" ? (
           <>

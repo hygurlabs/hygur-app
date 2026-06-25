@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,6 +30,11 @@ type circuitBreaker struct {
 }
 
 func newCircuitBreaker() *circuitBreaker {
+	// Kill-switch: HYGUR_LLM_BREAKER_DISABLE=1/true → threshold 0 = always allow
+	// (never trips), for debugging or if the breaker ever misfires.
+	if v := strings.TrimSpace(os.Getenv("HYGUR_LLM_BREAKER_DISABLE")); v == "1" || strings.EqualFold(v, "true") {
+		return &circuitBreaker{}
+	}
 	return &circuitBreaker{threshold: defaultBreakerThreshold, cooldown: defaultBreakerCooldown}
 }
 
