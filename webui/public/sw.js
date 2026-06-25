@@ -17,7 +17,18 @@ self.addEventListener("push", (event) => {
     tag: (data.data && data.data.type) || "hygur",
     renotify: true,
   };
-  event.waitUntil(self.registration.showNotification(data.title || "Hygur", options));
+  event.waitUntil(
+    (async () => {
+      // De-dupe with the in-app (foreground) notification: if a Hygur window is
+      // already focused/visible, the app notified itself — skip the push banner.
+      // A test push (data.test) always shows so the user can verify the setup.
+      if (!(data.data && data.data.test)) {
+        const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        if (wins.some((c) => c.focused || c.visibilityState === "visible")) return;
+      }
+      await self.registration.showNotification(data.title || "Hygur", options);
+    })(),
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {

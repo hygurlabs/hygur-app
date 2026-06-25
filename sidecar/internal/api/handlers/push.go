@@ -83,7 +83,7 @@ func (h *PushHandler) HandleTest(w http.ResponseWriter, r *http.Request) {
 		Title: "Hygur",
 		Body:  "Notifications are on — your daily brief will land here.",
 		Icon:  "/icon-192.png",
-		Data:  map[string]any{"url": "/"},
+		Data:  map[string]any{"url": "/", "test": true},
 	})
 	for _, ep := range dead {
 		_ = h.store.DeletePushSubscription(r.Context(), ep)
