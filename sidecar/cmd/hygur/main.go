@@ -946,6 +946,26 @@ func main() {
 	// and "Brief this project" through it).
 	dailyBrief := scheduler.NewDailyBrief(db, llmClient, broker, cfg.DailyBrief, logger)
 	dailyBrief.SetIndexingClient(indexingClient) // G4 decision-claim extraction on the small model (nil-safe)
+	// Web Push: nudge subscribers when the daily brief is ready (works tab-closed).
+	// Best-effort; prunes endpoints the push service reports gone.
+	if pushSender.Configured() {
+		dailyBrief.SetBriefNotifier(func(c context.Context, title, body string) {
+			subs, err := db.ListPushSubscriptions(c)
+			if err != nil || len(subs) == 0 {
+				return
+			}
+			ps := make([]push.Subscription, len(subs))
+			for i, s := range subs {
+				ps[i] = push.Subscription{Endpoint: s.Endpoint, P256dh: s.P256dh, Auth: s.Auth}
+			}
+			for _, ep := range pushSender.Send(c, ps, push.Notification{
+				Title: title, Body: body, Icon: "/icon-192.png",
+				Data: map[string]any{"url": "/digest"},
+			}) {
+				_ = db.DeletePushSubscription(c, ep)
+			}
+		})
+	}
 	// P-2 imminence boost: feed the prospection scan (items tied to a soon-due
 	// recurring obligation) to retrieval, cached with a TTL inside the searcher.
 	unifiedSearcher.SetImminentIDsFunc(func(c context.Context) map[string]struct{} {

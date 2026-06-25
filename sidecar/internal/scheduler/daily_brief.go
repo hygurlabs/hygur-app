@@ -35,6 +35,17 @@ type DailyBrief struct {
 	broker   *events.Broker
 	cfg      config.DailyBriefConfig
 	logger   zerolog.Logger
+	// notify, when set, fires after the main daily brief is published — used to
+	// send a Web Push so the user is nudged even with the tab closed. Best-effort.
+	notify func(ctx context.Context, title, body string)
+}
+
+// SetBriefNotifier registers a callback fired after the primary daily brief is
+// published (project briefs don't notify). Best-effort; nil disables it.
+func (d *DailyBrief) SetBriefNotifier(fn func(ctx context.Context, title, body string)) {
+	if d != nil {
+		d.notify = fn
+	}
 }
 
 // SetIndexingClient sets the small/cheap model used for decision-claim extraction
@@ -284,6 +295,12 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 		Str("project_id", opts.ProjectID).
 		Int("items", len(items)).
 		Msg("brief published")
+
+	// Web Push nudge — only for the primary daily brief (not per-project), so the
+	// user gets one notification even with the tab closed. Best-effort.
+	if d.notify != nil && opts.ProjectID == "" {
+		d.notify(ctx, "Your daily brief is ready", "Open Hygur to see today's priorities.")
+	}
 	return nil
 }
 
