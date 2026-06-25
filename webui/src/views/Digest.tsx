@@ -32,15 +32,15 @@ export function Digest() {
     <Page>
       <PageHeader
         title="Today"
-        subtitle="What Hygur is keeping an eye on — where things stand, what's unresolved, what needs you."
+        subtitle="Here's where things stand, what's still open, and what needs you today."
       />
 
       {isLoading ? (
         <Skeleton rows={6} />
       ) : nothing ? (
         <EmptyState
-          title="Nothing to surface yet"
-          hint="As Hygur ingests your records and writes its nightly chronicle, this becomes your daily starting point."
+          title="Nothing needs you right now"
+          hint="Connect your mail and notes — once Hygur has read them, Today becomes your morning starting point: what moved, what's open, and what needs you."
         />
       ) : (
         <div className="mx-auto flex max-w-[680px] flex-col gap-6">
