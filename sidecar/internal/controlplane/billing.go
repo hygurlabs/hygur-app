@@ -184,7 +184,7 @@ code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;le
 <p>Your private space is ready:</p>
 <div class="space">{{.Slug}}</div>
 <div class="url">{{.URL}}</div>
-<a class="btn" href="{{.DeepLink}}">Open your space →</a>
+<a class="btn" href="{{.DeepLink}}" rel="noreferrer">Open your space →</a>
 {{if .QR}}<img class="qr" src="{{.QR}}" alt="Scan to open your space"><p class="muted">Scan to open on your phone</p>{{end}}
 <div class="note">
 <p class="muted">Bookmark <strong>{{.URL}}</strong>. To sign in later, open it and enter this one-time code:</p>
@@ -201,6 +201,10 @@ code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;le
 // 'ready'), mints + shows a one-time enrollment code. No email.
 func (b *Billing) handleSuccess(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The ready page embeds a live one-time enroll code — never cache it, and
+	// don't leak the page URL via Referer when the user taps through to the shell.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	sid := r.URL.Query().Get("session_id")
 	if sid == "" {
 		_ = successPage.Execute(w, map[string]any{"Ready": false})

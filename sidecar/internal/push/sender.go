@@ -30,7 +30,7 @@ func hostOf(raw string) string {
 // internal/metadata URL (its host isn't an allowed push service), so the server
 // never makes an outbound request to attacker-chosen internal addresses.
 var allowedPushHostSuffixes = []string{
-	"googleapis.com",            // Chrome / FCM (fcm.googleapis.com)
+	"fcm.googleapis.com",        // Chrome / FCM (exact host — not all of googleapis.com)
 	"push.services.mozilla.com", // Firefox
 	"notify.windows.com",        // Edge / Windows (WNS)
 	"push.apple.com",            // Safari / Apple

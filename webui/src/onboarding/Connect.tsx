@@ -76,14 +76,28 @@ export function Connect() {
     }
   };
 
+  // WebAuthn cancel/timeout throws NotAllowedError with browser jargon; map it to
+  // friendly copy so a routine cancel doesn't read as a hard failure.
+  const friendlyPasskey = (e: unknown): Error =>
+    (e as DOMException)?.name === "NotAllowedError"
+      ? new Error("Passkey cancelled or timed out — tap to try again.")
+      : e instanceof Error
+        ? e
+        : new Error(String(e));
+
   // First tap: fetch the assertion options, drop the keyboard, and wait for a
   // confirming tap. Second tap: run the WebAuthn ceremony as the first awaited
   // call in the gesture (iOS throws "document is not focused" otherwise).
   const doLogin = () => {
     if (loginChallenge) {
       run(async () => {
-        await passkeyLoginFinish(loginChallenge);
-        await finish();
+        try {
+          await passkeyLoginFinish(loginChallenge);
+          await finish();
+        } catch (e) {
+          setLoginChallenge(null); // unstick the button so a fresh tap restarts
+          throw friendlyPasskey(e);
+        }
       });
       return;
     }
@@ -107,6 +121,13 @@ export function Connect() {
   // instead of pasting anything.
   const autoEnrolled = useRef(false);
   useEffect(() => {
+    // Scrub the one-time code from the address bar so it can't linger in history,
+    // referrers, or a crash report — it's a bearer credential.
+    if (PRELOAD_CODE) {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("code");
+      window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+    }
     if (PRELOAD_CODE && !autoEnrolled.current) {
       autoEnrolled.current = true;
       doEnroll();
@@ -119,8 +140,13 @@ export function Connect() {
     if (!enrolledToken) return;
     if (registerChallenge) {
       run(async () => {
-        await passkeyRegisterFinish(enrolledToken, registerChallenge);
-        await finish();
+        try {
+          await passkeyRegisterFinish(enrolledToken, registerChallenge);
+          await finish();
+        } catch (e) {
+          setRegisterChallenge(null); // unstick — let a fresh tap retry
+          throw friendlyPasskey(e);
+        }
       });
       return;
     }

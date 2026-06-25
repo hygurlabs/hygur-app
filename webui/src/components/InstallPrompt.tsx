@@ -40,7 +40,7 @@ export function InstallPrompt() {
     );
 
   return (
-    <div className="fixed inset-x-3 bottom-3 z-[70] mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3 shadow-lg print:hidden">
+    <div className="fixed inset-x-3 bottom-[calc(0.75rem_+_env(safe-area-inset-bottom))] z-[70] mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3 shadow-lg print:hidden">
       <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent-weak text-accent">
         <Plus size={18} strokeWidth={2} />
       </span>

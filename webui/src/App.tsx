@@ -70,7 +70,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
           )}
           <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* Mobile-only top bar with the menu toggle (desktop uses the sidebar). */}
-            <div className="flex items-center gap-2 border-b border-border px-3 py-2 md:hidden print:hidden">
+            <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-[calc(0.5rem_+_env(safe-area-inset-top))] md:hidden print:hidden">
               <button
                 onClick={() => setNavOpen(true)}
                 aria-label="Open menu"
@@ -113,7 +113,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
         )}
 
         {updateAvailable && !updateDismissed && (
-          <div className="fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-surface px-4 py-2.5 text-[13px] shadow-lg print:hidden">
+          <div className="fixed bottom-[calc(1rem_+_env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-surface px-4 py-2.5 text-[13px] shadow-lg print:hidden">
             <span className="text-text">A new version of Hygur is available.</span>
             <button
               onClick={() => window.location.reload()}

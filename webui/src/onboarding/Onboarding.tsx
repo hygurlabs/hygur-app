@@ -126,7 +126,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         </div>
       </div>
 
-      <footer className="flex items-center gap-4 border-t border-border px-8 py-4">
+      <footer className="flex items-center gap-4 border-t border-border px-8 pt-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))]">
         <div className="min-w-[80px]">
           {index > 0 && (
             <button

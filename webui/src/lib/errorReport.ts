@@ -32,7 +32,7 @@ export function reportClientError(message: string, stack?: string): void {
       body: JSON.stringify({
         message: msg,
         stack: (stack ?? "").slice(0, 8000),
-        url: location.href,
+        url: location.origin + location.pathname, // strip query — it can carry a one-time enroll code
         app_version: appVersion(),
       }),
       keepalive: true, // survive a navigation/unload
