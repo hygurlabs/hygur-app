@@ -12,12 +12,12 @@ export function Privacy() {
         The data controller is <strong>0x0800 SRL</strong>, Chaussée Brunehault
         702, 4042 Herstal, Belgium (enterprise number BE 1021.845.609). For any
         question about your data, write to{" "}
-        <a href="mailto:privacy@hygur.com">privacy@hygur.com</a>.
+        <a href="mailto:privacy@hygur.ai">privacy@hygur.ai</a>.
       </p>
 
       <h2>2. What this policy covers</h2>
       <p>
-        It covers two things: the public website at hygur.com, and{" "}
+        It covers two things: the public website at hygur.ai, and{" "}
         <strong>Hygur Cloud</strong>, our optional managed hosting of Hygur
         Server. It does <strong>not</strong> cover the Hygur app or a
         self-hosted Server: those run on your own machine or infrastructure,
@@ -125,7 +125,7 @@ export function Privacy() {
         Under the GDPR you have the right to access, rectify, erase, restrict
         and port your personal data, and to object to its processing. To
         exercise these rights, write to{" "}
-        <a href="mailto:privacy@hygur.com">privacy@hygur.com</a>; we respond
+        <a href="mailto:privacy@hygur.ai">privacy@hygur.ai</a>; we respond
         within 30 days. You may also lodge a complaint with the Belgian Data
         Protection Authority (Autorité de protection des données /
         Gegevensbeschermingsautoriteit).
@@ -143,7 +143,7 @@ export function Privacy() {
         We may update this policy as the service evolves; the effective date is
         shown above, and we will notify you of any substantial change. This is
         version 1.0.1. For any question, write to{" "}
-        <a href="mailto:privacy@hygur.com">privacy@hygur.com</a>.
+        <a href="mailto:privacy@hygur.ai">privacy@hygur.ai</a>.
       </p>
     </LegalLayout>
   );

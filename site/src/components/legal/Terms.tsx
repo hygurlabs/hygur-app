@@ -12,7 +12,7 @@ export function Terms() {
         Hygur Cloud is provided by <strong>0x0800 SRL</strong>, Chaussée
         Brunehault 702, 4042 Herstal, Belgium (enterprise number BE
         1021.845.609). For any question about these terms, contact us at{" "}
-        <a href="mailto:hello@hygur.com">hello@hygur.com</a>.
+        <a href="mailto:hello@hygur.ai">hello@hygur.ai</a>.
       </p>
 
       <h2>2. The service</h2>
@@ -253,10 +253,10 @@ export function Terms() {
       <h2>13. Contact</h2>
       <p>
         For questions about these terms, billing, or your account, contact{" "}
-        <a href="mailto:hello@hygur.com">hello@hygur.com</a>. For
+        <a href="mailto:hello@hygur.ai">hello@hygur.ai</a>. For
         data-protection matters, see our{" "}
         <a href="#/privacy">Privacy Policy</a> or write to{" "}
-        <a href="mailto:privacy@hygur.com">privacy@hygur.com</a>.
+        <a href="mailto:privacy@hygur.ai">privacy@hygur.ai</a>.
       </p>
     </LegalLayout>
   );

@@ -20,7 +20,7 @@ export function LegalNotice() {
         <br />
         VAT number: BE 1021.845.609
         <br />
-        Contact: <a href="mailto:legal@hygur.com">legal@hygur.com</a>
+        Contact: <a href="mailto:legal@hygur.ai">legal@hygur.ai</a>
       </address>
       <p>The publisher is represented by its manager.</p>
 
@@ -87,7 +87,7 @@ export function LegalNotice() {
         protection law, you have rights of access, rectification, erasure and
         portability over your personal data. For details on how data is handled,
         see our <a href="#/privacy">Privacy Policy</a>. For any data-related
-        request, contact <a href="mailto:privacy@hygur.com">privacy@hygur.com</a>.
+        request, contact <a href="mailto:privacy@hygur.ai">privacy@hygur.ai</a>.
       </p>
     </LegalLayout>
   );
