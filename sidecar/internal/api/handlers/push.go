@@ -9,6 +9,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// maxPushSubscriptions caps stored devices per tenant (abuse guard).
+const maxPushSubscriptions = 20
+
 // PushHandler manages Web Push subscriptions + a manual test send. Every route
 // returns 503 when no VAPID keypair is configured (push disabled).
 type PushHandler struct {
@@ -43,6 +46,27 @@ func (h *PushHandler) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 		req.Endpoint == "" || req.Keys.P256dh == "" || req.Keys.Auth == "" {
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
 		return
+	}
+	// Anti-SSRF: only accept endpoints on a real browser push service (HTTPS +
+	// allowlisted host), so the server can't be coerced into outbound requests.
+	if !push.ValidEndpoint(req.Endpoint) {
+		http.Error(w, "invalid endpoint", http.StatusBadRequest)
+		return
+	}
+	// Cap subscriptions per tenant (abuse / push-amplification guard); a re-subscribe
+	// of an existing endpoint is always allowed.
+	if subs, err := h.store.ListPushSubscriptions(r.Context()); err == nil && len(subs) >= maxPushSubscriptions {
+		known := false
+		for _, s := range subs {
+			if s.Endpoint == req.Endpoint {
+				known = true
+				break
+			}
+		}
+		if !known {
+			http.Error(w, "too many devices", http.StatusForbidden)
+			return
+		}
 	}
 	if err := h.store.UpsertPushSubscription(r.Context(), store.PushSubscription{
 		Endpoint: req.Endpoint, P256dh: req.Keys.P256dh, Auth: req.Keys.Auth,

@@ -896,7 +896,24 @@ function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instan
         (no refund). When it ends, your encryption key is destroyed immediately and the space is
         permanently purged after 30 days — this is irreversible.
       </p>
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+      {instanceName ? (
+        <p className="mt-2 text-[12.5px] text-muted">
+          To confirm, type your space name{" "}
+          <code className="select-all rounded bg-surface2 px-1.5 py-0.5 font-mono text-[12px] text-text">
+            {instanceName}
+          </code>{" "}
+          below.
+        </p>
+      ) : (
+        <p className="mt-2 text-[12.5px] text-muted">
+          To confirm, type{" "}
+          <code className="select-all rounded bg-surface2 px-1.5 py-0.5 font-mono text-[12px] text-text">
+            DELETE
+          </code>{" "}
+          below.
+        </p>
+      )}
+      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}

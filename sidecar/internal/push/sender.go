@@ -6,9 +6,50 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 )
+
+// allowedPushHostSuffixes are the real browser push services. Restricting the
+// subscription endpoint to these neutralises SSRF: a caller cannot register an
+// internal/metadata URL (its host isn't an allowed push service), so the server
+// never makes an outbound request to attacker-chosen internal addresses.
+var allowedPushHostSuffixes = []string{
+	"googleapis.com",            // Chrome / FCM (fcm.googleapis.com)
+	"push.services.mozilla.com", // Firefox
+	"notify.windows.com",        // Edge / Windows (WNS)
+	"push.apple.com",            // Safari / Apple
+}
+
+// ValidEndpoint reports whether raw is a plausible browser push endpoint: HTTPS
+// and a host belonging to a known push service. Used at subscribe time (and
+// defensively before send) to prevent SSRF via the stored endpoint URL.
+func ValidEndpoint(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, s := range allowedPushHostSuffixes {
+		if host == s || strings.HasSuffix(host, "."+s) {
+			return true
+		}
+	}
+	return false
+}
+
+// pushHTTPClient never follows redirects (a push host must not bounce us to an
+// internal URL) and has a bounded timeout.
+var pushHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // Notification is the JSON payload the service worker receives (sw.js reads it).
 type Notification struct {
@@ -67,12 +108,16 @@ func (s *Sender) Send(_ context.Context, subs []Subscription, n Notification) (d
 		return nil
 	}
 	opts := &webpush.Options{
+		HTTPClient:      pushHTTPClient,
 		Subscriber:      s.subscriber,
 		VAPIDPublicKey:  s.publicKey,
 		VAPIDPrivateKey: s.privateKey,
 		TTL:             86400,
 	}
 	for _, sub := range subs {
+		if !ValidEndpoint(sub.Endpoint) {
+			continue // defence-in-depth: never POST to a non-push-service host
+		}
 		resp, err := webpush.SendNotification(payload, &webpush.Subscription{
 			Endpoint: sub.Endpoint,
 			Keys:     webpush.Keys{P256dh: sub.P256dh, Auth: sub.Auth},
