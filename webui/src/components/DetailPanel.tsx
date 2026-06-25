@@ -135,41 +135,6 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {data.contentId && (
-                  <>
-                    <button
-                      onClick={askInChat}
-                      title="Ask Hygur about this"
-                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent"
-                    >
-                      <MessageSquareText size={14} strokeWidth={1.75} />
-                      Ask
-                    </button>
-                    {isMail(data.sourceType) && (
-                      <button
-                        onClick={draftReply}
-                        disabled={drafting}
-                        title="Draft a reply"
-                        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
-                      >
-                        <Reply size={14} strokeWidth={1.75} />
-                        {drafting ? "Drafting…" : "Reply"}
-                      </button>
-                    )}
-                    <button
-                      onClick={createTask}
-                      title="Create a task from this"
-                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent"
-                    >
-                      {taskDone ? (
-                        <Check size={14} strokeWidth={2} className="text-accent" />
-                      ) : (
-                        <ListPlus size={14} strokeWidth={1.75} />
-                      )}
-                      {taskDone ? "Added" : "Task"}
-                    </button>
-                  </>
-                )}
                 {data.actions}
                 <button
                   onClick={close}
@@ -180,6 +145,40 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                 </button>
               </div>
             </div>
+
+            {/* What Hygur can do with this item — the assistant's value, up front. */}
+            {data.contentId && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3">
+                <button
+                  onClick={askInChat}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-white shadow-[var(--shadow-soft)] transition-opacity hover:opacity-90"
+                >
+                  <MessageSquareText size={15} strokeWidth={2} />
+                  Ask Hygur
+                </button>
+                {isMail(data.sourceType) && (
+                  <button
+                    onClick={draftReply}
+                    disabled={drafting}
+                    className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-accent-weak px-3.5 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-accent-weak/70 disabled:opacity-50"
+                  >
+                    <Reply size={15} strokeWidth={2} />
+                    {drafting ? "Drafting…" : "Draft reply"}
+                  </button>
+                )}
+                <button
+                  onClick={createTask}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-accent-weak px-3.5 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-accent-weak/70"
+                >
+                  {taskDone ? (
+                    <Check size={15} strokeWidth={2.2} />
+                  ) : (
+                    <ListPlus size={15} strokeWidth={2} />
+                  )}
+                  {taskDone ? "Task added" : "Make a task"}
+                </button>
+              </div>
+            )}
             <div className="overflow-auto px-5 py-5">
               {data.contentId && <ItemMeta contentId={data.contentId} />}
 
