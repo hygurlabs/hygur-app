@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -247,11 +248,39 @@ func TestSuccessPage_Copy(t *testing.T) {
 		}
 	}
 
-	ready := render(map[string]any{"Ready": true, "Code": "ABC-123"})
-	if !strings.Contains(ready, "ABC-123") {
-		t.Error("ready page must show the enrollment code")
+	ready := render(map[string]any{
+		"Ready": true, "Code": "ABC-123", "Slug": "brave-azure-harbor",
+		"URL":      "cloud.hygur.ai/brave-azure-harbor",
+		"DeepLink": template.URL("https://cloud.hygur.ai/brave-azure-harbor?code=ABC-123"),
+		"QR":       template.URL("data:image/png;base64,AAA="),
+	})
+	for _, want := range []string{
+		"ABC-123", "brave-azure-harbor", "Open your space",
+		"cloud.hygur.ai/brave-azure-harbor", "data:image/png;base64,AAA=", "add a passkey",
+	} {
+		if !strings.Contains(ready, want) {
+			t.Errorf("ready page missing %q", want)
+		}
 	}
 	if strings.Contains(ready, `http-equiv="refresh"`) {
 		t.Error("ready page must NOT auto-refresh (would re-mint the code)")
+	}
+}
+
+func TestGenerateInstanceName(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		n := GenerateInstanceName()
+		// adjective-color-noun, lowercase, DNS/namespace-safe.
+		if parts := strings.Split(n, "-"); len(parts) != 3 {
+			t.Fatalf("name %q must be 3 hyphen-joined words", n)
+		}
+		if n != strings.ToLower(n) {
+			t.Fatalf("name %q must be lowercase", n)
+		}
+		seen[n] = true
+	}
+	if len(seen) < 10 {
+		t.Errorf("generator looks low-entropy: only %d distinct of 50", len(seen))
 	}
 }

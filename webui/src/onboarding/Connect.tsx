@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { setConnection } from "../lib/connection";
 import {
   desktopHandoff,
@@ -15,26 +15,37 @@ import logo from "../assets/logo.png";
 
 type Mode = "login" | "enroll" | "advanced";
 
+const _params = new URLSearchParams(window.location.search);
 /** Set when the web shell was opened by the desktop app for a passkey handoff
  *  (cloud.hygur.ai/?desktop=<state>). After login we stash a long-lived token
  *  under this state and bounce back to the native app via the hygur:// scheme. */
-const DESKTOP_STATE = new URLSearchParams(window.location.search).get("desktop");
+const DESKTOP_STATE = _params.get("desktop");
+/** One-time enrollment code pre-loaded from the success-page deep link
+ *  (cloud.hygur.ai/<slug>?code=…) — auto-redeemed on load. */
+const PRELOAD_CODE = _params.get("code");
+/** Instance slug from the bookmarkable path (cloud.hygur.ai/<slug>) or ?i= —
+ *  prefills the instance name so a saved space URL lands on its sign-in. */
+const PRELOAD_SLUG =
+  _params.get("i") ||
+  decodeURIComponent(window.location.pathname.replace(/^\/+/, "").split("/")[0] || "");
 
 /** Hygur Cloud sign-in (the web shell at cloud.hygur.ai). Primary path: instance
  *  slug + passkey. Secondary: redeem a one-time enrollment code, then add a
  *  passkey. Fallback ("advanced"): point at any endpoint with a device key
  *  (self-host / debug). On success it persists the connection and reloads. */
 export function Connect() {
-  const [mode, setMode] = useState<Mode>(passkeysSupported() ? "login" : "advanced");
+  const [mode, setMode] = useState<Mode>(
+    PRELOAD_CODE ? "enroll" : passkeysSupported() ? "login" : "advanced",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [instance, setInstance] = useState("");
+  const [instance, setInstance] = useState(PRELOAD_SLUG);
   // Two-phase passkey ceremonies (iOS focus rule): begin() fetches the options
   // and stashes the challenge here; a second, fresh tap then runs finish().
   const [loginChallenge, setLoginChallenge] = useState<PasskeyChallenge | null>(null);
   const [registerChallenge, setRegisterChallenge] = useState<PasskeyChallenge | null>(null);
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(PRELOAD_CODE ?? "");
   const [enrolledToken, setEnrolledToken] = useState<string | null>(null);
   const [endpoint, setEndpoint] = useState("https://app.hygur.eu");
   const [key, setKey] = useState("");
@@ -89,6 +100,18 @@ export function Connect() {
       setEnrolledToken(token); // connected — now offer to add a passkey
       setBusy(false);
     });
+
+  // Deep link from the success page (cloud.hygur.ai/<slug>?code=…): redeem the
+  // pre-loaded code once on load so the user lands straight on "add a passkey"
+  // instead of pasting anything.
+  const autoEnrolled = useRef(false);
+  useEffect(() => {
+    if (PRELOAD_CODE && !autoEnrolled.current) {
+      autoEnrolled.current = true;
+      doEnroll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Same two-phase split as login (see doLogin).
   const doRegister = () => {
@@ -193,6 +216,9 @@ export function Connect() {
             >
               Skip for now
             </button>
+            <p className="text-center text-[11.5px] text-faint">
+              Without a passkey, you can only sign back in from this browser.
+            </p>
           </div>
         ) : mode === "login" ? (
           <>

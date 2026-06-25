@@ -257,7 +257,12 @@ func (s *Store) createAccount(now time.Time, email, status, tenantID string, val
 		}
 		tid := tenantID
 		if tid == "" {
-			tid = "instance-personal-" + num
+			// Friendly default name (brave-azure-harbor). Regenerate on the rare
+			// collision so the slug — also the URL + k8s namespace — stays unique.
+			tid = GenerateInstanceName()
+			if _, err := s.getAccountByTenantID(tid); err == nil {
+				continue
+			}
 		}
 		acc := Account{
 			AccountNumber: num,

@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,12 +12,23 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	qrcode "github.com/skip2/go-qrcode"
 )
+
+// cloudShellURL is the web-shell origin a customer opens their space on. The
+// success page deep-links here with the enrollment code pre-loaded.
+func cloudShellURL() string {
+	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("HYGUR_CLOUD_SHELL_URL")), "/"); v != "" {
+		return v
+	}
+	return "https://cloud.hygur.ai"
+}
 
 // Billing turns Stripe subscription events into accounts + provisioning requests.
 // Invariants (product spec):
@@ -154,19 +166,34 @@ var successPage = template.Must(template.New("s").Parse(`<!doctype html><html la
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if not .Ready}}<meta http-equiv="refresh" content="8">{{end}}
 <title>Hygur Cloud</title><style>
-body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0f0f10;color:#e9e9ea;display:grid;place-items:center;min-height:100vh;margin:0}
-.card{max-width:30rem;padding:2.5rem;text-align:center}
-h1{font-size:1.5rem;margin:0 0 .5rem}p{color:#9a9a9c;line-height:1.5}
-code{display:block;font-size:1.4rem;letter-spacing:.12em;background:#1b1b1d;border:1px solid #2a2a2d;border-radius:.6rem;padding:1rem;margin:1.5rem 0}
-.muted{font-size:.85rem}
+:root{--bg:#fbfaf7;--surface:#fff;--text:#1b1b18;--muted:#6b6b63;--faint:#9a978c;--accent:#2e6a57;--border:#e7e3d8}
+*{box-sizing:border-box}
+body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);display:grid;place-items:center;min-height:100vh;margin:0;padding:1.5rem}
+.card{max-width:30rem;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:1rem;padding:2.25rem;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+h1{font-family:ui-serif,Georgia,"Times New Roman",serif;font-size:1.6rem;font-weight:600;margin:0 0 .4rem}
+p{color:var(--muted);line-height:1.55;margin:.5rem 0}
+.muted{font-size:.85rem;color:var(--faint)}
+.space{margin:1.25rem 0 .2rem;font-family:ui-serif,Georgia,serif;font-size:1.35rem;color:var(--accent)}
+.url{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;color:var(--muted);word-break:break-all}
+.btn{display:inline-block;margin:1.25rem 0 .25rem;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem}
+.qr{margin:1.1rem auto .2rem;width:180px;height:180px;border:1px solid var(--border);border-radius:.6rem;padding:.4rem;background:#fff}
+code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;letter-spacing:.1em;background:var(--bg);border:1px solid var(--border);border-radius:.6rem;padding:.85rem;margin:.75rem 0}
+.note{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)}
 </style></head><body><div class="card">
 {{if .Ready}}<h1>Welcome to Hygur Cloud</h1>
-<p>Your private space is ready. Open the Hygur app and paste this one-time enrollment code:</p>
+<p>Your private space is ready:</p>
+<div class="space">{{.Slug}}</div>
+<div class="url">{{.URL}}</div>
+<a class="btn" href="{{.DeepLink}}">Open your space →</a>
+{{if .QR}}<img class="qr" src="{{.QR}}" alt="Scan to open your space"><p class="muted">Scan to open on your phone</p>{{end}}
+<div class="note">
+<p class="muted">Bookmark <strong>{{.URL}}</strong>. To sign in later, open it and enter this one-time code:</p>
 <code>{{.Code}}</code>
-<p class="muted">The code expires in 30 minutes and works once. Still on this page? Reload to get a fresh code.</p>
+<p class="muted">Expires in 30 minutes, works once — reload this page for a fresh one. On first open, <strong>add a passkey</strong> so you can sign in from any device. Without one, you can only return from this browser.</p>
+</div>
 {{else}}<h1>Setting up your space…</h1>
 <p>Payment received. We're creating your private, encrypted space — its own database with its own encryption key.</p>
-<p class="muted"><strong>Keep this tab open.</strong> Your one-time enrollment code appears here as soon as your space is ready (usually under a minute). We don't send it by email — this page refreshes itself.</p>
+<p class="muted"><strong>Keep this tab open.</strong> Your space and a one-time enrollment code appear here as soon as it's ready (usually under a minute). We don't send it by email — this page refreshes itself.</p>
 {{end}}</div></body></html>`))
 
 // handleSuccess is the Stripe post-payment landing. It resolves the checkout
@@ -190,7 +217,19 @@ func (b *Billing) handleSuccess(w http.ResponseWriter, r *http.Request) {
 		_ = successPage.Execute(w, map[string]any{"Ready": false})
 		return
 	}
-	_ = successPage.Execute(w, map[string]any{"Ready": true, "Code": code})
+	// Deep-link to the web shell with the code pre-loaded + a QR for mobile.
+	shell := cloudShellURL()
+	slug := acc.TenantID
+	displayURL := strings.TrimPrefix(strings.TrimPrefix(shell, "https://"), "http://") + "/" + slug
+	deepLink := shell + "/" + slug + "?code=" + code
+	var qr template.URL
+	if png, qerr := qrcode.Encode(deepLink, qrcode.Medium, 220); qerr == nil {
+		qr = template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png))
+	}
+	_ = successPage.Execute(w, map[string]any{
+		"Ready": true, "Code": code, "Slug": slug,
+		"URL": displayURL, "DeepLink": template.URL(deepLink), "QR": qr,
+	})
 }
 
 // verifyStripeSig validates a `Stripe-Signature: t=…,v1=…` header: HMAC-SHA256 of

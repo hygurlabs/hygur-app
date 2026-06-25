@@ -3,6 +3,7 @@ package controlplane
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,8 +29,9 @@ func TestAccountLifecycle(t *testing.T) {
 	if acc.Email != "owner@example.com" {
 		t.Errorf("email not normalised: %q", acc.Email)
 	}
-	if acc.TenantID != "instance-personal-"+acc.AccountNumber {
-		t.Errorf("tenant id = %q, want instance-personal-%s", acc.TenantID, acc.AccountNumber)
+	// Default tenant id is now a friendly adjective-color-noun slug.
+	if parts := strings.Split(acc.TenantID, "-"); len(parts) != 3 || acc.TenantID != strings.ToLower(acc.TenantID) {
+		t.Errorf("tenant id = %q, want a lowercase 3-word slug", acc.TenantID)
 	}
 	if !acc.IsActive(now) {
 		t.Error("trialing + no expiry should be active")
