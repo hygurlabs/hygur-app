@@ -315,6 +315,37 @@ func scanAccount(row rowScanner) (Account, error) {
 	return a, nil
 }
 
+// GetAccountByEmail resolves an account by its unique email. Operator lookup for
+// support recovery; the email is the verified Stripe identity, never an address
+// supplied in a support request.
+func (s *Store) GetAccountByEmail(email string) (Account, error) {
+	return s.getAccountByEmail(strings.ToLower(strings.TrimSpace(email)))
+}
+
+// GetAccountByTenantID resolves an account by its tenant slug (instance name).
+func (s *Store) GetAccountByTenantID(tenantID string) (Account, error) {
+	return s.getAccountByTenantID(strings.TrimSpace(tenantID))
+}
+
+// ListAccounts returns every account, newest first (operator overview).
+func (s *Store) ListAccounts() ([]Account, error) {
+	rows, err := s.db.Query(
+		`SELECT account_number,email,tenant_id,status,valid_until,created_at FROM accounts ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Account
+	for rows.Next() {
+		a, serr := scanAccount(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // SetSubscription updates an account's status + validity (billing webhook).
 func (s *Store) SetSubscription(accountNumber, status string, validUntil *time.Time) error {
 	res, err := s.db.Exec(`UPDATE accounts SET status=?, valid_until=? WHERE account_number=?`,

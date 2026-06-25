@@ -123,6 +123,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("lm_studio.api_key", "")
 	v.SetDefault("lm_studio.embedding_url", "")
 	v.SetDefault("lm_studio.model_default", "")
+	// Empty defaults so AutomaticEnv binds the indexing/embedding knobs (viper only
+	// env-binds keys it already knows). Without these, a managed tenant's
+	// HYGUR_LM_STUDIO_INDEXING_URL / _MODEL_INDEXING / _EMBEDDING_MODEL are silently
+	// ignored and fall back to the chat URL/model.
+	v.SetDefault("lm_studio.indexing_url", "")
+	v.SetDefault("lm_studio.model_indexing", "")
+	v.SetDefault("lm_studio.embedding_model", "")
 	v.SetDefault("lm_studio.embedding_max_tokens", DefaultEmbeddingMaxTokens)
 	v.SetDefault("lm_studio.timeout", DefaultLMStudioTimeout)
 	v.SetDefault("lm_studio.max_retries", DefaultMaxRetries)

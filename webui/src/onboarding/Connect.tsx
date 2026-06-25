@@ -211,6 +211,13 @@ export function Connect() {
                   ? "Paste the one-time enrollment code from your subscription page."
                   : "Point this app at a Hygur server and paste its device key."}
           </p>
+          {enrolledToken && instance && (
+            <p className="mt-3 rounded-lg bg-surface2 px-3 py-1.5 text-[12.5px] text-muted">
+              Your instance name is{" "}
+              <span className="font-mono font-medium text-text">{instance}</span>. You'll use it to
+              sign in.
+            </p>
+          )}
         </div>
 
         {error && (
@@ -236,16 +243,17 @@ export function Connect() {
                 Tap again and confirm with Touch ID / Face ID.
               </p>
             )}
+            <p className="text-center text-[11.5px] text-faint">
+              Skip and you can only sign back in from this exact browser. In a private or incognito
+              window, you'll be locked out once you close it.
+            </p>
             <button
               type="button"
               onClick={() => void finish()}
-              className="block w-full text-center text-[12.5px] text-muted hover:text-text"
+              className="block w-full text-center text-[11.5px] text-faint hover:text-muted"
             >
               Skip for now
             </button>
-            <p className="text-center text-[11.5px] text-faint">
-              Without a passkey, you can only sign back in from this browser.
-            </p>
           </div>
         ) : mode === "login" ? (
           <>
@@ -292,10 +300,10 @@ export function Connect() {
             </div>
             {showRecover && (
               <p className="mt-3 rounded-lg border border-border bg-surface2 px-3.5 py-2.5 text-left text-[12px] leading-relaxed text-muted">
-                Open your space link from your subscription receipt (or your bookmark,
-                <span className="font-medium"> cloud.hygur.ai/your-space</span>) and reload it to get a fresh
-                one-time code. You can also manage your subscription from the billing portal linked in that
-                receipt. Tip: add a passkey next time so you can sign in from any device.
+                With a passkey, enter your instance name above and sign in from any device. Without
+                one, contact support from the email on your subscription and we'll re-issue a
+                one-time code to that address. You can manage your subscription from the billing
+                portal linked in your receipt.
               </p>
             )}
           </>

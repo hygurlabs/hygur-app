@@ -568,6 +568,11 @@ export function Settings() {
           drives account deletion via Stripe → the reaper). */}
       {draft.managed && (
         <Section title="Subscription & data">
+          {draft.instance_name && (
+            <Row label="Instance name" hint="You sign in with this name and your passkey. Keep it handy in case you ever lose access.">
+              <span className="font-mono text-[13px] text-text">{draft.instance_name}</span>
+            </Row>
+          )}
           {draft.billing_portal_url && (
             <Row label="Billing" hint="Manage your subscription, payment method, and monthly invoices.">
               <a

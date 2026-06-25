@@ -178,12 +178,13 @@ func runServe(args []string) {
 //	hygur-console provisions count          # live tenants (pending+ready) for the cap
 //	hygur-console provisions ready     <sub># pod created / resumed → mark ready
 //	hygur-console provisions suspended <sub># pod scaled to 0 → mark suspended
-//	hygur-console provisions failed    <sub># provisioning failed (will retry next pass)
+//	hygur-console provisions failed    <sub># provisioning failed (TERMINAL; use 'requeue' to retry)
+//	hygur-console provisions requeue   <sub># failed → pending so the poller retries next pass
 //	hygur-console provisions gone      <sub># pod reaped (stamps the retention clock) → mark gone
 //	hygur-console provisions purged    <sub># PV/host dir reclaimed → mark purged
 func runProvisions(args []string) {
 	if len(args) == 0 {
-		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|purgeable|count|ready|suspended|failed|gone|purged> [sub_id]"))
+		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|purgeable|count|ready|suspended|failed|requeue|gone|purged> [sub_id]"))
 	}
 	store := openStore()
 	defer store.Close()
@@ -208,6 +209,12 @@ func runProvisions(args []string) {
 		n, err := store.CountActiveTenants()
 		die(err)
 		fmt.Println(n)
+	case "requeue":
+		if len(args) < 2 {
+			die(fmt.Errorf("usage: hygur-console provisions requeue <sub_id>"))
+		}
+		die(store.RequeueFailed(args[1]))
+		fmt.Printf("requeued %s → pending (the poller will retry on its next pass)\n", args[1])
 	case "ready", "suspended", "failed", "gone", "purged":
 		if len(args) < 2 {
 			die(fmt.Errorf("usage: hygur-console provisions %s <sub_id>", args[0]))
@@ -220,7 +227,7 @@ func runProvisions(args []string) {
 
 func runAccount(args []string) {
 	if len(args) == 0 {
-		die(fmt.Errorf("usage: hygur-console account <create|show> ..."))
+		die(fmt.Errorf("usage: hygur-console account <create|show|list> ..."))
 	}
 	store := openStore()
 	defer store.Close()
@@ -248,16 +255,40 @@ func runAccount(args []string) {
 			acc.TenantID, acc.TenantID, acc.AccountNumber)
 	case "show":
 		fs := flag.NewFlagSet("account show", flag.ExitOnError)
-		num := fs.String("account", "", "account number (required)")
+		num := fs.String("account", "", "account number")
+		email := fs.String("email", "", "look up by email (verified Stripe identity)")
+		tenant := fs.String("tenant", "", "look up by tenant slug (instance name)")
 		_ = fs.Parse(args[1:])
-		acc, err := store.GetAccount(*num)
+		var acc controlplane.Account
+		var err error
+		switch {
+		case *num != "":
+			acc, err = store.GetAccount(*num)
+		case *email != "":
+			acc, err = store.GetAccountByEmail(*email)
+		case *tenant != "":
+			acc, err = store.GetAccountByTenantID(*tenant)
+		default:
+			die(fmt.Errorf("account show: one of --account, --email, --tenant is required"))
+		}
 		die(err)
-		valid := "—"
+		valid := "n/a"
 		if acc.ValidUntil != nil {
 			valid = acc.ValidUntil.Format(time.RFC3339)
 		}
 		fmt.Printf("account_number: %s\ntenant_id:      %s\nemail:          %s\nstatus:         %s\nvalid_until:    %s\n",
 			acc.AccountNumber, acc.TenantID, acc.Email, acc.Status, valid)
+	case "list":
+		accs, err := store.ListAccounts()
+		die(err)
+		fmt.Printf("%-14s  %-32s  %-26s  %-12s  %s\n", "ACCOUNT", "EMAIL", "TENANT", "STATUS", "VALID_UNTIL")
+		for _, a := range accs {
+			valid := ""
+			if a.ValidUntil != nil {
+				valid = a.ValidUntil.Format(time.RFC3339)
+			}
+			fmt.Printf("%-14s  %-32s  %-26s  %-12s  %s\n", a.AccountNumber, a.Email, a.TenantID, a.Status, valid)
+		}
 	default:
 		die(fmt.Errorf("unknown account subcommand %q", args[0]))
 	}

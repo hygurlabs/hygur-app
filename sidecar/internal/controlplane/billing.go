@@ -181,7 +181,7 @@ code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;le
 .note{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)}
 </style></head><body><div class="card">
 {{if .Ready}}<h1>Welcome to Hygur Cloud</h1>
-<p>Your private space is ready:</p>
+<p>Your instance name, which you'll use to sign in, is:</p>
 <div class="space">{{.Slug}}</div>
 <div class="url">{{.URL}}</div>
 <a class="btn" href="{{.DeepLink}}" rel="noreferrer">Open your space →</a>
@@ -189,10 +189,10 @@ code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;le
 <div class="note">
 <p class="muted">Bookmark <strong>{{.URL}}</strong>. To sign in later, open it and enter this one-time code:</p>
 <code>{{.Code}}</code>
-<p class="muted">Expires in 30 minutes, works once — reload this page for a fresh one. On first open, <strong>add a passkey</strong> so you can sign in from any device. Without one, you can only return from this browser.</p>
+<p class="muted">Expires in 30 minutes and works once; reload this page for a fresh one. On first open, <strong>add a passkey</strong> so you can sign in from any device. Without one, you can only return from this browser.</p>
 </div>
 {{else}}<h1>Setting up your space…</h1>
-<p>Payment received. We're creating your private, encrypted space — its own database with its own encryption key.</p>
+<p>Payment received. We're creating your private, encrypted space: its own database with its own encryption key.</p>
 <p class="muted"><strong>Keep this tab open.</strong> Your space and a one-time enrollment code appear here as soon as it's ready (usually under a minute). We don't send it by email — this page refreshes itself.</p>
 {{end}}</div></body></html>`))
 
@@ -371,6 +371,23 @@ func (s *Store) SetProvisionState(subID, state string) error {
 	}
 	_, err := s.db.Exec(`UPDATE stripe_subscriptions SET provision_state=? WHERE stripe_sub_id=?`, state, subID)
 	return err
+}
+
+// RequeueFailed moves a 'failed' subscription back to 'pending' so the poller
+// retries provisioning on its next pass. Guarded to failed→pending only, so it
+// can never re-provision a ready/suspended/reaped tenant. Returns ErrNotFound if
+// the subscription is not in 'failed' (already pending/ready, or unknown).
+func (s *Store) RequeueFailed(subID string) error {
+	res, err := s.db.Exec(
+		`UPDATE stripe_subscriptions SET provision_state='pending' WHERE stripe_sub_id=? AND provision_state='failed'`,
+		subID)
+	if err != nil {
+		return fmt.Errorf("controlplane: requeue: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: no failed subscription %q (already pending/ready, or unknown)", ErrNotFound, subID)
+	}
+	return nil
 }
 
 // SuspendIfReady queues a tenant for scale-to-0 after a failed payment, but only
