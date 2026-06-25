@@ -561,7 +561,7 @@ export function Settings() {
       </Section>
       )}
 
-      <TokenUsageSection />
+      <TokenUsageSection managed={!!draft.managed} />
       {/* Local at-rest encryption + DB backup/restore are admin operations; on a
           managed cloud tenant the server owns them — hide for standard users. */}
       {!draft.managed && <EncryptionSection />}
@@ -850,7 +850,7 @@ function PriceField({
   );
 }
 
-function TokenUsageSection() {
+function TokenUsageSection({ managed }: { managed: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ["usage"],
@@ -910,6 +910,32 @@ function TokenUsageSection() {
   };
   const inG = gauge(wk.total_in, weekBudget(MONTHLY_IN));
   const outG = gauge(wk.total_out, weekBudget(MONTHLY_OUT));
+
+  // Managed cloud tenant: a single merged consumption bar (IN+OUT), no raw token
+  // counters, no prices, no per-category table — like Claude's usage panel. The
+  // full breakdown stays for self-hosted operators.
+  if (managed) {
+    const usedWk = wk.total_in + wk.total_out;
+    const budgetWk = weekBudget(MONTHLY_IN + MONTHLY_OUT);
+    const g = gauge(usedWk, budgetWk);
+    const pct = Math.round(g.pct * 100);
+    return (
+      <Section title="Usage">
+        <div className="px-4 pb-4 pt-3">
+          <div className="mb-1.5 flex items-baseline justify-between text-[12px]">
+            <span className="font-medium">This week</span>
+            <span className={`tabular-nums ${g.over ? "font-semibold text-danger" : "text-muted"}`}>
+              {pct}% used
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-border">
+            <div className={`h-full rounded-full ${g.color}`} style={{ width: `${g.pct * 100}%` }} />
+          </div>
+          <p className="mt-2 text-[11.5px] text-faint">Resets weekly. Your plan covers normal daily use.</p>
+        </div>
+      </Section>
+    );
+  }
 
   return (
     <Section title="Token usage & cost">

@@ -332,9 +332,9 @@ async function buildAttachment(file: File): Promise<AttachmentRef> {
 }
 
 const EXAMPLES = [
-  "What's my VAT due for Q1 2026?",
-  "Summarise my last invoices from EDF",
-  "What deadlines do I have this month?",
+  "Where do things stand right now?",
+  "What have I decided lately — and why?",
+  "What needs my attention this week?",
 ];
 
 let turnSeq = 0;

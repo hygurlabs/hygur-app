@@ -7,6 +7,7 @@ import type { ConnectorHealth, ConnectorInstance, MarketplaceItem } from "../lib
 import { ConnectorConfigForm } from "./ConnectorConfigForm";
 import { EdgeProtonCard } from "./EdgeProtonCard";
 import { EdgeFilesCard } from "./EdgeFilesCard";
+import { isDesktop } from "../lib/desktop";
 import {
   Badge,
   Button,
@@ -138,9 +139,14 @@ export function Connectors() {
 
       {/* Cloud desktop: local sources (Proton Bridge, filesystem) run on THIS
           device — the pod can't reach them. Each streams to the central KB via the
-          edge runner. Self-hide in a browser / local mode. */}
-      <EdgeProtonCard />
-      <EdgeFilesCard />
+          edge runner. Desktop-only: a browser can't reach local mail/files, so
+          hide these entirely on the web shell. */}
+      {isDesktop() && (
+        <>
+          <EdgeProtonCard />
+          <EdgeFilesCard />
+        </>
+      )}
 
       <h2 className="mb-2 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
         Configured
