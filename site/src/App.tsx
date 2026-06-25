@@ -5,6 +5,7 @@ import { LegalNotice } from "./components/legal/LegalNotice";
 import { Privacy } from "./components/legal/Privacy";
 import { Terms } from "./components/legal/Terms";
 import { Connectors } from "./components/Connectors";
+import { Subscribe } from "./components/Subscribe";
 
 export default function App() {
   const { route, anchor } = useRoute();
@@ -27,5 +28,6 @@ export default function App() {
   if (route === "privacy") return <Privacy />;
   if (route === "terms") return <Terms />;
   if (route === "connectors") return <Connectors />;
+  if (route === "subscribe") return <Subscribe />;
   return <Home />;
 }

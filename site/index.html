@@ -27,6 +27,29 @@
     />
     <meta name="twitter:image" content="https://hygur.ai/og-image.png" />
     <title>Hygur — Your local digital twin</title>
+
+    <!-- Structured data: lets Google surface the Hygur Cloud price. availability is
+         PreOrder pre-launch; flip to InStock when CLOUD_OPEN goes true. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Hygur",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "macOS, Windows, iOS, Android, Web",
+        "url": "https://hygur.ai",
+        "description": "A private, local-first memory of your documents, mail and notes, answered by AI with citations. Free local app; a managed EU cloud instance from 29.90 EUR/month.",
+        "offers": {
+          "@type": "Offer",
+          "name": "Hygur Cloud Personal",
+          "price": "29.90",
+          "priceCurrency": "EUR",
+          "availability": "https://schema.org/PreOrder",
+          "url": "https://hygur.ai/#/subscribe"
+        },
+        "publisher": { "@type": "Organization", "name": "0x0800 SRL", "url": "https://hygur.ai" }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

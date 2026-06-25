@@ -163,8 +163,9 @@ export const EDITIONS: Edition[] = [
       : ["29.90 €/mo · launch", "EU-only · no training", "Coming soon"],
     icon: Cloud,
     cta: CLOUD_OPEN ? "Subscribe" : "Coming soon",
-    // Closed: no destination (static card, never opens Stripe). Open: the Stripe payment link.
-    href: CLOUD_OPEN ? CLOUD_SUBSCRIBE_URL : undefined,
+    // Closed: no destination (static card). Open: the pre-checkout recap page (#/subscribe),
+    // which recaps price + terms before sending to Stripe.
+    href: CLOUD_OPEN ? "#/subscribe" : undefined,
     actionable: CLOUD_OPEN,
     featured: true,
   },
