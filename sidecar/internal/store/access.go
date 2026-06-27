@@ -7,10 +7,12 @@ import (
 )
 
 // Per-item access signal — "Quand Hygur rêve" Phase 0 (docs/DREAM_PLAN.md). The
-// foundation for memory consolidation: importance is scored (later) from how often
-// and how recently an item was actually USED to answer the user, not from raw
-// vector matches. OBSERVE-ONLY for now — these are written but not yet read by any
-// tiering/eviction logic.
+// foundation for memory consolidation: importance is scored from how often and how
+// recently an item was actually USED to answer the user, not from raw vector
+// matches. CONSUMED today by the attention reranker (retrieval/attention.go, P-2):
+// often/recently-cited items earn a small bounded retrieval boost. NOT yet read by
+// any memory tiering/eviction/consolidation logic — that part is still future
+// (DREAM_PLAN).
 
 // BumpItemAccess records that these items were cited in an answer: increments
 // hit_count and stamps last_accessed_at, in one transaction. Deduped (a content_id

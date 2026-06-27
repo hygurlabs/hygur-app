@@ -497,12 +497,6 @@ func NewClientWithHTTP(baseURL string, timeout time.Duration, maxRetries int, ht
 	}
 }
 
-// SetEmbeddingBaseURL overrides the embedding endpoint. Pass an empty string
-// to revert to sharing the inference URL.
-func (c *Client) SetEmbeddingBaseURL(url string) {
-	c.embeddingBaseURL = strings.TrimSuffix(url, "/")
-}
-
 // StreamHandler is called for each chunk of a streaming response.
 // delta contains the new content, done indicates if the stream is complete,
 // and usage contains token counts (only populated when done is true).
