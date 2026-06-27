@@ -462,10 +462,15 @@ export const api = {
   edgeSync: () => edgePost("/edge/sync"),
 
   // Billing status from the control plane (cross-origin to console, device token).
+  // Refresh-on-401 like the other authed console calls, so an expired access
+  // token doesn't spuriously hide the panel (mirrors linkDeviceCode / fetchAuthed).
   billingStatus: async (): Promise<BillingStatus> => {
-    const r = await fetch(`${CONSOLE_URL}/billing/status`, {
-      headers: { "X-Hygur-Token": apiKey(), "X-Hygur-API": API_VERSION },
-    });
+    const call = () =>
+      fetch(`${CONSOLE_URL}/billing/status`, {
+        headers: { "X-Hygur-Token": apiKey(), "X-Hygur-API": API_VERSION },
+      });
+    let r = await call();
+    if (r.status === 401 && (await refreshAccessToken())) r = await call();
     if (!r.ok) throw httpError(r);
     return (await r.json()) as BillingStatus;
   },

@@ -12,7 +12,7 @@
 // first tap, then finish() on a fresh tap with NOTHING awaited before the
 // startAuthentication/startRegistration call inside it.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
-import { apiKey, CONSOLE_URL, setTokens } from "./connection";
+import { apiKey, CONSOLE_URL, refreshAccessToken, setTokens } from "./connection";
 
 export interface TokenBundle {
   access_token: string;
@@ -108,6 +108,20 @@ export async function passkeyRegisterFinish(accessToken: string, challenge: Pass
     },
   );
   if (!finish.ok) throw new Error("Passkey registration failed.");
+}
+
+/** How many passkeys the signed-in account has. Drives the "add a passkey" nudge:
+ *  0 means the user can only sign back in from this browser. Refresh-on-401 like
+ *  the other authed console calls. */
+export async function passkeyCount(): Promise<number> {
+  const call = () =>
+    fetch(`${CONSOLE_URL}/passkey/count`, {
+      headers: { Authorization: `Bearer ${apiKey()}` },
+    });
+  let r = await call();
+  if (r.status === 401 && (await refreshAccessToken())) r = await call();
+  if (!r.ok) throw new Error("Could not read passkey status.");
+  return ((await r.json()) as { count: number }).count;
 }
 
 // --- Desktop handback ----------------------------------------------------

@@ -60,10 +60,32 @@ func (a *WebAuthnService) Register(r chi.Router) {
 	r.Post("/passkey/register/finish", a.registerFinish)
 	r.Post("/passkey/login/begin", a.loginBegin)
 	r.Post("/passkey/login/finish", a.loginFinish)
+	// Read-only: how many passkeys the caller has, so the web shell can nudge a user
+	// who skipped passkey setup to add one (authed by the device access token).
+	r.Get("/passkey/count", a.passkeyCount)
 	// Desktop passkey handoff: the system browser logs in, then hands a long-lived
 	// token to the native app via a hygur:// deep-link carrying only a one-time code.
 	r.Post("/desktop/handoff", a.handleDesktopHandoff)
 	r.Post("/desktop/claim", a.handleDesktopClaim)
+}
+
+// passkeyCount returns how many passkeys the caller's account has registered.
+// The web shell uses it to warn a user who enrolled by code but skipped adding a
+// passkey: without one they can only sign back in from the enrolling browser, so
+// losing it means losing access to the space (operator recovery only). Authed by
+// the device access token (its Sub is the account number).
+func (a *WebAuthnService) passkeyCount(w http.ResponseWriter, r *http.Request) {
+	acc, err := a.accountFromToken(r)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	blobs, err := a.store.WebauthnCredentialBlobs(acc.AccountNumber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "count")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"count": len(blobs)})
 }
 
 type desktopReq struct {

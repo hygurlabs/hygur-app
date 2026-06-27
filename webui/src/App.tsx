@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Menu, RefreshCw, X } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
+import { PasskeyBanner } from "./components/PasskeyNudge";
 import { QuickCapture } from "./views/QuickCapture";
 import { Digest } from "./views/Digest";
 import { DetailPanelProvider } from "./components/DetailPanel";
@@ -69,6 +70,9 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             />
           )}
           <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+            {/* Persistent until a passkey exists: without one a cloud user can only
+                sign back in from this browser (no-op off the cloud shell). */}
+            <PasskeyBanner variant="global" />
             {/* Mobile-only top bar with the menu toggle (desktop uses the sidebar). */}
             <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-[calc(0.5rem_+_env(safe-area-inset-top))] md:hidden print:hidden">
               <button

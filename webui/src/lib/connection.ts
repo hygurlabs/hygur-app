@@ -11,6 +11,8 @@
 // so the client holds its own key. This module is the single seam the Tauri
 // shell (P2.6) plugs into.
 
+import { isDesktop } from "./desktop";
+
 const META_TOKEN: string = (() => {
   const m = document.querySelector('meta[name="hygur-token"]')?.getAttribute("content") ?? "";
   return m === "__HYGUR_TOKEN__" ? "" : m;
@@ -181,10 +183,17 @@ export function refreshAccessToken(): Promise<boolean> {
         body: "{}",
       });
       if (!r.ok) {
-        // Only a definitive auth rejection means the session is dead → sign out.
-        // Transient failures (5xx, network) keep state for the next try, so a
-        // console hiccup doesn't log the user out.
-        if (r.status === 401 || r.status === 403) clearTokens();
+        // Definitive auth failures end the session → clean sign-out: clearTokens
+        // drops the local access token + endpoint, clears the residual hygur_rt
+        // cookie via /token/logout, and emits SIGNED_OUT_EVENT (Root routes to
+        // Connect). A 400 ("refresh_token required") means no/cleared refresh
+        // cookie — unrecoverable for the web shell, so it joins 401/403 instead of
+        // stranding the user on a 401-ing shell. Desktop manages its own token
+        // (native /desktop/claim), so never sign it out from here. Transient
+        // failures (5xx, network) keep state for the next try.
+        const dead =
+          r.status === 401 || r.status === 403 || (r.status === 400 && !isDesktop());
+        if (dead) clearTokens();
         return false;
       }
       const b = (await r.json()) as { access_token: string; endpoint: string };
