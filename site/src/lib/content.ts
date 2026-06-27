@@ -62,7 +62,7 @@ export const PRINCIPLES: Principle[] = [
   {
     icon: ShieldCheck,
     title: "Private by design",
-    body: "Your data never leaves your machine. The app talks only to a local sidecar and the AI runtime you point it at.",
+    body: "Run it fully local and your data stays on your machine — the app talks only to a local sidecar and the AI runtime you point it at.",
   },
   {
     icon: Cpu,
@@ -82,7 +82,7 @@ export const GROUNDING: Principle[] = [
   {
     icon: Quote,
     title: "Answers you can check",
-    body: "Every reply cites your own mail, notes and documents. Never the public web, never invented. Dates and amounts are computed, not guessed.",
+    body: "When Hygur answers from your data, it cites the exact mail, notes and documents it used — your sources, not the public web. Dates and amounts are pulled from those documents, not made up.",
   },
   {
     icon: Scale,
@@ -144,8 +144,8 @@ export const EDITIONS: Edition[] = [
     id: "app",
     name: "Hygur App",
     kicker: "Clients",
-    tagline: "Desktop and mobile",
-    body: "The local twin in your pocket and on your desk. Ask, search and capture across Mac, Windows and your phone. It runs on your machine and talks only to the AI runtime you point it at, local or any OpenAI-compatible endpoint.",
+    tagline: "Mac app · installable on mobile",
+    body: "The local twin on your desk and in your pocket. Ask, search and capture on your Mac, and on your phone as an installable web app. It runs on your machine and talks only to the AI runtime you point it at, local or any OpenAI-compatible endpoint.",
     badges: ["Free", "Open source · AGPL"],
     icon: MonitorSmartphone,
     cta: "Get the app",
@@ -174,8 +174,8 @@ export const EDITIONS: Edition[] = [
     name: "Hygur Marketplace",
     kicker: "Ecosystem",
     tagline: "Connectors catalogue",
-    body: "A growing catalogue of connectors that bring more of your world in. Mail, files and calendars today; more tools to come for a richer memory.",
-    badges: ["Free & paid"],
+    body: "A growing catalogue of connectors that bring more of your world in. Mail, files and calendars today, all free. Deeper, pro-grade connectors will follow as paid add-ons.",
+    badges: ["Free today"],
     icon: Blocks,
     cta: "Browse connectors",
     href: "#/connectors",

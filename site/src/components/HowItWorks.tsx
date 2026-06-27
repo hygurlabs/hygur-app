@@ -8,7 +8,7 @@ const POINTS = [
   {
     icon: MonitorSmartphone,
     label: "The app",
-    note: "Runs on your Mac, Windows or phone. Open it and it's ready; there's nothing to set up in the cloud.",
+    note: "Runs on your Mac, and on your phone as an installable web app. Open it and it's ready; there's nothing to set up in the cloud.",
   },
   {
     icon: Cpu,
