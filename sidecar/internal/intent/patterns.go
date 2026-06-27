@@ -143,11 +143,6 @@ func GetMailRegex() *regexp.Regexp {
 	return mailRegex
 }
 
-// GetMailSemanticRegex returns the compiled mail semantic keyword regex.
-func GetMailSemanticRegex() *regexp.Regexp {
-	return mailSemanticRegex
-}
-
 // GetKnowledgeRegex returns the compiled knowledge detection regex.
 func GetKnowledgeRegex() *regexp.Regexp {
 	return knowledgeRegex
@@ -157,6 +152,3 @@ func GetKnowledgeRegex() *regexp.Regexp {
 func GetTemporalRecentRegex() *regexp.Regexp {
 	return temporalRecentRegex
 }
-
-// GetTemporalRangeRegex returns the compiled temporal range (month name) regex.
-func GetTemporalRangeRegex() *regexp.Regexp { return temporalRangeRegex }

@@ -71,35 +71,6 @@ func (t *MemoryStoreTool) Store(content string, memoryType string, contextID str
 	return memoryID, nil
 }
 
-// StoreWithExpiry saves a manual memory with an explicit expiration time. Pass
-// nil for `expiresAt` to keep the memory forever. As with Store, manual rows
-// are auto-accepted.
-func (t *MemoryStoreTool) StoreWithExpiry(content, memoryType, contextID string, expiresAt *time.Time) (string, error) {
-	if content == "" {
-		return "", fmt.Errorf("content cannot be empty")
-	}
-	memoryID := uuid.New().String()
-	now := time.Now()
-	embedding := t.embedContent(content)
-	err := t.store.InsertMemory(&store.Memory{
-		MemoryID:   memoryID,
-		Type:       store.MemoryType(memoryType),
-		Content:    content,
-		ContextID:  contextID,
-		CreatedAt:  now,
-		ExpiresAt:  expiresAt,
-		Score:      0.0,
-		Source:     store.MemorySourceManual,
-		AcceptedAt: &now,
-		Embedding:  embedding,
-		SessionID:  contextID,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to store memory: %w", err)
-	}
-	return memoryID, nil
-}
-
 // embedContent returns the embedding for `content`, or nil when the LLM client
 // is missing/embedding fails. Phase 3.3 injection still works without
 // embeddings (it falls back to "skip injection") so this is best-effort.

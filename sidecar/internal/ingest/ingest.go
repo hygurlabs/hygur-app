@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -423,9 +422,9 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 // "Add files" path / future edge agent) — the server does NO file parsing.
 type IngestTextInput struct {
 	Title      string
-	Text       string         // already-extracted plain text
-	SourceType string         // "file" | "mail" | "note" | "event" | … (default "text")
-	SourceRef  string         // idempotency key, e.g. "files:/path" or "imap:<id>"
+	Text       string // already-extracted plain text
+	SourceType string // "file" | "mail" | "note" | "event" | … (default "text")
+	SourceRef  string // idempotency key, e.g. "files:/path" or "imap:<id>"
 	URL        string
 	Author     string
 	Metadata   map[string]any // extra fields merged into the item metadata
@@ -771,31 +770,4 @@ func normalizeExtension(ext string) string {
 		ext = "." + ext
 	}
 	return ext
-}
-
-// generateContentID creates a unique identifier for the content.
-// This is a placeholder implementation.
-func generateContentID(path string, metadata Metadata) string {
-	// TODO: Use proper content hashing (e.g., SHA-256 of content)
-	// For now, use a simple path-based ID
-	base := filepath.Base(path)
-	return fmt.Sprintf("content_%s", strings.ReplaceAll(base, ".", "_"))
-}
-
-// contextReader wraps an io.Reader to respect context cancellation.
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (cr *contextReader) Read(p []byte) (n int, err error) {
-	if err := cr.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return cr.r.Read(p)
-}
-
-// NewContextReader wraps a reader to respect context cancellation.
-func NewContextReader(ctx context.Context, r io.Reader) io.Reader {
-	return &contextReader{ctx: ctx, r: r}
 }

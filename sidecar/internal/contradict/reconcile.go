@@ -82,20 +82,6 @@ func ReconcileClaimConflict(ctx context.Context, client *llm.Client, c ClaimConf
 	return parseVerdict(raw), nil
 }
 
-// Reconcile judges every candidate and returns only those that are real conflicts
-// or supersedes (evolutions), each with its verdict. "none" and errors are dropped.
-func Reconcile(ctx context.Context, client *llm.Client, candidates []ClaimConflict) []ReconciledConflict {
-	out := make([]ReconciledConflict, 0, len(candidates))
-	for _, c := range candidates {
-		v, err := ReconcileClaimConflict(ctx, client, c)
-		if err != nil || v.Kind == "none" || v.Kind == "" {
-			continue
-		}
-		out = append(out, ReconciledConflict{ClaimConflict: c, Verdict: v})
-	}
-	return out
-}
-
 // parseVerdict extracts the JSON object from a (possibly fenced/chatty) reply and
 // normalizes kind to one of conflict|supersedes|none. Unknown/garbage → "none".
 func parseVerdict(raw string) Verdict {

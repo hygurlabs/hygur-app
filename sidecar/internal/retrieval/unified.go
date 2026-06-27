@@ -1019,68 +1019,6 @@ func (us *UnifiedSearcher) FetchByContentIDs(ctx context.Context, ids []string) 
 	return out, nil
 }
 
-// expandQueryIfShort rewrites short or acronym queries (≤ 3 tokens) into a
-// longer descriptive phrase before embedding. Fixes the "degenerate embedding"
-// problem where short tokens like "TVA" produce sparse vectors that barely
-// overlap with document embeddings.
-//
-// Natural-language questions are NOT expanded here — they're better handled
-// by the conversation_rewrite path (when there's history) or by entity-type
-// boosting (Lot 1) when the query targets a structured entity. Expanding every
-// long question via LLM adds 20+ seconds to chat latency on reasoning models
-// like Nemotron, which is unacceptable for a user-facing chat.
-//
-// If the LLM call fails the original query is returned (safe fallback).
-func expandQueryIfShort(ctx context.Context, client *llm.Client, query string) string {
-	if len(splitQueryTokens(query)) > 3 {
-		return query
-	}
-
-	expandCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-
-	// Instruction in English; the expansion examples stay bilingual on purpose —
-	// they seed synonyms that improve semantic recall over a French/EN mailbox,
-	// and this expanded query is internal (never shown to the user).
-	prompt := `You are an assistant that reformulates short search queries into a descriptive sentence to improve semantic search over emails.
-Turn the query into a short, descriptive sentence (max 15 words). Output only the reformulated query, with no explanation and no trailing punctuation.
-
-Examples:
-- "TVA" → "TVA taxe valeur ajoutée déclaration trimestrielle montant à payer"
-- "URSSAF" → "URSSAF cotisations sociales charges patronales paiement"
-- "VAT" → "VAT value added tax declaration quarterly payment invoice"
-- "facture" → "facture montant paiement prestation client"
-- "devis" → "devis estimation prix travaux prestation"
-
-Query: ` + query
-
-	resp, err := client.Chat(expandCtx, llm.ChatRequest{
-		Messages:    []llm.Message{{Role: "user", Content: prompt}},
-		Temperature: 0,
-		MaxTokens:   2048, // reasoning models (e.g. Nemotron) need headroom for <think> tokens
-	})
-	if err != nil {
-		log.Printf("[UnifiedSearch] query expansion failed for %q: %v", query, err)
-		return query
-	}
-	if resp == nil || len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
-		log.Printf("[UnifiedSearch] query expansion returned empty response for %q", query)
-		return query
-	}
-
-	expanded := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if expanded == "" {
-		// Reasoning-capable backends route the answer to `reasoning` when the
-		// whole turn is treated as a thinking block. Fall back to it.
-		expanded = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
-	}
-	if expanded == "" {
-		return query
-	}
-	log.Printf("[UnifiedSearch] query expanded: %q → %q", query, expanded)
-	return expanded
-}
-
 // applyTitleBoost compensates for short/acronym queries that produce low cosine
 // scores even when the document is a direct title match.
 //

@@ -180,16 +180,6 @@ func (sr *StreamReader) Accumulated() string {
 	return sr.accumulated.String()
 }
 
-// IsDone returns whether the stream has finished.
-func (sr *StreamReader) IsDone() bool {
-	return sr.done
-}
-
-// Usage returns the token usage if available.
-func (sr *StreamReader) Usage() *Usage {
-	return sr.lastUsage
-}
-
 // StreamEvent is the rich payload emitted to a StreamRichHandler. Each event
 // describes one observation from the SSE stream. Most fields are optional —
 // callers branch on which is populated:
@@ -302,10 +292,10 @@ type ToolCallAssembler struct {
 }
 
 type toolCallBuilder struct {
-	id    string
-	kind  string
-	name  string
-	args  strings.Builder
+	id   string
+	kind string
+	name string
+	args strings.Builder
 }
 
 // NewToolCallAssembler returns a fresh assembler.

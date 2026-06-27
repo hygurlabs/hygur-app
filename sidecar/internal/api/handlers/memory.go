@@ -473,10 +473,3 @@ func writeMemoryError(w http.ResponseWriter, status int, code, message string) {
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
-
-// RouteMemoryEndpoints registers the memory API endpoints.
-func RouteMemoryRoutes(router *chi.Mux, handler *MemoryHandler) {
-	router.Post("/memory/store", handler.Store)
-	router.Get("/memory/search", handler.MemorySearch)
-	router.Get("/memory/sync", handler.Sync)
-}

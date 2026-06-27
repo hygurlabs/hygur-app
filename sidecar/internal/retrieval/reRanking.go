@@ -168,40 +168,6 @@ func parseRerankResponse(resp *llm.ChatResponse, chunkMap map[string]string) []s
 	return nil
 }
 
-// ReOrderBy re-orders unified search results by the given list of content IDs.
-// It returns a new slice ordered by the provided content ID order, followed by
-// any items not in the order list.
-func ReOrderBy(results []UnifiedResult, orderedContentIDs []string) []UnifiedResult {
-	if len(orderedContentIDs) == 0 {
-		return results
-	}
-
-	// Build a map of contentID -> UnifiedResult
-	itemsByContent := make(map[string]UnifiedResult)
-	for _, r := range results {
-		itemsByContent[r.ContentID] = r
-	}
-
-	// Re-order by content ID order
-	var ordered []UnifiedResult
-	seen := make(map[string]bool)
-	for _, cid := range orderedContentIDs {
-		if r, ok := itemsByContent[cid]; ok {
-			ordered = append(ordered, r)
-			seen[cid] = true
-		}
-	}
-
-	// Append any remaining items not in the order list
-	for _, r := range results {
-		if !seen[r.ContentID] {
-			ordered = append(ordered, r)
-		}
-	}
-
-	return ordered
-}
-
 // rerankDedicated reranks via the configured dedicated reranker (Cohere-shaped
 // /rerank, e.g. Infomaniak's bge-reranker-v2-m3): one document per content id
 // (title + best chunk), returning content ids most-relevant-first. The cid order

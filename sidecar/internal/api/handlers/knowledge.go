@@ -2,9 +2,6 @@
 package handlers
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -58,11 +55,6 @@ func NewKnowledgeHandler(store *store.DB, ingestor *ingest.Ingestor, searcher *r
 		searcher: searcher,
 		logger:   logger.With().Str("handler", "knowledge").Logger(),
 	}
-}
-
-// SetEmbeddingService sets the embedding service for re-indexing operations.
-func (h *KnowledgeHandler) SetEmbeddingService(svc *llm.EmbeddingService) {
-	h.embeddingService = svc
 }
 
 // IngestRequest represents the request body for POST /knowledge/ingest.
@@ -1033,138 +1025,6 @@ type ReindexResponse struct {
 	ChunksCreated     int      `json:"chunks_created"`     // Total chunks created
 	EmbeddingsCreated int      `json:"embeddings_created"` // Total embeddings created
 	Errors            []string `json:"errors,omitempty"`   // Any errors encountered
-}
-
-// Reindex handles POST /knowledge/reindex.
-// It re-creates chunks and embeddings for items that are missing them.
-func (h *KnowledgeHandler) Reindex(w http.ResponseWriter, r *http.Request) {
-	// Check if store is available
-	if h.store == nil {
-		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "store not configured")
-		return
-	}
-
-	// Check if embedding service is available
-	if h.embeddingService == nil {
-		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "embedding service not configured")
-		return
-	}
-
-	var req ReindexRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Allow empty body (reindex all)
-		if err.Error() != "EOF" {
-			h.logger.Debug().Err(err).Msg("failed to parse request body")
-			writeKnowledgeError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
-			return
-		}
-	}
-
-	resp := ReindexResponse{
-		Errors: make([]string, 0),
-	}
-
-	var itemsToReindex []*store.KnowledgeItem
-
-	if req.ContentID != nil && *req.ContentID != "" {
-		// Reindex a specific item
-		item, err := h.store.GetKnowledgeItem(r.Context(), *req.ContentID)
-		if err != nil {
-			h.logger.Error().Err(err).Str("content_id", *req.ContentID).Msg("failed to get knowledge item")
-			writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to get item")
-			return
-		}
-		if item == nil {
-			writeKnowledgeError(w, http.StatusNotFound, "NOT_FOUND", "knowledge item not found")
-			return
-		}
-		itemsToReindex = append(itemsToReindex, item)
-	} else {
-		// Get all items missing chunks
-		items, err := h.store.GetItemsWithoutChunks(r.Context())
-		if err != nil {
-			h.logger.Error().Err(err).Msg("failed to get items without chunks")
-			writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to get items")
-			return
-		}
-		itemsToReindex = items
-	}
-
-	// Process each item
-	for _, item := range itemsToReindex {
-		chunksCreated, embeddingsCreated, err := h.reindexItem(r.Context(), item)
-		if err != nil {
-			errMsg := "content_id=" + item.ContentID + ": " + err.Error()
-			resp.Errors = append(resp.Errors, errMsg)
-			h.logger.Warn().Err(err).Str("content_id", item.ContentID).Msg("failed to reindex item")
-			continue
-		}
-
-		resp.Reindexed++
-		resp.ChunksCreated += chunksCreated
-		resp.EmbeddingsCreated += embeddingsCreated
-
-		h.logger.Debug().
-			Str("content_id", item.ContentID).
-			Int("chunks", chunksCreated).
-			Int("embeddings", embeddingsCreated).
-			Msg("reindexed item")
-	}
-
-	// Also handle chunks that exist but are missing embeddings
-	chunksWithoutEmbeddings, err := h.store.GetChunksWithoutEmbeddings(r.Context())
-	if err != nil {
-		h.logger.Warn().Err(err).Msg("failed to get chunks without embeddings")
-	} else if len(chunksWithoutEmbeddings) > 0 {
-		// Convert to store.Chunk slice for BatchEmbedAndStore
-		var chunks []store.Chunk
-		for _, c := range chunksWithoutEmbeddings {
-			chunks = append(chunks, *c)
-		}
-
-		if err := h.embeddingService.BatchEmbedAndStore(r.Context(), chunks); err != nil {
-			errMsg := "embedding generation: " + err.Error()
-			resp.Errors = append(resp.Errors, errMsg)
-			h.logger.Warn().Err(err).Msg("failed to generate embeddings for orphan chunks")
-		} else {
-			resp.EmbeddingsCreated += len(chunks)
-			h.logger.Info().Int("count", len(chunks)).Msg("generated embeddings for orphan chunks")
-		}
-	}
-
-	h.logger.Info().
-		Int("reindexed", resp.Reindexed).
-		Int("chunks_created", resp.ChunksCreated).
-		Int("embeddings_created", resp.EmbeddingsCreated).
-		Int("errors", len(resp.Errors)).
-		Msg("reindex completed")
-
-	writeKnowledgeJSON(w, http.StatusOK, resp)
-}
-
-// reindexItem creates sections, chunks and embeddings for a single knowledge
-// item via the shared indexing path. Returns the number of chunks created and
-// embeddings created. An embedding failure is soft (chunks persist and stay
-// searchable via FTS); a persistence failure is returned as an error.
-func (h *KnowledgeHandler) reindexItem(ctx context.Context, item *store.KnowledgeItem) (int, int, error) {
-	now := time.Now()
-	_, chunkCount, err := ingest.IndexSections(ctx, h.store, h.embeddingService, item.ContentID, item.NormalizedText, ingest.DefaultChunkTokenBudget, now)
-	if err != nil {
-		if chunkCount == 0 {
-			return 0, 0, err // nothing persisted — a real failure
-		}
-		// Chunks persisted but embedding failed — still searchable via FTS.
-		h.logger.Warn().Err(err).Str("content_id", item.ContentID).Msg("reindex: embedding failed; chunks still searchable via FTS")
-		return chunkCount, 0, nil
-	}
-	return chunkCount, chunkCount, nil
-}
-
-// hashChunkContent returns the SHA-256 hash of the text.
-func hashChunkContent(text string) string {
-	h := sha256.New()
-	h.Write([]byte(text))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // writeKnowledgeJSON writes a JSON response with the given status code.

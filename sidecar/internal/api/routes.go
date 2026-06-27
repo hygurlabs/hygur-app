@@ -520,16 +520,6 @@ func (s *Server) handleKnowledgeDiagnostic(w http.ResponseWriter, r *http.Reques
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
 }
 
-// handleKnowledgeReindex handles POST /knowledge/reindex.
-// It delegates to the KnowledgeHandler.
-func (s *Server) handleKnowledgeReindex(w http.ResponseWriter, r *http.Request) {
-	if s.knowledgeHandler != nil {
-		s.knowledgeHandler.Reindex(w, r)
-		return
-	}
-	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
-}
-
 // handleProjectList handles GET /projects.
 // It delegates to the ProjectHandler.
 func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request) {

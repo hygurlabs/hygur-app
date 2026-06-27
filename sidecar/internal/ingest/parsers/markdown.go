@@ -2,7 +2,6 @@
 package parsers
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"regexp"
@@ -214,15 +213,4 @@ func (p *MarkdownParser) walkAST(node ast.Node, source []byte, builder *strings.
 	}
 
 	return sectionCount
-}
-
-// extractText recursively extracts text from a node and its children.
-func (p *MarkdownParser) extractText(node ast.Node, source []byte, buf *bytes.Buffer) {
-	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-		if textNode, ok := child.(*ast.Text); ok {
-			buf.Write(textNode.Segment.Value(source))
-		} else {
-			p.extractText(child, source, buf)
-		}
-	}
 }

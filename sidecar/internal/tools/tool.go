@@ -144,10 +144,3 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	}
 	return t.Execute(ctx, args)
 }
-
-// Len returns the number of registered tools.
-func (r *Registry) Len() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.tools)
-}

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/agenda"
 	"github.com/hygur/sidecar/internal/contradict"
-	"github.com/hygur/sidecar/internal/intent"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/session"
@@ -297,21 +296,6 @@ func injectFormatGuidance(messages []llm.Message) []llm.Message {
 	out = append(out, llm.Message{Role: "system", Content: guidance})
 	out = append(out, messages...)
 	return out
-}
-
-// injectAgendaIntoSystemPrompt prepends an urgency block to the system prompt
-// listing the actions that are due in the next 48 h.
-func injectAgendaIntoSystemPrompt(prompt string, actions []agenda.AgendaAction) string {
-	if len(actions) == 0 {
-		return prompt
-	}
-	var b strings.Builder
-	b.WriteString("Urgent actions in the next 48h:\n")
-	for _, a := range actions {
-		b.WriteString(fmt.Sprintf("- [%s] %s (deadline: %s)\n", a.Priority, a.What, a.DeadlineISO))
-	}
-	b.WriteString("\n")
-	return b.String() + prompt
 }
 
 // resolveDocumentAttachments expands any Attachment of type "document" into
@@ -1285,158 +1269,6 @@ func injectBrainContext(messages []llm.Message, decisions []*store.Decision, pos
 	return out
 }
 
-// retrieveContext retrieves relevant context from the knowledge base and mail.
-func (h *RAGChatHandler) retrieveContext(r *http.Request, req RAGChatRequest) (*RAGContext, error) {
-	// Get the last user message for context retrieval
-	var userQuery string
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			userQuery = req.Messages[i].Content
-			break
-		}
-	}
-
-	if userQuery == "" {
-		return &RAGContext{}, nil
-	}
-
-	// Multi-turn: rewrite the latest question as a standalone query using history.
-	// This ensures follow-up questions like "and the IBAN?" carry forward the topic
-	// ("TVA précompte") without requiring the user to repeat it.
-	searchQuery := userQuery
-	if len(req.Messages) > 1 && h.llmClient != nil {
-		history := req.Messages[:len(req.Messages)-1]
-		if rewritten, err := retrieval.RewriteStandaloneQuery(r.Context(), h.llmClient, history, userQuery); err != nil {
-			h.logger.Warn().Err(err).Str("original", userQuery).Msg("query rewrite failed, falling back to verbatim")
-		} else {
-			searchQuery = rewritten
-		}
-	}
-	h.logger.Info().
-		Str("original", userQuery).
-		Str("rewritten", searchQuery).
-		Bool("rewrite_triggered", searchQuery != userQuery).
-		Msg("RAG query")
-
-	// Determine top_k
-	topK := h.config.TopK
-	if req.RAGTopK > 0 {
-		topK = req.RAGTopK
-	}
-
-	// Convert source strings to intent.SourceType
-	var sources []intent.SourceType
-	for _, s := range req.RAGSources {
-		switch s {
-		case "knowledge":
-			sources = append(sources, intent.SourceKnowledge)
-		case "mail":
-			sources = append(sources, intent.SourceMail)
-		case "all":
-			sources = append(sources, intent.SourceAll)
-		}
-	}
-
-	// Build search request
-	debugRequested := r.URL.Query().Get("debug") == "1" || r.Header.Get("X-Hygur-Debug") == "1"
-	searchReq := retrieval.UnifiedSearchRequest{
-		Query:                  searchQuery,
-		TopK:                   topK,
-		Sources:                sources,
-		MailAccountID:          req.MailAccountID,
-		MailLabels:             req.MailLabels,
-		PriorSourceBoost:       req.RecentSourceIDs,
-		FocusScope:             req.FocusScope,
-		ScoringMode:            h.config.TemporalScoringMode,
-		CurrentStateFilterDays: h.config.CurrentStateFilterDays,
-		Debug:                  debugRequested,
-	}
-
-	// Perform search
-	result, err := h.unifiedSearcher.Search(r.Context(), searchReq)
-	if err != nil {
-		return nil, fmt.Errorf("unified search failed: %w", err)
-	}
-
-	// Re-rank results using LLM if we have enough results
-	if len(result.Results) > 0 && h.config.ReRankEnabled {
-		h.logger.Debug().Int("count", len(result.Results)).Msg("reranking results")
-		if orderedIDs, err := h.unifiedSearcher.Rerank(r.Context(), userQuery, result.Results); err != nil {
-			h.logger.Warn().Err(err).Msg("failed to re-rank, using original order")
-		} else if len(orderedIDs) > 0 {
-			// Re-order results by the LLM-returned content IDs
-			result.Results = retrieval.ReOrderBy(result.Results, orderedIDs)
-		}
-	}
-
-	// Convert results to RAGSources, filtering by confidence
-	var ragSources []RAGSource
-	var totalChars int
-
-	for _, r := range result.Results {
-		// Filter by minimum confidence
-		if r.Score < h.config.MinConfidence {
-			continue
-		}
-
-		// Check if we're exceeding max context tokens (rough estimate: 4 chars per token)
-		excerptChars := len(r.Excerpt)
-		if totalChars+excerptChars > h.config.MaxContextTokens*4 {
-			break
-		}
-
-		ragSources = append(ragSources, RAGSource{
-			ContentID:   r.ContentID,
-			SourceType:  r.SourceType,
-			Title:       r.Title,
-			Excerpt:     r.Excerpt,
-			Score:       r.Score,
-			MailFrom:    r.MailFrom,
-			MailDate:    r.MailDate,
-			MailSubject: r.MailSubject,
-			Date:        r.Date,
-			OwnerOrigin: string(r.OwnerOrigin),
-			Tier:        string(r.Tier),
-			Validity:    string(r.Validity),
-		})
-		totalChars += excerptChars
-	}
-
-	// Convert intent to DTO if present
-	var intentDTO *IntentDTO
-	if result.Intent != nil {
-		intentSources := make([]string, len(result.Intent.Sources))
-		for i, s := range result.Intent.Sources {
-			intentSources[i] = string(s)
-		}
-		intentWeights := make(map[string]float64)
-		for k, v := range result.Intent.Weights {
-			intentWeights[string(k)] = v
-		}
-		intentDTO = &IntentDTO{
-			Query:          result.Intent.Query,
-			Sources:        intentSources,
-			Weights:        intentWeights,
-			Confidence:     result.Intent.Confidence,
-			TemporalMode:   string(result.Intent.TemporalMode),
-			TemporalWeight: result.Intent.TemporalWeight,
-		}
-	}
-
-	rewritten := ""
-	if searchQuery != userQuery {
-		rewritten = searchQuery
-	}
-	return &RAGContext{
-		Query:      userQuery,
-		Intent:     intentDTO,
-		Sources:    ragSources,
-		TotalChars: totalChars,
-		Debug:      result.Debug,
-		Rewritten:  rewritten,
-	}, nil
-}
-
 // buildMessagesWithContext injects RAG context into the message list.
 // sourceStratum returns the authority lens label for a RAG source (A-1 multi-lens),
 // or "" for the baseline (the user's own current capture). Validity (superseded /
@@ -1505,58 +1337,6 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 		systemMessage := llm.Message{
 			Role:    "system",
 			Content: contextString,
-		}
-		result = append(result, systemMessage)
-		result = append(result, messages...)
-	}
-
-	return result
-}
-
-// buildNoResultsMessage adds a system hint when RAG search found no results.
-func (h *RAGChatHandler) buildNoResultsMessage(messages []llm.Message, ragContext *RAGContext) []llm.Message {
-	// Build a hint based on what was searched
-	var searchedSources string
-	if ragContext.Intent != nil {
-		sources := make([]string, 0)
-		for _, w := range ragContext.Intent.Weights {
-			if w > 0.5 {
-				// High-weight sources
-			}
-		}
-		if len(sources) == 0 {
-			searchedSources = "the notes and documents"
-		} else {
-			searchedSources = strings.Join(sources, " and ")
-		}
-	} else {
-		searchedSources = "the notes and documents"
-	}
-
-	noResultsHint := fmt.Sprintf(
-		"## System information\n\nA search was run in %s to answer the user's question, but no relevant result was found. Tell the user that no matching information was found in their knowledge base.",
-		searchedSources,
-	)
-
-	// Copy messages to avoid mutating the original
-	result := make([]llm.Message, 0, len(messages)+1)
-
-	// Check if there's an existing system message
-	hasSystemMessage := len(messages) > 0 && messages[0].Role == "system"
-
-	if hasSystemMessage {
-		// Append hint to existing system message
-		augmentedSystem := llm.Message{
-			Role:    "system",
-			Content: messages[0].Content + "\n\n" + noResultsHint,
-		}
-		result = append(result, augmentedSystem)
-		result = append(result, messages[1:]...)
-	} else {
-		// Create new system message with hint
-		systemMessage := llm.Message{
-			Role:    "system",
-			Content: noResultsHint,
 		}
 		result = append(result, systemMessage)
 		result = append(result, messages...)

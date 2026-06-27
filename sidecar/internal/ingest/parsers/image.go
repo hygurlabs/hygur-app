@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -250,18 +249,4 @@ func (p *ImageParser) tryVision(ctx context.Context, data []byte) string {
 		out = strings.TrimSpace(result.Choices[0].Message.Reasoning)
 	}
 	return out
-}
-
-// ParseImage is a convenience function for path-based callers (e.g. tests or
-// direct invocations). It opens the file at path and delegates to ImageParser.
-func ParseImage(ctx context.Context, path string) (ingest.Metadata, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return ingest.Metadata{"source_type": "image"}, fmt.Errorf("image: open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	p := NewImageParser("")
-	_, meta, _ := p.Parse(ctx, f)
-	return meta, nil
 }

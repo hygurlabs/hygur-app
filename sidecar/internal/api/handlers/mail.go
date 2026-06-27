@@ -162,47 +162,6 @@ func (h *MailHandler) SetCredentialStore(store *auth.CredentialStore) {
 	h.credentialStore = store
 }
 
-// GetConnectedSources returns the names of all connected mail sources.
-func (h *MailHandler) GetConnectedSources() []string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	var sources []string
-	for name, connector := range h.connectors {
-		if connector.IsConnected() {
-			sources = append(sources, name)
-		}
-	}
-	return sources
-}
-
-// GetConnector returns a connector by name.
-func (h *MailHandler) GetConnector(name string) mail.MailConnector {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.connectors[name]
-}
-
-// GetIndexer returns the email indexer.
-func (h *MailHandler) GetIndexer() *mail.EmailIndexer {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.indexer
-}
-
-// GetLabelLister returns the LabelLister for a source if available.
-func (h *MailHandler) GetLabelLister(name string) (mail.LabelLister, bool) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	connector, ok := h.connectors[name]
-	if !ok {
-		return nil, false
-	}
-	lister, ok := connector.(mail.LabelLister)
-	return lister, ok
-}
-
 // SourcesResponse represents the response for GET /mail/sources.
 type SourcesResponse struct {
 	Sources []Source `json:"sources"`

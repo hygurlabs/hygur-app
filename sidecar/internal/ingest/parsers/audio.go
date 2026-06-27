@@ -213,25 +213,6 @@ func sniffAudioFormat(data []byte) string {
 	}
 }
 
-// ParseAudio is the path-based convenience API described in the sprint spec.
-// It opens the file at path and posts it to llmBaseURL/v1/audio/transcriptions.
-// Errors are fail-soft: an empty ParsedDocument is returned on failure.
-func ParseAudio(ctx context.Context, path string, llmBaseURL string) (ingest.Metadata, error) {
-	meta := ingest.Metadata{"source_type": "audio"}
-	if llmBaseURL == "" {
-		slog.WarnContext(ctx, "audio: no LLM base URL, skipping", "path", path)
-		return meta, nil
-	}
-
-	text, err := transcribeFile(ctx, strings.TrimSuffix(llmBaseURL, "/"), path, "", "")
-	if err != nil {
-		slog.WarnContext(ctx, "audio: transcription failed", "path", path, "err", err)
-		return meta, nil
-	}
-	meta["text"] = text
-	return meta, nil
-}
-
 // transcribeFile posts the audio file at path to the Whisper transcription
 // endpoint. It returns the transcribed text or a wrapped error.
 func transcribeFile(ctx context.Context, baseURL, path, whisperModel, apiKey string) (string, error) {

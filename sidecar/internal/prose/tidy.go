@@ -24,9 +24,6 @@ var enabled = true
 // toggle concurrently with Tidy (it isn't, in practice — set at boot).
 func SetEnabled(v bool) { enabled = v }
 
-// Enabled reports the current kill-switch state.
-func Enabled() bool { return enabled }
-
 const (
 	nbsp     = " " // no-break space — before ':'
 	thinNbsp = " " // narrow no-break space — before ';' '!' '?' and inside guillemets

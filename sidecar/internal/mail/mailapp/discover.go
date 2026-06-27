@@ -42,23 +42,6 @@ func discoverAccountsWith(ctx context.Context, r runner) ([]Account, error) {
 	return out, nil
 }
 
-// DiscoverMailboxes returns the mailbox names exposed by a single Mail.app
-// account. Note that some account types (e.g. Exchange) may return an empty
-// list — for those, callers should fall back to Mail.app's local unified
-// mailboxes (Mail.mailboxes()) which the connector handles transparently.
-func DiscoverMailboxes(ctx context.Context, accountID string) ([]Mailbox, error) {
-	return discoverMailboxesWith(ctx, newOsascriptRunner(), accountID)
-}
-
-func discoverMailboxesWith(ctx context.Context, r runner, accountID string) ([]Mailbox, error) {
-	var out []Mailbox
-	args := map[string]any{"accountId": accountID}
-	if err := runJSON(ctx, r, scriptDiscoverMailboxes, args, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // Mailbox describes a Mail.app folder under a given account.
 type Mailbox struct {
 	Name         string `json:"name"`

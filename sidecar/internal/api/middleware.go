@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/hygur/sidecar/internal/auth"
-	"github.com/rs/zerolog"
 )
 
 // loggerMiddleware creates a middleware that logs each request using zerolog.
@@ -176,14 +175,4 @@ func (s *Server) recovererWithLogger(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// requestLogger returns a zerolog logger enriched with request context.
-func requestLogger(logger zerolog.Logger, r *http.Request) zerolog.Logger {
-	requestID := middleware.GetReqID(r.Context())
-	return logger.With().
-		Str("request_id", requestID).
-		Str("method", r.Method).
-		Str("path", r.URL.Path).
-		Logger()
 }
