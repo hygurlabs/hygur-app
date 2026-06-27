@@ -730,15 +730,26 @@ func (mi *MailboxIndexer) processThreadsConcurrently(ctx context.Context, thread
 			// Index the thread
 			result, err := mi.IndexThread(threadCtx, &t, messages, config.AccountID, config.Provider)
 			if err != nil {
+				retriable := errors.Is(err, ErrEmbeddingFailed)
 				mu.Lock()
 				stats.Errors++
-				if errors.Is(err, ErrEmbeddingFailed) {
+				if retriable {
 					stats.EmbeddingErrors++
 				}
 				stats.ErrorMessages = append(stats.ErrorMessages,
 					fmt.Sprintf("thread %s: failed to index: %v", t.ID, err))
 				stats.ProcessedThreads++
 				mu.Unlock()
+				// R1: a transient embedding failure must not become a SILENT
+				// permanent gap in the KB. Park the thread in the retry queue,
+				// drained before the next incremental sync. Re-indexing dedups by
+				// content hash, so recovery yields no duplicate item.
+				if retriable && mi.store != nil && config.AccountID != "" {
+					next := time.Now().Add(backoffFor(0))
+					if qerr := mi.store.EnqueueIndexRetry(threadCtx, config.Provider, config.AccountID, t.ID, "embedding_failed", err.Error(), next); qerr != nil {
+						mi.logger.Warn().Err(qerr).Str("thread_id", t.ID).Msg("failed to enqueue index retry")
+					}
+				}
 				return
 			}
 
@@ -812,4 +823,123 @@ func etaSeconds(start time.Time, processed, total int) float64 {
 		return 0
 	}
 	return float64(total-processed) / rate
+}
+
+// retryBackoff is the per-attempt delay before re-trying a parked index. It
+// climbs so a persistently-failing item backs off instead of spinning, capped at
+// 24h so a recovered embedder still heals the backlog within a day.
+var retryBackoff = []time.Duration{
+	1 * time.Minute,
+	5 * time.Minute,
+	30 * time.Minute,
+	2 * time.Hour,
+	6 * time.Hour,
+	24 * time.Hour,
+}
+
+// maxRetryAttempts bounds re-tries. Past it the gap is logged at ERROR (no longer
+// silent — the whole point of R1) and the row dropped; a full re-sync remains the
+// ultimate recovery.
+const maxRetryAttempts = 8
+
+// backoffFor returns the delay for the next attempt given how many have already
+// been made (clamped to the last bucket).
+func backoffFor(attempts int) time.Duration {
+	if attempts < 0 {
+		attempts = 0
+	}
+	if attempts >= len(retryBackoff) {
+		return retryBackoff[len(retryBackoff)-1]
+	}
+	return retryBackoff[attempts]
+}
+
+// DrainRetryQueue re-indexes threads parked in the index_retry queue for this
+// (connectorID, accountID), to be called BEFORE the incremental window — so a
+// thread that failed to embed during an earlier sync is recovered without a full
+// re-sync (RELIABILITY_BACKLOG R1). Re-indexing flows through IndexThread's
+// content-hash dedup, so a recovered thread yields exactly one knowledge item,
+// never a duplicate. Skips entirely when the embedder is unreachable (no point
+// burning the attempt budget during a global outage). Returns
+// (indexed, requeued, dropped).
+func (mi *MailboxIndexer) DrainRetryQueue(ctx context.Context, connectorID, accountID string, limit int) (indexed, requeued, dropped int) {
+	if mi.store == nil || accountID == "" {
+		return 0, 0, 0
+	}
+	// Don't drain into a known-down embedder: it would only re-fail every queued
+	// item and exhaust their attempt budget. The main sync's pre-flight makes the
+	// same check; this one protects the dead-letter cap.
+	if mi.embeddingService != nil {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		ok, perr := mi.embeddingService.GetClient().PingEmbedding(pingCtx)
+		cancel()
+		if !ok || perr != nil {
+			return 0, 0, 0
+		}
+	}
+
+	now := time.Now()
+	due, err := mi.store.DueIndexRetries(ctx, connectorID, accountID, now, limit)
+	if err != nil {
+		mi.logger.Warn().Err(err).Str("account", accountID).Msg("index retry: failed to read queue")
+		return 0, 0, 0
+	}
+
+	for _, r := range due {
+		next := now.Add(backoffFor(r.Attempts + 1))
+
+		th, err := mi.connector.GetThread(ctx, r.SourceRef)
+		if err != nil {
+			if errors.Is(err, ErrThreadNotFound) {
+				// Vanished from the server since it failed — nothing to recover.
+				_ = mi.store.DeleteIndexRetry(ctx, connectorID, accountID, r.SourceRef)
+				dropped++
+				continue
+			}
+			_ = mi.store.BumpIndexRetry(ctx, connectorID, accountID, r.SourceRef, next, err.Error())
+			requeued++
+			continue
+		}
+
+		messages, err := mi.connector.GetMessagesByThread(ctx, th)
+		if err != nil {
+			if errors.Is(err, ErrThreadNotFound) {
+				_ = mi.store.DeleteIndexRetry(ctx, connectorID, accountID, r.SourceRef)
+				dropped++
+				continue
+			}
+			_ = mi.store.BumpIndexRetry(ctx, connectorID, accountID, r.SourceRef, next, err.Error())
+			requeued++
+			continue
+		}
+
+		_, ierr := mi.IndexThread(ctx, th, messages, accountID, connectorID)
+		switch {
+		case ierr == nil:
+			_ = mi.store.DeleteIndexRetry(ctx, connectorID, accountID, r.SourceRef)
+			indexed++
+		case !errors.Is(ierr, ErrEmbeddingFailed):
+			// Permanent (parse/normalize) — not retriable; drop + log so it's
+			// visible rather than spinning forever.
+			mi.logger.Warn().Err(ierr).Str("thread_id", r.SourceRef).Msg("index retry: permanent failure, dropping")
+			_ = mi.store.DeleteIndexRetry(ctx, connectorID, accountID, r.SourceRef)
+			dropped++
+		case r.Attempts+1 >= maxRetryAttempts:
+			// Give up — but LOUDLY: a KB gap is never left silent.
+			mi.logger.Error().Err(ierr).Str("thread_id", r.SourceRef).Int("attempts", r.Attempts+1).
+				Msg("index retry exhausted; thread left unindexed (run a full re-sync to recover)")
+			_ = mi.store.DeleteIndexRetry(ctx, connectorID, accountID, r.SourceRef)
+			dropped++
+		default:
+			_ = mi.store.BumpIndexRetry(ctx, connectorID, accountID, r.SourceRef, next, ierr.Error())
+			requeued++
+		}
+	}
+
+	if indexed > 0 || requeued > 0 || dropped > 0 {
+		mi.logger.Info().Str("account", accountID).
+			Int("indexed", indexed).Int("requeued", requeued).Int("dropped", dropped).
+			Msg("index retry queue drained")
+	}
+	return indexed, requeued, dropped
 }

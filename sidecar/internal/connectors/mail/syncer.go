@@ -692,6 +692,10 @@ func (c *MailConnector) syncAllProvider(ctx context.Context, provider string, op
 	}, nil
 }
 
+// indexRetryDrainCap bounds how many parked retries one sync replays, so a large
+// backlog heals over several cycles instead of stalling a single sync.
+const indexRetryDrainCap = 200
+
 // applyIncrementalWindow narrows cfg to mail newer than the account's last
 // indexed message, so routine (cron) syncs stop re-fetching the whole mailbox
 // every run when nothing changed. Safety:
@@ -865,6 +869,10 @@ func (c *MailConnector) syncLegacy(ctx context.Context, opts plugin.SyncOptions)
 		}
 
 		mbIndexer := mailpkg.NewMailboxIndexer(indexer, provider.conn)
+
+		// R1: replay threads parked by an earlier transient failure before the
+		// incremental window (legacy path keys the account by provider name).
+		mbIndexer.DrainRetryQueue(ctx, currentSource, currentSource, indexRetryDrainCap)
 
 		for _, mailbox := range providerMailboxes {
 			c.logger.Info().Str("mailbox", mailbox).Str("provider", currentSource).Msg("syncing mailbox")
@@ -1049,6 +1057,12 @@ func (c *MailConnector) syncAccountInner(ctx context.Context, accountID string, 
 	}
 
 	mbIndexer := mailpkg.NewMailboxIndexer(indexer, sess.Conn)
+
+	// R1: replay threads parked by an earlier transient indexing failure BEFORE
+	// the incremental window, so a recovered embedder heals the backlog without a
+	// full re-sync. Once per account.
+	mbIndexer.DrainRetryQueue(ctx, sess.Provider, sess.AccountID, indexRetryDrainCap)
+
 	start := time.Now()
 	var totalProcessed, totalSkipped, totalFailed, totalEmbeddingFailed int
 	var lastErr error

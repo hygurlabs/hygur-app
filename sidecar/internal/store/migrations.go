@@ -477,6 +477,31 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 `,
 	},
+	// Migration 26 — index_retry: a durable queue of content units (mail threads)
+	// that failed to index for a TRANSIENT reason (embedder down / timeout / ubatch
+	// overflow). Drained before each incremental sync so the failure is replayed
+	// and never becomes a silent permanent gap in the KB (RELIABILITY_BACKLOG R1).
+	// The PK is the unit's identity, so re-failing UPDATES the row instead of
+	// duplicating it; re-indexing dedups by content hash, so recovery yields
+	// exactly one knowledge item.
+	{
+		Version: 26,
+		Name:    "index_retry",
+		SQL: `
+CREATE TABLE IF NOT EXISTS index_retry (
+    connector_id    TEXT NOT NULL,
+    account_id      TEXT NOT NULL,
+    source_ref      TEXT NOT NULL,
+    reason          TEXT NOT NULL DEFAULT '',
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TEXT NOT NULL DEFAULT '',
+    next_attempt_at TEXT NOT NULL DEFAULT '',
+    last_error      TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (connector_id, account_id, source_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_index_retry_due ON index_retry(connector_id, account_id, next_attempt_at);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
