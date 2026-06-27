@@ -98,6 +98,11 @@ func (a *AdminConsole) handleCost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "per-tenant cost failed")
 		return
 	}
+	fleet, err := a.store.FleetStats(now)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "fleet stats failed")
+		return
+	}
 	captured, _ := a.store.LatestCapture()
 	budget := EvaluateFleetBudget(summary.Today, a.dailyTokenBudget)
 	switch budget.Status {
@@ -111,6 +116,7 @@ func (a *AdminConsole) handleCost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary":      summary,
 		"tenants":      tenants,
+		"fleet":        fleet,
 		"budget":       budget,
 		"captured_at":  captured,
 		"generated_at": now.UTC().Format(time.RFC3339),

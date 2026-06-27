@@ -11,6 +11,10 @@ function ago(iso: string): string {
   return `${Math.floor(s / 3600)}h ago`;
 }
 
+// Flat launch price per tenant (29.90 €/mo for the first 2,000, then 35 €). Used
+// for a Stripe-free MRR estimate = paying tenants × this. Bump on a price change.
+const MONTHLY_PRICE_EUR = 29.9;
+
 export function Dashboard({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [data, setData] = useState<CostResponse | null>(null);
   const [errors, setErrors] = useState<ClientError[]>([]);
@@ -79,19 +83,64 @@ export function Dashboard({ token, onSignOut }: { token: string; onSignOut: () =
           <MetricTile label="Spend · MTD">{data ? money(data.summary.month.cost) : <Skeleton w={100} h={30} />}</MetricTile>
           <MetricTile label="Run-rate · /day">{data ? money(data.summary.run_rate_per_day) : <Skeleton w={80} h={30} />}</MetricTile>
           <MetricTile
+            label="MRR · /month"
+            sub={data ? `${data.fleet.paying_tenants} × €${MONTHLY_PRICE_EUR.toFixed(2)}` : undefined}
+          >
+            {data ? money(data.fleet.paying_tenants * MONTHLY_PRICE_EUR) : <Skeleton w={90} h={30} />}
+          </MetricTile>
+          <MetricTile
             label="Forecast · EOM"
             alert
             sub={data ? `day ${data.summary.days_elapsed} / ${data.summary.days_in_month}` : undefined}
           >
             {data ? money(data.summary.forecast_eom_cost) : <Skeleton w={100} h={30} />}
           </MetricTile>
-          <MetricTile label="Tenants" sub="active">
-            {data ? <CountUp value={data.tenants.length} decimals={0} /> : <Skeleton w={44} h={30} />}
+          <MetricTile label="Tenants" sub="live · running">
+            {data ? <CountUp value={data.fleet.live} decimals={0} /> : <Skeleton w={44} h={30} />}
+          </MetricTile>
+        </div>
+
+        {data && data.fleet.unpaid_retained > 0 ? (
+          <div className={"budget-banner " + (data.fleet.oldest_unpaid_days >= 30 ? "over" : "warn")}>
+            <span className="tag">Retention</span>
+            {data.fleet.unpaid_retained} account(s) stopped paying but still hold data
+            {data.fleet.oldest_unpaid_days > 0 ? ` — oldest ${data.fleet.oldest_unpaid_days}d` : ""}. They
+            reap automatically once Stripe cancels the subscription.
+          </div>
+        ) : null}
+
+        <div className="section-head">
+          <span className="idx">01</span>
+          <span className="label">Fleet · lifecycle</span>
+        </div>
+
+        <div className="kpis">
+          <MetricTile label="Live" sub="pending + ready">
+            {data ? <CountUp value={data.fleet.live} decimals={0} /> : <Skeleton w={44} h={30} />}
+          </MetricTile>
+          <MetricTile label="Suspended" sub="unpaid · data kept">
+            {data ? <CountUp value={data.fleet.suspended} decimals={0} /> : <Skeleton w={44} h={30} />}
+          </MetricTile>
+          <MetricTile
+            label="Past due"
+            alert
+            sub={data && data.fleet.oldest_unpaid_days > 0 ? `oldest ${data.fleet.oldest_unpaid_days}d` : "not paying"}
+          >
+            {data ? <CountUp value={data.fleet.past_due} decimals={0} /> : <Skeleton w={44} h={30} />}
+          </MetricTile>
+          <MetricTile label="Reaped" sub="30-day purge">
+            {data ? <CountUp value={data.fleet.reaped} decimals={0} /> : <Skeleton w={44} h={30} />}
+          </MetricTile>
+          <MetricTile label="Canceled" sub="all-time">
+            {data ? <CountUp value={data.fleet.canceled} decimals={0} /> : <Skeleton w={44} h={30} />}
+          </MetricTile>
+          <MetricTile label="Churn" sub="canceled / paid+canceled">
+            {data ? <>{(data.fleet.churn_ratio * 100).toFixed(1)}%</> : <Skeleton w={44} h={30} />}
           </MetricTile>
         </div>
 
         <div className="section-head">
-          <span className="idx">01</span>
+          <span className="idx">02</span>
           <span className="label">By tenant · month-to-date</span>
         </div>
 
@@ -127,7 +176,7 @@ export function Dashboard({ token, onSignOut }: { token: string; onSignOut: () =
         )}
 
         <div className="section-head">
-          <span className="idx">02</span>
+          <span className="idx">03</span>
           <span className="label">Recent client errors</span>
         </div>
         {errors.length === 0 ? (

@@ -31,9 +31,27 @@ export interface FleetBudget {
   status: "ok" | "warn" | "over";
 }
 
+// Fleet lifecycle stats: provision-state + account-status counts, plus the
+// retention signal (unpaid-but-retained accounts and the age of the oldest).
+export interface FleetStats {
+  live: number; // pending + ready (running)
+  suspended: number; // unpaid, pod scaled-to-0, data retained
+  reaped: number; // gone (crypto-shredded, in the 30-day purge window)
+  active: number;
+  trialing: number;
+  past_due: number;
+  canceled: number;
+  total: number;
+  unpaid_retained: number; // accounts that stopped paying but still hold data
+  oldest_unpaid_days: number; // age of the longest-unpaid retained account
+  churn_ratio: number; // canceled / (active + canceled), 0..1
+  paying_tenants: number; // active, Stripe-backed accounts (excludes operator instances)
+}
+
 export interface CostResponse {
   summary: CostSummary;
   tenants: TenantCost[];
+  fleet: FleetStats;
   budget: FleetBudget;
   captured_at: string;
   generated_at: string;
