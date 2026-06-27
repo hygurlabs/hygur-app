@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,9 +15,11 @@ import (
 
 // SummarizeThreadTool generates structured summaries of email threads using LLM.
 type SummarizeThreadTool struct {
-	llm        *llm.Client
-	store      *store.DB
-	normalizer *mail.ThreadNormalizer
+	llm          *llm.Client
+	store        *store.DB
+	normalizer   *mail.ThreadNormalizer
+	connectors   map[string]mail.MailConnector // for the read-only LLM tool adapter
+	defaultModel string                        // chat model for the tool adapter (cfg.LMStudio.ModelDefault)
 }
 
 // NewSummarizeThreadTool creates a new SummarizeThreadTool with the given dependencies.
@@ -26,6 +29,19 @@ func NewSummarizeThreadTool(llmClient *llm.Client, db *store.DB) *SummarizeThrea
 		store:      db,
 		normalizer: mail.NewThreadNormalizer(),
 	}
+}
+
+// SetConnectors wires the mailboxes the LLM tool adapter uses to resolve a
+// thread id before summarizing. Optional — Run() works with pre-fetched threads.
+func (t *SummarizeThreadTool) SetConnectors(c map[string]mail.MailConnector) {
+	t.connectors = c
+}
+
+// SetDefaultModel sets the chat model the read-only tool adapter uses — the
+// summarize endpoint requires an explicit model, so the tool mirrors the main
+// chat path's default (cfg.LMStudio.ModelDefault).
+func (t *SummarizeThreadTool) SetDefaultModel(model string) {
+	t.defaultModel = model
 }
 
 // summaryResponse represents the expected JSON structure from the LLM response.
@@ -39,40 +55,12 @@ type summaryResponse struct {
 // It normalizes the thread content, sends it to the LLM for analysis,
 // parses the structured response, and saves the summary to the database.
 func (t *SummarizeThreadTool) Run(ctx context.Context, thread *mail.Thread, messages []mail.Message, model string) (*store.Summary, error) {
-	// Step 1: Normalize the thread content
-	normalizedText, err := t.normalizer.Normalize(thread, messages)
+	parsed, err := t.summarize(ctx, thread, messages, model)
 	if err != nil {
-		return nil, fmt.Errorf("failed to normalize thread: %w", err)
+		return nil, err
 	}
 
-	// Step 2: Build the prompt
-	prompt := buildSummaryPrompt(thread, normalizedText)
-
-	// Step 3: Call the LLM
-	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
-		Model: model,
-		Messages: []llm.Message{
-			{Role: "system", Content: summarySystemPrompt},
-			{Role: "user", Content: prompt},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to call LLM: %w", err)
-	}
-
-	// Extract the response content
-	if len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
-		return nil, fmt.Errorf("empty response from LLM")
-	}
-	responseContent := resp.Choices[0].Message.Content
-
-	// Step 4: Parse the JSON response
-	parsed, err := parseSummaryResponse(responseContent)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
-	}
-
-	// Step 5: Create the Summary
+	// Create the Summary
 	summary := &store.Summary{
 		SummaryID:     uuid.New().String(),
 		SourceRef:     "email:" + thread.ID,
@@ -83,12 +71,128 @@ func (t *SummarizeThreadTool) Run(ctx context.Context, thread *mail.Thread, mess
 		CreatedAt:     time.Now(),
 	}
 
-	// Step 6: Save to database
+	// Save to database (Run persists; the read-only tool path below does not).
 	if err := t.store.InsertSummary(ctx, summary); err != nil {
 		return nil, fmt.Errorf("failed to save summary: %w", err)
 	}
 
 	return summary, nil
+}
+
+// summarize runs the read-only half: normalize → LLM → parse, with NO
+// persistence. Shared by Run (which then saves) and the LLM tool adapter Execute
+// (which returns the structure without writing to the DB).
+func (t *SummarizeThreadTool) summarize(ctx context.Context, thread *mail.Thread, messages []mail.Message, model string) (*summaryResponse, error) {
+	normalizedText, err := t.normalizer.Normalize(thread, messages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize thread: %w", err)
+	}
+	prompt := buildSummaryPrompt(thread, normalizedText)
+	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
+		Model: model,
+		Messages: []llm.Message{
+			{Role: "system", Content: summarySystemPrompt},
+			{Role: "user", Content: prompt},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to call LLM: %w", err)
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message == nil {
+		return nil, fmt.Errorf("empty response from LLM")
+	}
+	parsed, err := parseSummaryResponse(resp.Choices[0].Message.Content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	}
+	return parsed, nil
+}
+
+// --- LLM tool adapter (read-only) -------------------------------------------
+// Exposes summarize_thread to the chat path so the assistant can distil a full
+// thread into decisions / actions / open questions on demand. Read-only: unlike
+// Run(), it does NOT persist the summary — a chat tool-call should not write to
+// the user's DB as a side effect.
+
+// Name implements tools.Tool.
+func (t *SummarizeThreadTool) Name() string { return "summarize_thread" }
+
+// Description implements tools.Tool.
+func (t *SummarizeThreadTool) Description() string {
+	return "Summarize one of the user's email threads into its decisions, action items and open questions."
+}
+
+// ParameterSchema implements tools.Tool.
+func (t *SummarizeThreadTool) ParameterSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"thread_id": map[string]any{
+				"type":        "string",
+				"description": "The email thread id (the part after \"email:\" in a source citation).",
+			},
+			"source": map[string]any{
+				"type":        "string",
+				"description": "Optional mailbox connector id (e.g. gmail, proton). Omit to search all connected mailboxes.",
+			},
+		},
+		"required": []string{"thread_id"},
+	}
+}
+
+// Execute implements tools.Tool: resolve the thread (in the named source, or any
+// connected mailbox), summarize it, and return the structure WITHOUT saving.
+func (t *SummarizeThreadTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+	var req struct {
+		ThreadID string `json:"thread_id"`
+		Source   string `json:"source"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.ThreadID == "" {
+		return nil, fmt.Errorf("thread_id is required")
+	}
+	if len(t.connectors) == 0 {
+		return nil, fmt.Errorf("no mail connectors available")
+	}
+
+	var sources []string
+	if req.Source != "" {
+		sources = []string{req.Source}
+	} else {
+		for name := range t.connectors {
+			sources = append(sources, name)
+		}
+		sort.Strings(sources) // deterministic across runs
+	}
+
+	var lastErr error
+	for _, src := range sources {
+		conn, ok := t.connectors[src]
+		if !ok || !conn.IsConnected() {
+			continue
+		}
+		thread, err := conn.GetThread(ctx, req.ThreadID)
+		if err != nil {
+			lastErr = err // thread likely not in this mailbox — try the next
+			continue
+		}
+		messages, err := conn.GetMessagesByThread(ctx, thread)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		parsed, err := t.summarize(ctx, thread, messages, t.defaultModel) // read-only: not persisted
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(parsed)
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("thread not found in any connected mailbox: %w", lastErr)
+	}
+	return nil, fmt.Errorf("no connected mailbox to resolve thread %q", req.ThreadID)
 }
 
 // parseSummaryResponse parses the JSON response from the LLM.

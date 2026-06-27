@@ -427,12 +427,16 @@ func main() {
 		logger.Info().Msg("credential storage initialized")
 	}
 
-	// Create list attachments tool with all connectors
-	listAttachmentsTool := tools.NewListAttachmentsTool(map[string]mail.MailConnector{
+	// Create list attachments tool with all connectors. The same map backs the
+	// read-only summarize_thread tool adapter so both can resolve a thread id.
+	mailConnectors := map[string]mail.MailConnector{
 		"proton": protonConnector,
 		"gmail":  gmailConnector,
-	})
+	}
+	listAttachmentsTool := tools.NewListAttachmentsTool(mailConnectors)
 	mailHandler.SetListAttachmentsTool(listAttachmentsTool)
+	summarizeTool.SetConnectors(mailConnectors)
+	summarizeTool.SetDefaultModel(cfg.LMStudio.ModelDefault)
 
 	// Create notes tool early — needed by both NotesHandler and plugin manager.
 	createNoteTool := tools.NewCreateNoteToolWithEmbeddings(db, embeddingService)
@@ -702,6 +706,8 @@ func main() {
 	)
 	toolRegistry.MustRegister(searchKBTool)
 	toolRegistry.MustRegister(createCalendarEventTool)
+	toolRegistry.MustRegister(listAttachmentsTool)
+	toolRegistry.MustRegister(summarizeTool)
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is
