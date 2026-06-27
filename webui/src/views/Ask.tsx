@@ -24,6 +24,7 @@ import {
   ChevronRight,
   FileAudio,
   Upload,
+  Search,
 } from "lucide-react";
 import { streamChat, api } from "../lib/api";
 import { native } from "../lib/native";
@@ -1493,7 +1494,21 @@ function AssistantTurn({
       )}
 
       {turn.content && !streaming && (
-        <div className="mt-1 print:hidden">
+        <div className="mt-1 flex items-center gap-3 print:hidden">
+          {/* Glanceable trust marker: a loupe means this answer was grounded in
+              the user's own data. Its absence means general-knowledge — no claim
+              of being sourced. */}
+          {sourceRows.length > 0 && (
+            <span
+              title={`Grounded in ${sourceRows.length} of your own ${
+                sourceRows.length === 1 ? "source" : "sources"
+              } — not general knowledge`}
+              className="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent"
+            >
+              <Search size={12.5} strokeWidth={2.2} />
+              From your data
+            </span>
+          )}
           <CopyButton text={turn.content} title="Copy reply" />
         </div>
       )}
