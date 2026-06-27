@@ -134,18 +134,27 @@ export function Decisions() {
         }}
         className="mb-6 rounded-xl border border-border bg-surface p-3.5"
       >
+        {/* Decision — the primary field. Labelled and chromed so it reads as
+            the input to fill, not the quieter rationale below it. */}
+        <label
+          htmlFor="decision-statement"
+          className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.08em] text-faint"
+        >
+          Decision
+        </label>
         <input
+          id="decision-statement"
           value={statement}
           onChange={(e) => setStatement(e.target.value)}
-          placeholder="Log a decision you've made…"
-          className="w-full bg-transparent text-[15px] outline-none placeholder:text-faint"
+          placeholder="What did you decide?"
+          className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-[15px] font-medium text-text outline-none transition-colors placeholder:font-normal placeholder:text-faint focus:border-accent"
         />
         <textarea
           value={rationale}
           onChange={(e) => setRationale(e.target.value)}
           rows={2}
           placeholder="Why (optional) — the reasoning you'll want when you revisit this."
-          className="mt-2 w-full resize-y rounded-lg border border-border bg-bg px-2.5 py-1.5 text-[13px] text-text outline-none placeholder:text-faint focus:border-accent"
+          className="mt-2 w-full resize-y rounded-lg border border-border/60 bg-transparent px-2.5 py-1.5 text-[13px] text-muted outline-none placeholder:text-faint focus:border-accent"
         />
         <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
           <select

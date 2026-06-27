@@ -14,6 +14,16 @@ import {
 
 const TYPES = ["fact", "preference", "action"] as const;
 
+// Display labels — the value sent to the backend stays the wire contract
+// ("fact" | "preference" | "action", validated server-side); only the wording
+// shown to the user changes. "action" was the confusing one.
+const TYPE_LABELS: Record<string, string> = {
+  fact: "Fact",
+  preference: "Preference",
+  action: "Recurring action",
+};
+const typeLabel = (t: string) => TYPE_LABELS[t] ?? t;
+
 export function MemoryView() {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: ["memories"] });
@@ -60,7 +70,7 @@ export function MemoryView() {
         >
           {TYPES.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {typeLabel(t)}
             </option>
           ))}
         </select>
@@ -99,7 +109,7 @@ export function MemoryView() {
               >
                 <div className="min-w-0 flex-1">
                   <div className="mb-1">
-                    <Badge>{m.type}</Badge>
+                    <Badge>{typeLabel(m.type)}</Badge>
                   </div>
                   <p className="text-[14px] text-text">{m.content}</p>
                 </div>
@@ -135,7 +145,7 @@ export function MemoryView() {
             <li key={m.memory_id} className="group flex items-start gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <div className="mb-1 flex items-center gap-2">
-                  <Badge>{m.type}</Badge>
+                  <Badge>{typeLabel(m.type)}</Badge>
                   {m.source === "extracted" && (
                     <span className="text-[11px] text-faint">learned</span>
                   )}
