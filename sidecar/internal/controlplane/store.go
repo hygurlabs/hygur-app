@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS stripe_subscriptions (
   account_number      TEXT NOT NULL REFERENCES accounts(account_number),
   customer_id         TEXT NOT NULL DEFAULT '',
   checkout_session_id TEXT NOT NULL DEFAULT '',
-  provision_state     TEXT NOT NULL DEFAULT 'pending', -- pending|ready|suspend|suspended|resume|deprovision|gone
+  provision_state     TEXT NOT NULL DEFAULT 'pending', -- pending|ready|suspend|suspended|resume|deprovision|dormant|superseded|gone|purged
   provisioned_at      TEXT,
   created_at          TEXT NOT NULL
 );
@@ -163,6 +163,14 @@ CREATE TABLE IF NOT EXISTS webauthn_sessions (
 	if _, err := s.db.Exec(`ALTER TABLE stripe_subscriptions ADD COLUMN reaped_at TEXT`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("controlplane: migrate reaped_at: %w", err)
+	}
+	// dormant_at: when a canceled tenant entered the 30-day reactivation grace
+	// (scaled to 0, data + DEK kept). The clock for the erasure reaper. A late
+	// re-subscription within the window resumes the tenant; expiry crypto-shreds
+	// it (see docs/TENANT_LIFECYCLE.md). Idempotent add for pre-existing DBs.
+	if _, err := s.db.Exec(`ALTER TABLE stripe_subscriptions ADD COLUMN dormant_at TEXT`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("controlplane: migrate dormant_at: %w", err)
 	}
 	// Admin cost dashboard (#5): per-tenant per-day usage snapshots fed by the
 	// on-box poller (`hygur usage dump` → `hygur-console usage ingest`), plus a

@@ -133,12 +133,16 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "customer.subscription.deleted":
-		// Suspend auth immediately + queue the pod for reaping by the poller.
+		// Access ends now (period end, or dunning exhausted): suspend auth, then
+		// enter the 30-day reactivation grace instead of reaping. The pod is scaled
+		// to 0 but the namespace, DEK, PV and vhost are KEPT, so a late renewal
+		// restores the data intact. Crypto-shred happens only when the grace
+		// elapses (see docs/TENANT_LIFECYCLE.md).
 		if err := b.store.SetSubscriptionBySub(obj.ID, "canceled", &now); err != nil {
 			writeErr(w, http.StatusInternalServerError, "suspend")
 			return
 		}
-		_ = b.store.SetProvisionState(obj.ID, "deprovision")
+		_ = b.store.EnterDormant(obj.ID, now)
 
 	case "invoice.payment_failed":
 		if err := b.store.SetSubscriptionBySub(obj.Subscription, "past_due", &now); err != nil {
@@ -318,6 +322,7 @@ func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sess
 		return Account{}, false, fmt.Errorf("controlplane: lookup subscription: %w", err)
 	}
 
+	created := true
 	acc, cerr := s.CreateAccount(now, email, "active", validUntil)
 	if cerr != nil {
 		existing, gerr := s.getAccountByEmail(email)
@@ -325,15 +330,55 @@ func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sess
 			return Account{}, false, cerr
 		}
 		acc = existing
+		created = false
 		_ = s.SetSubscription(acc.AccountNumber, "active", validUntil)
 	}
-	if _, ierr := s.db.Exec(
-		`INSERT INTO stripe_subscriptions(stripe_sub_id,account_number,customer_id,checkout_session_id,provision_state,created_at) VALUES(?,?,?,?, 'pending', ?)`,
-		subID, acc.AccountNumber, customerID, sessionID, now.UTC().Format(rfc),
-	); ierr != nil {
-		return Account{}, false, fmt.Errorf("controlplane: map subscription: %w", ierr)
+	if err := s.insertSubscriptionRow(now, subID, acc.AccountNumber, customerID, sessionID); err != nil {
+		return Account{}, false, err
 	}
-	return acc, true, nil
+	return acc, created, nil
+}
+
+// insertSubscriptionRow records the new subscription and decides its initial
+// provisioning state ATOMICALLY: if the account still has a tenant in the
+// reactivation grace ('dormant'), the new subscription ADOPTS it — inserted as
+// 'resume' (poller scales the existing pod back to 1, data + DEK intact) and the
+// dormant row retired to 'superseded' — instead of 'pending', which would
+// re-provision a fresh pod and overwrite the live DEK. All in one transaction so
+// no poller tick can ever observe the new row as 'pending' against a live tenant.
+func (s *Store) insertSubscriptionRow(now time.Time, subID, account, customerID, sessionID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("controlplane: map subscription: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var dormantSub string
+	derr := tx.QueryRow(
+		`SELECT stripe_sub_id FROM stripe_subscriptions WHERE account_number=? AND provision_state='dormant' ORDER BY dormant_at DESC LIMIT 1`,
+		account).Scan(&dormantSub)
+	if derr != nil && !errors.Is(derr, sql.ErrNoRows) {
+		return fmt.Errorf("controlplane: lookup dormant: %w", derr)
+	}
+
+	state := "pending"
+	if dormantSub != "" {
+		state = "resume"
+	}
+	if _, ierr := tx.Exec(
+		`INSERT INTO stripe_subscriptions(stripe_sub_id,account_number,customer_id,checkout_session_id,provision_state,created_at) VALUES(?,?,?,?,?,?)`,
+		subID, account, customerID, sessionID, state, now.UTC().Format(rfc),
+	); ierr != nil {
+		return fmt.Errorf("controlplane: map subscription: %w", ierr)
+	}
+	if dormantSub != "" {
+		if _, uerr := tx.Exec(
+			`UPDATE stripe_subscriptions SET provision_state='superseded', dormant_at=NULL WHERE stripe_sub_id=? AND provision_state='dormant'`,
+			dormantSub); uerr != nil {
+			return fmt.Errorf("controlplane: retire dormant: %w", uerr)
+		}
+	}
+	return tx.Commit()
 }
 
 // SetSubscriptionBySub updates the account's billing status from a Stripe
@@ -414,6 +459,38 @@ func (s *Store) ResumeIfSuspended(subID string) error {
 		`UPDATE stripe_subscriptions SET provision_state='resume' WHERE stripe_sub_id=? AND provision_state IN ('suspend','suspended')`,
 		subID)
 	return err
+}
+
+// EnterDormant moves a canceled subscription into the 30-day reactivation grace:
+// provision_state='dormant' + dormant_at stamped (the erasure clock). The poller
+// scales the pod to 0 but keeps the namespace, DEK, PV and vhost so a late
+// renewal can resume it with its data intact. Guarded so it never disturbs an
+// already-erased tenant ('gone'/'purged') or an adopted one ('superseded').
+func (s *Store) EnterDormant(subID string, now time.Time) error {
+	if subID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(
+		`UPDATE stripe_subscriptions SET provision_state='dormant', dormant_at=? WHERE stripe_sub_id=? AND provision_state NOT IN ('gone','purged','superseded')`,
+		now.UTC().Format(rfc), subID)
+	return err
+}
+
+// ListDormantExpired returns dormant tenants whose grace window has elapsed
+// (dormant_at older than `retention` before now) — the erasure work queue. At
+// this point the poller crypto-shreds the tenant (delete namespace → DEK gone)
+// and purges its PV + backups. The 30-day grace IS the retention, so erasure is
+// done in one step (no second post-reap window on this path).
+func (s *Store) ListDormantExpired(now time.Time, retention time.Duration) ([]ProvisionRow, error) {
+	cutoff := now.Add(-retention).UTC().Format(rfc)
+	rows, err := s.db.Query(`
+		SELECT ss.stripe_sub_id, ss.account_number, a.tenant_id, ss.checkout_session_id, ss.provision_state
+		FROM stripe_subscriptions ss JOIN accounts a ON a.account_number = ss.account_number
+		WHERE ss.provision_state='dormant' AND ss.dormant_at IS NOT NULL AND ss.dormant_at < ?`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	return scanProvisionRows(rows)
 }
 
 // ListProvisions returns subscriptions in the given provision_state (e.g.

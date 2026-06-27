@@ -171,9 +171,11 @@ func runServe(args []string) {
 // DB key). The internet-facing `serve` never provisions; the poller drives state.
 //
 //	hygur-console provisions pending        # \t-sep: <sub_id> <tenant_id> <account>
-//	hygur-console provisions deprovision    # tenants to reap (canceled)
+//	hygur-console provisions deprovision    # tenants to reap NOW (explicit/RGPD-on-demand)
 //	hygur-console provisions suspend        # tenants to scale-to-0 (payment past_due)
-//	hygur-console provisions resume         # tenants to scale-to-1 (payment recovered)
+//	hygur-console provisions resume         # tenants to scale-to-1 (payment recovered / re-subscribed dormant)
+//	hygur-console provisions dormant        # canceled tenants in reactivation grace → scale-to-0 (data + key kept)
+//	hygur-console provisions dormant-expired [--days 30]  # grace elapsed → crypto-shred + purge PV + backups
 //	hygur-console provisions purgeable [--days 30]  # reaped tenants past retention → reclaim PV
 //	hygur-console provisions count          # live tenants (pending+ready) for the cap
 //	hygur-console provisions failures       # \t-sep list of subs stuck in 'failed' provisioning
@@ -185,7 +187,7 @@ func runServe(args []string) {
 //	hygur-console provisions purged    <sub># PV/host dir reclaimed → mark purged
 func runProvisions(args []string) {
 	if len(args) == 0 {
-		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|purgeable|count|failures|ready|suspended|failed|requeue|gone|purged> [sub_id]"))
+		die(fmt.Errorf("usage: hygur-console provisions <pending|deprovision|suspend|resume|dormant|dormant-expired|purgeable|count|failures|ready|suspended|failed|requeue|gone|purged> [sub_id]"))
 	}
 	store := openStore()
 	defer store.Close()
@@ -195,7 +197,7 @@ func runProvisions(args []string) {
 		}
 	}
 	switch args[0] {
-	case "pending", "deprovision", "suspend", "resume":
+	case "pending", "deprovision", "suspend", "resume", "dormant":
 		rows, err := store.ListProvisions(args[0])
 		die(err)
 		printRows(rows)
@@ -208,6 +210,13 @@ func runProvisions(args []string) {
 		days := fs.Int("days", 30, "retention window in days before a reaped tenant's PV is reclaimed")
 		_ = fs.Parse(args[1:])
 		rows, err := store.ListPurgeable(time.Now(), time.Duration(*days)*24*time.Hour)
+		die(err)
+		printRows(rows)
+	case "dormant-expired":
+		fs := flag.NewFlagSet("provisions dormant-expired", flag.ExitOnError)
+		days := fs.Int("days", 30, "reactivation grace in days before a dormant tenant is crypto-shredded")
+		_ = fs.Parse(args[1:])
+		rows, err := store.ListDormantExpired(time.Now(), time.Duration(*days)*24*time.Hour)
 		die(err)
 		printRows(rows)
 	case "count":

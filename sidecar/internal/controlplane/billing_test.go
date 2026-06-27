@@ -79,7 +79,8 @@ func TestBilling_IgnoresUnpaid(t *testing.T) {
 }
 
 // Lifecycle: past_due / canceled suspend the account (IsActive false), invoice.paid
-// re-activates, and a deletion queues the pod for reaping (state 'deprovision').
+// re-activates, and a deletion enters the 30-day reactivation grace (state
+// 'dormant') — NOT an immediate reap — keeping the data + key for a late renewal.
 func TestBilling_LifecycleSuspends(t *testing.T) {
 	store := testStore(t)
 	now := time.Unix(1_700_000_000, 0).UTC()
@@ -110,10 +111,96 @@ func TestBilling_LifecycleSuspends(t *testing.T) {
 	checkActive(`{"type":"invoice.paid","data":{"object":{"subscription":"sub_1"}}}`, "invoice.paid", true)
 	checkActive(`{"type":"customer.subscription.deleted","data":{"object":{"id":"sub_1"}}}`, "deleted", false)
 
-	// Deletion queued the pod for reaping.
-	rep, _ := store.ListProvisions("deprovision")
-	if len(rep) != 1 {
-		t.Errorf("deprovision queue = %d, want 1", len(rep))
+	// Deletion entered the reactivation grace (dormant), not an immediate reap.
+	if rep, _ := store.ListProvisions("deprovision"); len(rep) != 0 {
+		t.Errorf("deprovision queue = %d, want 0 (cancel must not reap immediately)", len(rep))
+	}
+	dorm, _ := store.ListProvisions("dormant")
+	if len(dorm) != 1 {
+		t.Errorf("dormant queue = %d, want 1", len(dorm))
+	}
+}
+
+// Re-subscribing with the same email while the tenant is still in its reactivation
+// grace ADOPTS the dormant tenant: the new subscription is queued as 'resume'
+// (scale the existing pod back to 1, data + DEK intact), the dormant row is retired
+// to 'superseded', and crucially it is NOT queued as 'pending' — a fresh provision
+// would overwrite the live DEK and orphan the data. One account throughout.
+func TestBilling_ResubscribeAdoptsDormant(t *testing.T) {
+	store := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	b := NewBilling(store, whSecret)
+	b.now = func() time.Time { return now }
+
+	// First subscription, provisioned to a live pod.
+	if rec := postWebhook(t, b, paidEvent("sub_1", "a@b.com"), now); rec.Code != http.StatusOK {
+		t.Fatalf("paid sub_1: %d", rec.Code)
+	}
+	if err := store.SetProvisionState("sub_1", "ready"); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	// Cancel → dormant.
+	if rec := postWebhook(t, b, `{"type":"customer.subscription.deleted","data":{"object":{"id":"sub_1"}}}`, now); rec.Code != http.StatusOK {
+		t.Fatalf("delete sub_1: %d", rec.Code)
+	}
+	if dorm, _ := store.ListProvisions("dormant"); len(dorm) != 1 {
+		t.Fatalf("dormant after cancel = %d, want 1", len(dorm))
+	}
+
+	// Re-subscribe with the SAME email but a NEW subscription + session id.
+	resub := `{"type":"checkout.session.completed","data":{"object":{` +
+		`"id":"cs_test_2","mode":"subscription","payment_status":"paid",` +
+		`"customer":"cus_1","subscription":"sub_2","customer_details":{"email":"a@b.com"}}}}`
+	if rec := postWebhook(t, b, resub, now); rec.Code != http.StatusOK {
+		t.Fatalf("resubscribe sub_2: %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// sub_2 adopts the tenant: queued 'resume', never 'pending'.
+	if _, st, err := store.SubscriptionBySession("cs_test_2"); err != nil || st != "resume" {
+		t.Fatalf("sub_2 state = %q (err %v), want resume", st, err)
+	}
+	if pend, _ := store.ListProvisions("pending"); len(pend) != 0 {
+		t.Errorf("re-subscribe must NOT queue a fresh provision; pending = %d, want 0", len(pend))
+	}
+	// The old dormant row is retired; nothing left dormant.
+	if dorm, _ := store.ListProvisions("dormant"); len(dorm) != 0 {
+		t.Errorf("dormant after adoption = %d, want 0", len(dorm))
+	}
+	if sup, _ := store.ListProvisions("superseded"); len(sup) != 1 {
+		t.Errorf("superseded rows = %d, want 1 (the adopted dormant row)", len(sup))
+	}
+	// Still exactly one account, re-activated.
+	acc, err := store.getAccountByEmail("a@b.com")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if !acc.IsActive(now) {
+		t.Error("account should be active again after re-subscribe")
+	}
+}
+
+// A dormant tenant becomes erasable only once its reactivation grace has elapsed;
+// a just-cancelled tenant is never returned (mirrors TestStore_Purgeable).
+func TestStore_DormantExpired(t *testing.T) {
+	store := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	b := NewBilling(store, whSecret)
+	b.now = func() time.Time { return now }
+
+	if rec := postWebhook(t, b, paidEvent("sub_1", "a@b.com"), now); rec.Code != http.StatusOK {
+		t.Fatalf("paid: %d", rec.Code)
+	}
+	dormantAt := time.Unix(1_700_000_000, 0).UTC()
+	if err := store.EnterDormant("sub_1", dormantAt); err != nil {
+		t.Fatalf("EnterDormant: %v", err)
+	}
+	// Within the 30-day window → not yet erasable.
+	if rows, _ := store.ListDormantExpired(dormantAt, 30*24*time.Hour); len(rows) != 0 {
+		t.Errorf("just-dormant tenant erasable at 30d = %d, want 0", len(rows))
+	}
+	// Past the window → erasable exactly once.
+	if rows, _ := store.ListDormantExpired(dormantAt.Add(31*24*time.Hour), 30*24*time.Hour); len(rows) != 1 {
+		t.Errorf("dormant tenant past window = %d, want 1", len(rows))
 	}
 }
 
