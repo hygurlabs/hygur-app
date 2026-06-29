@@ -502,6 +502,29 @@ CREATE TABLE IF NOT EXISTS index_retry (
 CREATE INDEX IF NOT EXISTS idx_index_retry_due ON index_retry(connector_id, account_id, next_attempt_at);
 `,
 	},
+	// Migration 27 — item_signals: the deterministic memory-consolidation scores
+	// ("Quand Hygur rêve", DREAM_PLAN Phase 1 / docs/DREAM_PLAN_ADDENDUM.md). A
+	// sidecar table (kept off the hot knowledge_items row) holding the nightly
+	// salience + forgetting-strength + hot/cold tier decision. SHADOW today: it is
+	// written and logged, but drives NO eviction yet (that is Phase E). rehydrated_at
+	// is reserved for the future re-hydration path.
+	{
+		Version: 27,
+		Name:    "item_signals",
+		SQL: `
+CREATE TABLE IF NOT EXISTS item_signals (
+    content_id    TEXT PRIMARY KEY REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    salience      REAL NOT NULL DEFAULT 0,
+    strength      REAL NOT NULL DEFAULT 0,
+    surprise      REAL NOT NULL DEFAULT 0,
+    exempt        INTEGER NOT NULL DEFAULT 0,
+    tier          TEXT NOT NULL DEFAULT 'hot',
+    rehydrated_at DATETIME,
+    scored_at     DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_item_signals_tier ON item_signals(tier, salience);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
