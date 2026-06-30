@@ -59,3 +59,21 @@ func (h *ConsolidationHandler) Signals(w http.ResponseWriter, r *http.Request) {
 	}
 	writeKnowledgeJSON(w, http.StatusOK, summary)
 }
+
+// InteractionStats handles GET /consolidation/interaction-stats — per-kind counts of
+// the append-only interaction_log with item-level ref coverage and time span. Used to
+// gauge whether there is enough behavioral data (document_opened, memory_accepted, …)
+// to build a held-out ground-truth evaluation of salience. Read-only.
+func (h *ConsolidationHandler) InteractionStats(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	stats, err := h.store.InteractionStats(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("interaction stats failed")
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "interaction stats failed")
+		return
+	}
+	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"by_kind": stats})
+}

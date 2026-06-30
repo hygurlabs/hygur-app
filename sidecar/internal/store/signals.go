@@ -429,6 +429,46 @@ FROM item_signals`)
 	return s, nil
 }
 
+// InteractionKindStat aggregates the append-only interaction_log for one event kind.
+// WithRef/DistinctRefs measure item-level coverage (ref_id = the touched item), which
+// is what a behavioral ground-truth (e.g. "did the user later open this item?") needs.
+type InteractionKindStat struct {
+	Kind         string `json:"kind"`
+	Count        int    `json:"count"`
+	WithRef      int    `json:"with_ref"`      // rows carrying a non-empty ref_id
+	DistinctRefs int    `json:"distinct_refs"` // distinct items touched by this kind
+	First        string `json:"first,omitempty"`
+	Last         string `json:"last,omitempty"`
+}
+
+// InteractionStats aggregates interaction_log per kind — counts, item-level ref
+// coverage, and time span. Read-only; the substrate for judging whether there is
+// enough behavioral history to build a held-out ground-truth evaluation (DREAM
+// calibration). Scoped to the caller's tenant DB like every other store read.
+func (d *DB) InteractionStats(ctx context.Context) ([]InteractionKindStat, error) {
+	rows, err := d.db.QueryContext(ctx, `
+SELECT kind, COUNT(*),
+       SUM(CASE WHEN ref_id IS NOT NULL AND ref_id != '' THEN 1 ELSE 0 END),
+       COUNT(DISTINCT CASE WHEN ref_id IS NOT NULL AND ref_id != '' THEN ref_id END),
+       COALESCE(MIN(occurred_at), ''), COALESCE(MAX(occurred_at), '')
+FROM interaction_log
+GROUP BY kind
+ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InteractionKindStat
+	for rows.Next() {
+		var s InteractionKindStat
+		if err := rows.Scan(&s.Kind, &s.Count, &s.WithRef, &s.DistinctRefs, &s.First, &s.Last); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // TopItemSignals returns the top-N scored items by "salience" (default) or
 // "surprise" — for spot-checking the scoring during calibration.
 func (d *DB) TopItemSignals(ctx context.Context, by string, n int) ([]ItemSignalRow, error) {

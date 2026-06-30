@@ -191,8 +191,9 @@ func (s *Server) setupRoutes() {
 
 		// Consolidation — "Quand Hygur rêve" memory pass (shadow): trigger + calibration read.
 		r.Route("/consolidation", func(r chi.Router) {
-			r.Post("/run", s.handleConsolidationRun)        // shadow scoring on demand; evicts nothing
-			r.Get("/signals", s.handleConsolidationSignals) // scoring distribution for calibration
+			r.Post("/run", s.handleConsolidationRun)                           // shadow scoring on demand; evicts nothing
+			r.Get("/signals", s.handleConsolidationSignals)                    // scoring distribution for calibration
+			r.Get("/interaction-stats", s.handleConsolidationInteractionStats) // behavioral-log coverage (ground-truth substrate)
 		})
 
 		// Mail endpoints
