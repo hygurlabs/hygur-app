@@ -139,6 +139,9 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	// Surprise/novelty (DREAM Phase C): compute BEFORE writing the new mentions, so
 	// the item's own entities still read as "new". Best-effort — never blocks ingest.
 	i.stampSurprise(ctx, item.ContentID, mentions)
+	// Hebbian co-occurrence (DREAM Phase D): wire the item's entities together.
+	// Best-effort — never blocks ingestion.
+	i.stampCoOccurrence(ctx, item, mentions)
 	if rerr := i.store.ReplaceEntityMentions(ctx, item.ContentID, mentions); rerr != nil {
 		log.Printf("[ingest] entity-index sync failed for %s: %v", item.ContentID, rerr)
 	}

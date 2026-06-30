@@ -540,6 +540,26 @@ CREATE TABLE IF NOT EXISTS item_surprise (
 );
 `,
 	},
+	// Migration 29 — entity_edges: Hebbian co-occurrence graph ("Quand Hygur rêve"
+	// Phase D / docs/DREAM_PLAN_ADDENDUM.md §3). Entities that co-occur in an item
+	// strengthen their edge; the weight decays with time. Seeds associative
+	// expansion + a future cognitive map. Written best-effort at ingestion; read only
+	// behind the (default-off) Hebbian expansion flag.
+	{
+		Version: 29,
+		Name:    "entity_edges",
+		SQL: `
+CREATE TABLE IF NOT EXISTS entity_edges (
+    entity_a   TEXT NOT NULL,
+    entity_b   TEXT NOT NULL,
+    co_count   INTEGER NOT NULL DEFAULT 0,
+    last_co_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (entity_a, entity_b)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_edges_a ON entity_edges(entity_a);
+CREATE INDEX IF NOT EXISTS idx_entity_edges_b ON entity_edges(entity_b);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

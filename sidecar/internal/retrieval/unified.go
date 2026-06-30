@@ -13,10 +13,15 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/intent"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/store"
 )
+
+// hebbianMinWeight is the minimum recency-decayed co-occurrence weight for an
+// entity_edges neighbour to be folded into the entity lens (DREAM Phase D §3.3).
+const hebbianMinWeight = 2.0
 
 // UnifiedResult represents a single search result from the unified search.
 type UnifiedResult struct {
@@ -210,11 +215,21 @@ type UnifiedSearcher struct {
 	// useEntityIndex; a no-op until entity_vectors is populated.
 	useEntitySynonymy       bool
 	entitySynonymyThreshold float64
+
+	// Brick 3 Hebbian expansion (off by default): fold in entity_edges co-occurrence
+	// neighbours. Requires useEntityIndex; a no-op until the graph is populated.
+	// Kill-switched: OFF leaves retrieval byte-identical.
+	useHebbianExpansion bool
 }
 
 // SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
 // items). Off by default; a no-op until the item_access bus has data.
 func (us *UnifiedSearcher) SetAttentionRerank(on bool) { us.useAttentionRerank = on }
+
+// SetHebbianExpansion enables Phase D associative expansion (fold entity_edges
+// co-occurrence neighbours into the entity lens). Off by default; a no-op until the
+// graph is populated. OFF ⇒ retrieval is byte-identical to before.
+func (us *UnifiedSearcher) SetHebbianExpansion(on bool) { us.useHebbianExpansion = on }
 
 // SetImminenceRerank enables the P-2 imminence re-score (boost items tied to a soon-due
 // obligation). Off by default; a no-op until an imminent-ids provider is wired and
@@ -276,6 +291,7 @@ type RetrievalOptions struct {
 	EntityIndex             bool    // brick 1: associative entity lens in EntitySearch
 	EntitySynonymy          bool    // brick 2: embedding synonymy expansion
 	EntitySynonymyThreshold float64 // brick 2: min cosine (default 0.80 if <= 0)
+	HebbianExpansion        bool    // brick 3 (Phase D): fold entity_edges neighbours (default off)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -294,6 +310,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	us.useEntityIndex = opts.EntityIndex
 	us.useEntitySynonymy = opts.EntitySynonymy
 	us.entitySynonymyThreshold = opts.EntitySynonymyThreshold
+	us.useHebbianExpansion = opts.HebbianExpansion
 	if us.entitySynonymyThreshold <= 0 {
 		us.entitySynonymyThreshold = 0.80
 	}
@@ -452,6 +469,15 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 					entityOpts.EntityNorms = norms
 					log.Printf("[UnifiedSearch] entity synonymy: %d related entities for %q (τ=%.2f)", len(norms), llmIntent.Entity, us.entitySynonymyThreshold)
 				}
+			}
+		}
+		// Brick 3 — Phase D Hebbian expansion (kill-switched, default OFF): fold the
+		// queried entity's strongest co-occurrence neighbours into the lens. No-op
+		// (byte-identical) when off or the graph is empty; fail-open on a store error.
+		if us.useEntityIndex && us.useHebbianExpansion {
+			if neigh, herr := us.store.HebbianNeighbors(ctx, contradict.NormKey(llmIntent.Entity), time.Now(), hebbianMinWeight, 10); herr == nil && len(neigh) > 0 {
+				entityOpts.EntityNorms = append(entityOpts.EntityNorms, neigh...)
+				log.Printf("[UnifiedSearch] hebbian expansion: +%d neighbours for %q", len(neigh), llmIntent.Entity)
 			}
 		}
 		eResults, eErr := EntitySearch(ctx, us.store, llmIntent, entityOpts)

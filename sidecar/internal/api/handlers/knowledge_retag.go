@@ -93,6 +93,34 @@ func (h *KnowledgeHandler) BackfillEntityIndex(w http.ResponseWriter, r *http.Re
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
+// entityEdgesInFlight guards the Hebbian-edge backfill (one run at a time).
+var entityEdgesInFlight atomic.Bool
+
+// BackfillEntityEdges rebuilds the Hebbian co-occurrence graph from the claims
+// already cached on each item. POST /knowledge/backfill-entity-edges. Deterministic
+// (no LLM); runs in the background and returns immediately. Idempotent (clears +
+// rebuilds). Run /knowledge/backfill-claims first so items carry claims.
+func (h *KnowledgeHandler) BackfillEntityEdges(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if !entityEdgesInFlight.CompareAndSwap(false, true) {
+		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer entityEdgesInFlight.Store(false)
+		n, err := h.ingestor.BackfillEntityEdges(context.Background())
+		if err != nil {
+			h.logger.Error().Err(err).Int("scanned", n).Msg("entity-edges backfill failed")
+			return
+		}
+		h.logger.Info().Int("scanned", n).Msg("entity-edges backfill complete")
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
 // entityVectorsInFlight guards the entity-vector backfill (one run at a time).
 var entityVectorsInFlight atomic.Bool
 

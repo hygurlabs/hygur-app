@@ -183,6 +183,12 @@ type RetrievalConfig struct {
 	// resolves real surface variants — "Tesla"/"Tesla Belgium BV" — with no
 	// observed cross-entity false merges). Re-calibrate if the embedding model changes.
 	EntitySynonymyThreshold float64 `mapstructure:"entity_synonymy_threshold" yaml:"entity_synonymy_threshold,omitempty"`
+
+	// HebbianExpansion enables the Phase D associative expansion: the queried
+	// entity's co-occurrence neighbours (entity_edges) are folded into the lens.
+	// Requires EntityIndex. Default false; a no-op until the edge graph is populated
+	// (run /knowledge/backfill-entity-edges). Kill-switch: OFF = byte-identical retrieval.
+	HebbianExpansion bool `mapstructure:"hebbian_expansion" yaml:"hebbian_expansion,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.

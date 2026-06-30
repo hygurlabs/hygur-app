@@ -637,6 +637,7 @@ func main() {
 		EntityIndex:             cfg.Retrieval.EntityIndex,
 		EntitySynonymy:          cfg.Retrieval.EntitySynonymy,
 		EntitySynonymyThreshold: cfg.Retrieval.EntitySynonymyThreshold,
+		HebbianExpansion:        cfg.Retrieval.HebbianExpansion,
 	})
 
 	// Create search handler with unified search
@@ -774,6 +775,12 @@ func main() {
 		// Pod-per-tenant: pin to HYGUR_TENANT_ID so a token from another tenant is
 		// rejected even with a valid signature (defence in depth vs subdomain routing).
 		tenant := strings.TrimSpace(os.Getenv("HYGUR_TENANT_ID"))
+		// remote auth implies the multi-tenant cloud, where the pin is mandatory: an
+		// empty tenant would silently disable cross-tenant isolation (any validly
+		// signed token, for any tenant, would be accepted). Fail closed, loudly.
+		if tenant == "" {
+			logger.Fatal().Msg("auth.mode=remote requires HYGUR_TENANT_ID: refusing to start without the tenant pin (cross-tenant isolation)")
+		}
 		server.SetAuthenticator(auth.JWTAuth{PublicKey: pub, Revoked: revoked, Tenant: tenant})
 		logger.Info().
 			Int("revoked", len(revoked)).

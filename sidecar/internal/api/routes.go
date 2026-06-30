@@ -115,6 +115,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/retag", s.handleKnowledgeRetag)
 			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
 			r.Post("/backfill-entity-index", s.handleKnowledgeBackfillEntityIndex)
+			r.Post("/backfill-entity-edges", s.handleKnowledgeBackfillEntityEdges)
 			r.Post("/backfill-entity-vectors", s.handleKnowledgeBackfillEntityVectors)
 			// Deletion reconciliation: the edge agent posts the full set of refs
 			// currently present on the server; items no longer present are recycled.
@@ -501,6 +502,16 @@ func (s *Server) handleKnowledgeBackfillClaims(w http.ResponseWriter, r *http.Re
 func (s *Server) handleKnowledgeBackfillEntityIndex(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.BackfillEntityIndex(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillEntityEdges handles POST /knowledge/backfill-entity-edges
+// (Phase D: rebuild the Hebbian co-occurrence graph from cached claims).
+func (s *Server) handleKnowledgeBackfillEntityEdges(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillEntityEdges(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
