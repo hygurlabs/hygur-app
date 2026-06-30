@@ -110,7 +110,8 @@ func (s *Server) setupRoutes() {
 			r.Post("/ingest-text", s.handleKnowledgeIngestText)
 			r.Post("/ingest-folder", s.handleKnowledgeIngestFolder)
 			r.Post("/upload", s.handleKnowledgeUpload)
-			r.Post("/search", s.handleKnowledgeSearch)
+			// /knowledge/search (SemanticSearcher, vector-only) retired — every client
+			// uses POST /search (UnifiedSearcher fusion), which is strictly better.
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
 			r.Post("/retag", s.handleKnowledgeRetag)
 			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
@@ -236,8 +237,8 @@ func (s *Server) setupRoutes() {
 			r.Delete("/{id}", s.handleSessionDelete)
 		})
 
-		// Tools endpoints (global search)
-		r.Get("/tools/search", s.handleToolsSearch)
+		// /tools/search (legacy SemanticSearcher tool) retired — the LLM agent uses
+		// the search_knowledge_base tool (UnifiedSearcher); the UI uses POST /search.
 
 		// Mentions autocomplete — projects + notes/mails/documents for the
 		// WebUI composer's "@" context picker.
