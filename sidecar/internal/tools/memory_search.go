@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -160,6 +161,72 @@ func (t *MemorySearchTool) SearchAccepted(ctx context.Context, query string, top
 		})
 	}
 	return out, nil
+}
+
+// --- LLM tool adapter (read-only) -------------------------------------------
+// recall_memory lets the chat path deliberately re-query the user's accepted
+// memories with a focused term — beyond the top-K already pre-injected each turn
+// — to answer "what do you remember about X?". Read-only.
+
+const recallMemoryTokenBudget = 1200
+
+// Name implements tools.Tool.
+func (t *MemorySearchTool) Name() string { return "recall_memory" }
+
+// Description implements tools.Tool.
+func (t *MemorySearchTool) Description() string {
+	return "Recall what Hygur remembers about the user (facts, preferences, recurring actions) matching a query."
+}
+
+// ParameterSchema implements tools.Tool.
+func (t *MemorySearchTool) ParameterSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "What to recall about the user.",
+			},
+			"max_results": map[string]any{
+				"type":        "integer",
+				"description": "Maximum memories to return (default 8).",
+			},
+		},
+		"required": []string{"query"},
+	}
+}
+
+// Execute implements tools.Tool: focused recall over accepted memories. Returns
+// the matching memories without touching the store.
+func (t *MemorySearchTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+	var req struct {
+		Query      string `json:"query"`
+		MaxResults int    `json:"max_results"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.Query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	topK := req.MaxResults
+	if topK <= 0 || topK > 25 {
+		topK = 8
+	}
+	hits, err := t.SearchAccepted(ctx, req.Query, topK, recallMemoryTokenBudget)
+	if err != nil {
+		return nil, fmt.Errorf("recall failed: %w", err)
+	}
+	type memOut struct {
+		Content string  `json:"content"`
+		Type    string  `json:"type"`
+		Score   float64 `json:"score"`
+	}
+	out := make([]memOut, 0, len(hits))
+	for _, m := range hits {
+		out = append(out, memOut{Content: m.Content, Type: string(m.Type), Score: m.Score})
+	}
+	return json.Marshal(map[string]any{"memories": out})
 }
 
 // cosine computes cosine similarity between two equally-sized float32 vectors.

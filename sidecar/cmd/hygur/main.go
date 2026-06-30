@@ -709,6 +709,11 @@ func main() {
 	toolRegistry.MustRegister(createCalendarEventTool)
 	toolRegistry.MustRegister(listAttachmentsTool)
 	toolRegistry.MustRegister(summarizeTool)
+	// Read-only recall tools over the user's own data (no side effects):
+	// recall_memory re-queries accepted memories on demand; find_decisions
+	// surfaces logged decisions (which are NOT pre-injected into the turn).
+	toolRegistry.MustRegister(memorySearchTool)
+	toolRegistry.MustRegister(tools.NewFindDecisionsTool(db))
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is
