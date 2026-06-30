@@ -316,6 +316,7 @@ type SignalsSummary struct {
 		Dim         int   `json:"dim"`
 		BudgetBytes int64 `json:"budget_bytes"`
 	} `json:"vector"`
+	EntityEdges  int64           `json:"entity_edges"` // Hebbian co-occurrence edges (Phase D)
 	LastScoredAt string          `json:"last_scored_at,omitempty"`
 	TopSalience  []ItemSignalRow `json:"top_salience"`
 	TopSurprise  []ItemSignalRow `json:"top_surprise"`
@@ -380,6 +381,9 @@ FROM item_signals`)
 		return nil, err
 	}
 	s.Vector.Rows, s.Vector.Bytes, s.Vector.Dim = r, b, dim
+	if s.EntityEdges, err = d.EntityEdgeCount(ctx); err != nil {
+		return nil, err
+	}
 	if s.TopSalience, err = d.TopItemSignals(ctx, "salience", 15); err != nil {
 		return nil, err
 	}
