@@ -42,8 +42,12 @@ func TestConsolidationShadowPass(t *testing.T) {
 	}
 
 	c := NewConsolidator(db, zerolog.Nop())
-	if err := c.RunOnce(ctx, now); err != nil {
+	res, err := c.RunOnce(ctx, now)
+	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
+	}
+	if res == nil || res.Scored != 2 {
+		t.Fatalf("expected 2 items scored, got %+v", res)
 	}
 
 	sigs, err := db.ItemSignalsByIDs(ctx, []string{"note:a", "note:b"})
@@ -67,7 +71,46 @@ func TestConsolidationShadowPass(t *testing.T) {
 	}
 
 	// Idempotent: a second pass overwrites cleanly.
-	if err := c.RunOnce(ctx, now); err != nil {
+	if _, err := c.RunOnce(ctx, now); err != nil {
 		t.Fatalf("RunOnce (2nd): %v", err)
+	}
+}
+
+func TestConsolidationSurpriseRaisesSalience(t *testing.T) {
+	db, err := store.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := db.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
+		ContentID: "note:s", SourceType: "note", Title: "S",
+		NormalizedText: "body", VersionID: "v1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	c := NewConsolidator(db, zerolog.Nop())
+
+	// Baseline (no surprise stamped).
+	if _, err := c.RunOnce(ctx, now); err != nil {
+		t.Fatalf("RunOnce baseline: %v", err)
+	}
+	base, _ := db.ItemSignalsByIDs(ctx, []string{"note:s"})
+
+	// Stamp maximum surprise, then re-score.
+	if err := db.UpsertItemSurprise(ctx, "note:s", 1.0); err != nil {
+		t.Fatalf("UpsertItemSurprise: %v", err)
+	}
+	if _, err := c.RunOnce(ctx, now); err != nil {
+		t.Fatalf("RunOnce surprised: %v", err)
+	}
+	after, _ := db.ItemSignalsByIDs(ctx, []string{"note:s"})
+
+	// surprise carries weight 0.15 in ComputeSalience (addendum §1.2).
+	if d := after["note:s"].Salience - base["note:s"].Salience; d < 0.10 || d > 0.20 {
+		t.Errorf("surprise should raise salience by ~0.15, got Δ=%.4f (base=%.4f after=%.4f)",
+			d, base["note:s"].Salience, after["note:s"].Salience)
 	}
 }

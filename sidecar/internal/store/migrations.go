@@ -525,6 +525,21 @@ CREATE TABLE IF NOT EXISTS item_signals (
 CREATE INDEX IF NOT EXISTS idx_item_signals_tier ON item_signals(tier, salience);
 `,
 	},
+	// Migration 28 — item_surprise: the per-item surprise/novelty score ("Quand
+	// Hygur rêve" Phase C / docs/DREAM_PLAN_ADDENDUM.md §2). Written at ingestion from
+	// how new an item is vs the entity index; read by the consolidation pass to nudge
+	// salience. Its own table so a pass re-score can't overwrite the stamped value.
+	{
+		Version: 28,
+		Name:    "item_surprise",
+		SQL: `
+CREATE TABLE IF NOT EXISTS item_surprise (
+    content_id  TEXT PRIMARY KEY REFERENCES knowledge_items(content_id) ON DELETE CASCADE,
+    surprise    REAL NOT NULL DEFAULT 0,
+    computed_at DATETIME
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

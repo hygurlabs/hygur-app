@@ -242,4 +242,4 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 27
+const CurrentSchemaVersion = 28

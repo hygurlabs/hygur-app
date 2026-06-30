@@ -21,51 +21,52 @@ import (
 
 // Server represents the HTTP API server.
 type Server struct {
-	cfg              *config.Config
-	logger           zerolog.Logger
-	router           chi.Router
-	llmClient        *llm.Client
-	httpServer       *http.Server
-	healthHandler    *handlers.HealthHandler
-	chatHandler      *handlers.ChatHandler
-	ragChatHandler   *handlers.RAGChatHandler
-	modelsHandler    *handlers.ModelsHandler
-	knowledgeHandler *handlers.KnowledgeHandler
-	projectHandler   *handlers.ProjectHandler
-	taskHandler      *handlers.TaskHandler
-	decisionHandler  *handlers.DecisionHandler
-	mailHandler      *handlers.MailHandler
-	searchHandler    *handlers.SearchHandler
-	notesHandler     *handlers.NotesHandler
-	sessionsHandler  *handlers.SessionsHandler
-	tagHandler       *handlers.TagHandler
-	graphHandler     *handlers.GraphHandler
-	connectorHandler   *handlers.ConnectorHandler
-	marketplaceHandler *handlers.MarketplaceHandler
-	memoryHandler    *handlers.MemoryHandler
-	eventsHandler    *handlers.EventsHandler
-	briefHandler     *handlers.BriefHandler
-	chronicleHandler *handlers.ChronicleHandler
-	timelineHandler  *handlers.TimelineHandler
-	agendaHandler    *handlers.AgendaHandler
-	configHandler    *handlers.ConfigHandler
-	mentionsHandler  *handlers.MentionsHandler
-	interactionsHandler *handlers.InteractionsHandler
-	insightsHandler  *handlers.InsightsHandler
-	usageHandler     *handlers.UsageHandler
-	backupHandler    *handlers.BackupHandler
-	exportHandler    *handlers.ExportHandler
-	encryptionHandler *handlers.EncryptionHandler
-	pushHandler      *handlers.PushHandler
-	token            string             // Static token (local mode) + WebUI bootstrap
-	authenticator    auth.Authenticator // Selected by config: local token or remote JWT
-	hostGuardEnabled bool               // DNS-rebinding Host allow-list (SetHostGuard)
-	allowedHosts     map[string]bool
-	managed          bool // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
-	cloudProxy       *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
-	extraOrigins     map[string]bool        // extra CORS-allowed origins (SetAllowedOrigins) — e.g. the cloud web shell
-	cspConnectSrc    []string               // resolved connect-src sources for the served SPA CSP (SetCSPConnectSources)
-	edgeRunner       *edge.Runner           // local edge push loop (cloud thin client) — backs the /edge/* routes
+	cfg                  *config.Config
+	logger               zerolog.Logger
+	router               chi.Router
+	llmClient            *llm.Client
+	httpServer           *http.Server
+	healthHandler        *handlers.HealthHandler
+	chatHandler          *handlers.ChatHandler
+	ragChatHandler       *handlers.RAGChatHandler
+	modelsHandler        *handlers.ModelsHandler
+	knowledgeHandler     *handlers.KnowledgeHandler
+	projectHandler       *handlers.ProjectHandler
+	taskHandler          *handlers.TaskHandler
+	decisionHandler      *handlers.DecisionHandler
+	mailHandler          *handlers.MailHandler
+	searchHandler        *handlers.SearchHandler
+	notesHandler         *handlers.NotesHandler
+	sessionsHandler      *handlers.SessionsHandler
+	tagHandler           *handlers.TagHandler
+	graphHandler         *handlers.GraphHandler
+	connectorHandler     *handlers.ConnectorHandler
+	marketplaceHandler   *handlers.MarketplaceHandler
+	memoryHandler        *handlers.MemoryHandler
+	eventsHandler        *handlers.EventsHandler
+	briefHandler         *handlers.BriefHandler
+	chronicleHandler     *handlers.ChronicleHandler
+	consolidationHandler *handlers.ConsolidationHandler
+	timelineHandler      *handlers.TimelineHandler
+	agendaHandler        *handlers.AgendaHandler
+	configHandler        *handlers.ConfigHandler
+	mentionsHandler      *handlers.MentionsHandler
+	interactionsHandler  *handlers.InteractionsHandler
+	insightsHandler      *handlers.InsightsHandler
+	usageHandler         *handlers.UsageHandler
+	backupHandler        *handlers.BackupHandler
+	exportHandler        *handlers.ExportHandler
+	encryptionHandler    *handlers.EncryptionHandler
+	pushHandler          *handlers.PushHandler
+	token                string             // Static token (local mode) + WebUI bootstrap
+	authenticator        auth.Authenticator // Selected by config: local token or remote JWT
+	hostGuardEnabled     bool               // DNS-rebinding Host allow-list (SetHostGuard)
+	allowedHosts         map[string]bool
+	managed              bool                   // Hygur-operated cloud tenant: don't inject the loopback token into the SPA
+	cloudProxy           *httputil.ReverseProxy // non-nil = cloud-backed thin-client mode (SetCloudProxy)
+	extraOrigins         map[string]bool        // extra CORS-allowed origins (SetAllowedOrigins) — e.g. the cloud web shell
+	cspConnectSrc        []string               // resolved connect-src sources for the served SPA CSP (SetCSPConnectSources)
+	edgeRunner           *edge.Runner           // local edge push loop (cloud thin client) — backs the /edge/* routes
 }
 
 // SetManaged marks this as a Hygur-operated cloud tenant. The served SPA then
@@ -210,6 +211,19 @@ func (s *Server) handleChronicleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "chronicle handler not configured")
+}
+
+// SetConsolidationHandler sets the consolidation ("Quand Hygur rêve") handler.
+func (s *Server) SetConsolidationHandler(handler *handlers.ConsolidationHandler) {
+	s.consolidationHandler = handler
+}
+
+func (s *Server) handleConsolidationRun(w http.ResponseWriter, r *http.Request) {
+	if s.consolidationHandler != nil {
+		s.consolidationHandler.Run(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "consolidation handler not configured")
 }
 
 func (s *Server) handleChronicleClose(w http.ResponseWriter, r *http.Request) {

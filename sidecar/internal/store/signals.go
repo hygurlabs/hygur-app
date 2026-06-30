@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -228,4 +229,47 @@ FROM item_signals WHERE content_id IN (`+strings.Join(ph, ",")+`)`, args...)
 		out[s.ContentID] = s
 	}
 	return out, rows.Err()
+}
+
+// reconciledConflictLite is the minimal shape of a cached reconciled conflict — just
+// enough to tell which items are in a live (kind="conflict") contradiction. Mirrors
+// contradict.ReconciledConflict's JSON without importing the package (keeps store
+// decoupled). Dismissed is applied per-request, never cached, so it is absent here.
+type reconciledConflictLite struct {
+	Members []struct {
+		SourceID string `json:"source_id"`
+	} `json:"members"`
+	Verdict struct {
+		Kind string `json:"kind"`
+	} `json:"verdict"`
+}
+
+// OpenContradictionContentIDs returns the set of content_ids that are members of a
+// live ("conflict") reconciled contradiction — the same cache the authority layer
+// reads (scope ""). These items are surfaced, important, and hard-exempt from
+// eviction (DREAM_PLAN §3). Empty (not an error) when nothing has been computed yet.
+func (d *DB) OpenContradictionContentIDs(ctx context.Context) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	js, _, _, found, err := d.GetContradictionCache(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	if !found || js == "" {
+		return out, nil
+	}
+	var conflicts []reconciledConflictLite
+	if err := json.Unmarshal([]byte(js), &conflicts); err != nil {
+		return nil, err
+	}
+	for _, c := range conflicts {
+		if c.Verdict.Kind != "conflict" || len(c.Members) < 2 {
+			continue
+		}
+		for _, m := range c.Members {
+			if m.SourceID != "" {
+				out[m.SourceID] = struct{}{}
+			}
+		}
+	}
+	return out, nil
 }

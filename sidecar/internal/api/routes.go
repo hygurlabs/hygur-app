@@ -188,6 +188,11 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/reopen", s.handleChronicleReopen) // reopen with a reason the night narrates
 		})
 
+		// Consolidation — "Quand Hygur rêve" memory pass (shadow): manual trigger.
+		r.Route("/consolidation", func(r chi.Router) {
+			r.Post("/run", s.handleConsolidationRun) // shadow scoring on demand; evicts nothing
+		})
+
 		// Mail endpoints
 		r.Route("/mail", func(r chi.Router) {
 			r.Get("/sources", s.handleMailSources)

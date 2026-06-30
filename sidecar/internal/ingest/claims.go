@@ -135,7 +135,11 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 		log.Printf("[ingest] claims metadata update failed for %s: %v", item.ContentID, uerr)
 	}
 	// Keep the associative entity index in step with the freshly-cached claims.
-	if rerr := i.store.ReplaceEntityMentions(ctx, item.ContentID, entityMentionsFromClaims(claims)); rerr != nil {
+	mentions := entityMentionsFromClaims(claims)
+	// Surprise/novelty (DREAM Phase C): compute BEFORE writing the new mentions, so
+	// the item's own entities still read as "new". Best-effort — never blocks ingest.
+	i.stampSurprise(ctx, item.ContentID, mentions)
+	if rerr := i.store.ReplaceEntityMentions(ctx, item.ContentID, mentions); rerr != nil {
 		log.Printf("[ingest] entity-index sync failed for %s: %v", item.ContentID, rerr)
 	}
 }

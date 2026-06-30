@@ -1067,13 +1067,14 @@ func main() {
 	server.SetDecisionHandler(decisionHandler)
 	scheduler.NewDecisionScheduler(decisionScanner, 23, logger).Start(ctx)
 
-	// Consolidation ("Quand Hygur rêve", DREAM_PLAN Phase 1) — nightly at 00:00,
-	// after the chronicle/decision passes so the gist is fresh. SHADOW: it scores
-	// every item (salience + forgetting strength) into item_signals and logs what
-	// it WOULD evict under the vector budget — but drops nothing. Opt-in on the home
-	// canary via HYGUR_DREAM_SHADOW=1 until the scoring is calibrated on real data.
+	// Consolidation ("Quand Hygur rêve", DREAM_PLAN Phase 1). The manual trigger
+	// (POST /consolidation/run) works any time — it scores + writes item_signals and
+	// evicts nothing (shadow). The nightly auto-pass at 00:00 is opt-in on the home
+	// canary via HYGUR_DREAM_SHADOW=1, until the scoring is calibrated on real data.
+	consolidator := scheduler.NewConsolidator(db, logger)
+	server.SetConsolidationHandler(handlers.NewConsolidationHandler(consolidator, logger))
 	if os.Getenv("HYGUR_DREAM_SHADOW") == "1" {
-		scheduler.NewConsolidationScheduler(scheduler.NewConsolidator(db, logger), 0, logger).Start(ctx)
+		scheduler.NewConsolidationScheduler(consolidator, 0, logger).Start(ctx)
 	}
 
 	// Agenda scheduler — runs daily at 08:00, emits agenda_alert events for

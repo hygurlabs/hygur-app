@@ -42,6 +42,21 @@ func NewConsolidator(db *store.DB, logger zerolog.Logger) *Consolidator {
 	return &Consolidator{store: db, logger: logger.With().Str("component", "consolidation").Logger()}
 }
 
+// PassResult is the metrics summary of one pass — logged, and returned to the manual
+// trigger so the distribution is inspectable on demand.
+type PassResult struct {
+	VecRows           int64 `json:"vec_rows"`
+	VecBytes          int64 `json:"vec_bytes"`
+	Dim               int   `json:"dim"`
+	BudgetBytes       int64 `json:"budget_bytes"`
+	Scored            int   `json:"scored"`
+	Hot               int   `json:"hot"`
+	WouldEvict        int   `json:"would_evict"`
+	WouldReclaimBytes int64 `json:"would_reclaim_bytes"`
+	ExemptBytes       int64 `json:"exempt_bytes"`
+	Truncated         bool  `json:"truncated"`
+}
+
 type scoredItem struct {
 	contentID string
 	salience  float64
@@ -52,21 +67,30 @@ type scoredItem struct {
 }
 
 // RunOnce executes one shadow consolidation pass at time `now`. It writes
-// item_signals and logs metrics; it never evicts. Idempotent (re-running re-scores).
-func (c *Consolidator) RunOnce(ctx context.Context, now time.Time) error {
+// item_signals and returns the metrics; it never evicts. Idempotent (re-scores).
+func (c *Consolidator) RunOnce(ctx context.Context, now time.Time) (*PassResult, error) {
 	if c == nil {
-		return nil
+		return nil, nil
 	}
 	t0 := time.Now()
 
 	vecRows, vecBytes, dim, err := c.store.VectorFootprint(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	all, err := c.scoreAll(ctx, now)
+	// Open contradictions make their member items both more important (a live
+	// conflict the user must see) and hard-exempt from eviction. Read once;
+	// fail-open — an empty set just means no contradiction signal this pass.
+	openConf, err := c.store.OpenContradictionContentIDs(ctx)
 	if err != nil {
-		return err
+		c.logger.Warn().Err(err).Msg("open-contradiction read failed — no contradiction signal (fail-open)")
+		openConf = nil
+	}
+
+	all, err := c.scoreAll(ctx, now, openConf)
+	if err != nil {
+		return nil, err
 	}
 
 	// Tier under the vector budget: highest salience stays HOT until the budget is
@@ -103,16 +127,23 @@ func (c *Consolidator) RunOnce(ctx context.Context, now time.Time) error {
 	}
 
 	if err := c.store.UpsertItemSignals(ctx, sigs); err != nil {
-		return err
+		return nil, err
+	}
+
+	res := &PassResult{
+		VecRows: vecRows, VecBytes: vecBytes, Dim: dim, BudgetBytes: dreamBudgetBytes,
+		Scored: len(all), Hot: hot, WouldEvict: cold,
+		WouldReclaimBytes: reclaimable, ExemptBytes: exemptBytes,
+		Truncated: len(all) >= dreamMaxItems,
 	}
 
 	ev := c.logger.Info().
-		Int64("vec_rows", vecRows).Int64("vec_bytes", vecBytes).Int("dim", dim).
-		Int64("budget_bytes", dreamBudgetBytes).
-		Int("scored", len(all)).Int("hot", hot).Int("would_evict", cold).
-		Int64("would_reclaim_bytes", reclaimable).Int64("exempt_bytes", exemptBytes).
+		Int64("vec_rows", res.VecRows).Int64("vec_bytes", res.VecBytes).Int("dim", res.Dim).
+		Int64("budget_bytes", res.BudgetBytes).
+		Int("scored", res.Scored).Int("hot", res.Hot).Int("would_evict", res.WouldEvict).
+		Int64("would_reclaim_bytes", res.WouldReclaimBytes).Int64("exempt_bytes", res.ExemptBytes).
 		Dur("dur", time.Since(t0))
-	if len(all) >= dreamMaxItems {
+	if res.Truncated {
 		ev = ev.Bool("truncated", true) // corpus exceeds the per-pass cap (no silent truncation)
 	}
 	ev.Msg("consolidation shadow pass (no eviction)")
@@ -121,12 +152,13 @@ func (c *Consolidator) RunOnce(ctx context.Context, now time.Time) error {
 		c.logger.Warn().Int64("exempt_bytes", exemptBytes).Int64("budget_bytes", dreamBudgetBytes).
 			Msg("hard-exempt set alone exceeds the vector budget — budget too tight (addendum §6)")
 	}
-	return nil
+	return res, nil
 }
 
-// scoreAll loads items in bounded pages and scores each. The vector footprint and
-// link signals are batch-read per page to keep the pass O(corpus) with few queries.
-func (c *Consolidator) scoreAll(ctx context.Context, now time.Time) ([]scoredItem, error) {
+// scoreAll loads items in bounded pages and scores each. The access signal, vector
+// footprint and link signals are batch-read per page; the open-contradiction set is
+// passed in (read once per pass). Few queries, O(corpus).
+func (c *Consolidator) scoreAll(ctx context.Context, now time.Time, openConf map[string]struct{}) ([]scoredItem, error) {
 	all := make([]scoredItem, 0, 4096)
 	for offset := 0; offset < dreamMaxItems; offset += dreamBatch {
 		items, err := c.store.ListKnowledgeItems(ctx, dreamBatch, offset)
@@ -152,17 +184,33 @@ func (c *Consolidator) scoreAll(ctx context.Context, now time.Time) ([]scoredIte
 		if err != nil {
 			return nil, err
 		}
+		// Surprise is owned by ingestion (item_surprise); the pass only reads it to
+		// nudge salience. Fail-open — a read error just means surprise=0 this pass.
+		surprises, serr := c.store.ItemSurpriseByIDs(ctx, ids)
+		if serr != nil {
+			c.logger.Warn().Err(serr).Msg("item_surprise read failed — surprise=0 (fail-open)")
+			surprises = nil
+		}
 		for _, it := range items {
 			ls := links[it.ContentID]
 			ac := access[it.ContentID]
+			// Open contradiction folds into both the link count and the hard-flag:
+			// a contradicted item is important and must never be evicted.
+			_, inConflict := openConf[it.ContentID]
+			linkCount := ls.LinkCount
+			hardFlag := ls.Exempt()
+			if inConflict {
+				linkCount++
+				hardFlag = true
+			}
 			sig := retrieval.SalienceSignals{
 				HitCount:      ac.HitCount,
 				LastAccessed:  ac.LastAccessedAt,
 				IngestedAt:    it.CreatedAt,
-				LinkCount:     ls.LinkCount,
-				Flag:          ls.Exempt(),
+				LinkCount:     linkCount,
+				Flag:          hardFlag,
 				CanonicalDate: store.GetCanonicalDate(it),
-				Surprise:      0, // Phase C
+				Surprise:      surprises[it.ContentID],
 				Now:           now,
 			}
 			sal := retrieval.ComputeSalience(sig)
@@ -170,7 +218,7 @@ func (c *Consolidator) scoreAll(ctx context.Context, now time.Time) ([]scoredIte
 				contentID: it.ContentID,
 				salience:  sal,
 				strength:  retrieval.ComputeStrength(sal, sig.AccessAgeDays()),
-				exempt:    ls.Exempt(),
+				exempt:    hardFlag,
 				vbytes:    vbytes[it.ContentID],
 				ageIngest: ageDaysSince(it.CreatedAt, now),
 			})
@@ -229,7 +277,7 @@ func (s *ConsolidationScheduler) Start(ctx context.Context) {
 				if now.Hour() != s.hour {
 					continue
 				}
-				if err := s.c.RunOnce(ctx, now); err != nil {
+				if _, err := s.c.RunOnce(ctx, now); err != nil {
 					s.logger.Debug().Err(err).Msg("nightly consolidation failed")
 				}
 			}
