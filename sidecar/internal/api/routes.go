@@ -194,6 +194,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/run", s.handleConsolidationRun)                           // shadow scoring on demand; evicts nothing
 			r.Get("/signals", s.handleConsolidationSignals)                    // scoring distribution for calibration
 			r.Get("/interaction-stats", s.handleConsolidationInteractionStats) // behavioral-log coverage (ground-truth substrate)
+			r.Get("/feature-matrix", s.handleConsolidationFeatureMatrix)       // per-item inputs + proxies for offline ablation
 		})
 
 		// Mail endpoints

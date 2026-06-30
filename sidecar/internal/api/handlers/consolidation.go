@@ -77,3 +77,21 @@ func (h *ConsolidationHandler) InteractionStats(w http.ResponseWriter, r *http.R
 	}
 	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"by_kind": stats})
 }
+
+// FeatureMatrix handles GET /consolidation/feature-matrix — per-item scoring inputs +
+// mined ground-truth proxies (authorship, tags) for offline salience ablation. The
+// validation stays deterministic (no LLM): the engine's signal is judged against
+// proxies derived from the corpus itself. Read-only.
+func (h *ConsolidationHandler) FeatureMatrix(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	rows, err := h.store.FeatureMatrix(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("feature matrix failed")
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "feature matrix failed")
+		return
+	}
+	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+}

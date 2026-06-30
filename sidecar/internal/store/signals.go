@@ -469,6 +469,77 @@ ORDER BY COUNT(*) DESC`)
 	return out, rows.Err()
 }
 
+// FeatureRow is one item's deterministic scoring inputs plus mined ground-truth
+// proxies (source_type = authorship, tag_count = deliberate organization). Emitted
+// raw so salience ablations (e.g. connectivity vs recency-only) can be computed
+// offline against a proxy target — no LLM in the loop, the engine stays deterministic.
+type FeatureRow struct {
+	ContentID    string  `json:"id"`
+	SourceType   string  `json:"src"`
+	Salience     float64 `json:"sal"`
+	Exempt       bool    `json:"flag"`
+	CreatedAt    string  `json:"created,omitempty"`
+	HitCount     int     `json:"hit"`
+	LastAccessed string  `json:"acc,omitempty"`
+	TagCount     int     `json:"tags"`
+	Connected    int     `json:"conn"` // distinct mentioned entities in the Hebbian graph
+}
+
+// FeatureMatrix returns the per-item feature rows for the whole scored corpus —
+// the substrate for offline ablation/validation of the salience engine. Read-only,
+// scoped to the caller's tenant DB.
+func (d *DB) FeatureMatrix(ctx context.Context) ([]FeatureRow, error) {
+	rows, err := d.db.QueryContext(ctx, `
+SELECT s.content_id, COALESCE(k.source_type, ''), s.salience, s.exempt,
+       COALESCE(k.created_at, ''), COALESCE(a.hit_count, 0), COALESCE(a.last_accessed_at, ''),
+       (SELECT COUNT(*) FROM item_tags t WHERE t.content_id = s.content_id)
+FROM item_signals s
+JOIN knowledge_items k ON k.content_id = s.content_id
+LEFT JOIN item_access a ON a.content_id = s.content_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	idx := make(map[string]int)
+	var out []FeatureRow
+	for rows.Next() {
+		var r FeatureRow
+		var exempt int
+		if err := rows.Scan(&r.ContentID, &r.SourceType, &r.Salience, &exempt,
+			&r.CreatedAt, &r.HitCount, &r.LastAccessed, &r.TagCount); err != nil {
+			return nil, err
+		}
+		r.Exempt = exempt != 0
+		idx[r.ContentID] = len(out)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Connectivity per item: distinct mentioned entities present in entity_edges.
+	crows, err := d.db.QueryContext(ctx, `
+SELECT em.content_id, COUNT(DISTINCT em.entity_norm)
+FROM entity_mentions em
+WHERE em.entity_norm IN (SELECT entity_a FROM entity_edges UNION SELECT entity_b FROM entity_edges)
+GROUP BY em.content_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var cid string
+		var n int
+		if err := crows.Scan(&cid, &n); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[cid]; ok {
+			out[i].Connected = n
+		}
+	}
+	return out, crows.Err()
+}
+
 // TopItemSignals returns the top-N scored items by "salience" (default) or
 // "surprise" — for spot-checking the scoring during calibration.
 func (d *DB) TopItemSignals(ctx context.Context, by string, n int) ([]ItemSignalRow, error) {
