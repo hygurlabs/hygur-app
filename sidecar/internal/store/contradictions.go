@@ -108,3 +108,11 @@ func (d *DB) DismissedContradictions(ctx context.Context) (map[string]bool, erro
 	}
 	return out, rows.Err()
 }
+
+// CountDismissedContradictions counts resolved (dismissed) contradictions — a
+// learning-gauge pillar (the user's psyché feedback: conflicts they've adjudicated).
+func (d *DB) CountDismissedContradictions(ctx context.Context) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dismissed_contradictions`).Scan(&n)
+	return n, err
+}

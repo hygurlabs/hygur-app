@@ -300,6 +300,13 @@ func (h *DecisionHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to update decision")
 			return
 		}
+		// Feedback → salience (DREAM): confirming a decision is a strong engagement
+		// signal — feed the attention bus so it earns recall weight. Best-effort.
+		if status == "standing" {
+			if berr := h.store.BumpItemAccess(r.Context(), []string{id}); berr != nil {
+				h.logger.Warn().Err(berr).Str("id", id).Msg("decision-confirm access bump")
+			}
+		}
 	}
 
 	if req.ProjectID != nil {

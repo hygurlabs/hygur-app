@@ -107,6 +107,14 @@ func (d *DB) SetDecisionStatus(ctx context.Context, contentID, status string) er
 	return err
 }
 
+// CountStandingDecisions counts confirmed (standing) decisions — a learning-gauge
+// pillar (the user's psyché feedback: decisions they have confirmed).
+func (d *DB) CountStandingDecisions(ctx context.Context) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM decision_attrs WHERE status = 'standing'`).Scan(&n)
+	return n, err
+}
+
 // DecisionDedupExists reports whether a decision with this dedup key already
 // exists (any status) — the nightly scan's idempotency guard.
 func (d *DB) DecisionDedupExists(ctx context.Context, dedupKey string) (bool, error) {

@@ -11,10 +11,10 @@ import (
 // gauge. Coverage is in [0, 1]; pillars expose the per-axis breakdown so the
 // UI can reveal *which* axis is lagging when the user clicks the gauge.
 type LearningProgress struct {
-	Coverage     float64           `json:"coverage"`
-	NextStep     string            `json:"next_step"`
-	NextStepHint string            `json:"next_step_hint"`
-	Pillars      []LearningPillar  `json:"pillars"`
+	Coverage     float64          `json:"coverage"`
+	NextStep     string           `json:"next_step"`
+	NextStepHint string           `json:"next_step_hint"`
+	Pillars      []LearningPillar `json:"pillars"`
 }
 
 // LearningPillar represents one axis contributing to the coverage score.
@@ -32,7 +32,7 @@ type LearningPillar struct {
 //   - 35 % memory diversity (4 distinct types: fact, action, preference, …)
 //   - 30 % memory volume (15 accepted memories total)
 //   - 20 % connector breadth (3 distinct connector domains actively ingesting:
-//                             mail / notes / files / …)
+//     mail / notes / files / …)
 //   - 15 % chat engagement (50 chat-sent interactions)
 //
 // Phase 3 will introduce a "feedback signals" pillar and reweight; phase 4
@@ -43,16 +43,24 @@ const (
 	pillarKeyMemoryVolume    = "memory_volume"
 	pillarKeyConnectors      = "connector_breadth"
 	pillarKeyChatEngagement  = "chat_engagement"
+	pillarKeyDecisions       = "decisions_confirmed"
+	pillarKeyContradictions  = "contradictions_resolved"
 
 	targetMemoryDiversity = 4
 	targetMemoryVolume    = 15
 	targetConnectors      = 3
 	targetChatMessages    = 50
+	targetDecisions       = 10
+	targetContradictions  = 8
 
-	weightMemoryDiversity = 0.35
-	weightMemoryVolume    = 0.30
-	weightConnectors      = 0.20
-	weightChatEngagement  = 0.15
+	// Weights sum to 1.0. The two psyché-feedback pillars (decisions/contradictions)
+	// carry real weight so the gauge visibly rewards the user's judgement.
+	weightMemoryDiversity = 0.20
+	weightMemoryVolume    = 0.20
+	weightConnectors      = 0.15
+	weightChatEngagement  = 0.10
+	weightDecisions       = 0.20
+	weightContradictions  = 0.15
 )
 
 // LearningCalculator computes the learning-progress payload from store
@@ -90,6 +98,14 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 	if err != nil {
 		return LearningProgress{}, fmt.Errorf("chat engagement: %w", err)
 	}
+	decisions, err := c.db.CountStandingDecisions(ctx)
+	if err != nil {
+		return LearningProgress{}, fmt.Errorf("decisions confirmed: %w", err)
+	}
+	contradictions, err := c.db.CountDismissedContradictions(ctx)
+	if err != nil {
+		return LearningProgress{}, fmt.Errorf("contradictions resolved: %w", err)
+	}
 
 	pillars := []LearningPillar{
 		{
@@ -123,6 +139,22 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 			Current:  chats,
 			Target:   targetChatMessages,
 			Weight:   weightChatEngagement,
+		},
+		{
+			Key:      pillarKeyDecisions,
+			Label:    "Decisions confirmed",
+			Progress: progressRatio(decisions, targetDecisions),
+			Current:  decisions,
+			Target:   targetDecisions,
+			Weight:   weightDecisions,
+		},
+		{
+			Key:      pillarKeyContradictions,
+			Label:    "Contradictions resolved",
+			Progress: progressRatio(contradictions, targetContradictions),
+			Current:  contradictions,
+			Target:   targetContradictions,
+			Weight:   weightContradictions,
 		},
 	}
 
@@ -181,6 +213,10 @@ func nextStep(pillars []LearningPillar) (string, string) {
 		return lowest.Key, "Connect another source — calendar, mail, or a notes folder."
 	case pillarKeyChatEngagement:
 		return lowest.Key, "Chat more so Hygur learns the questions you actually ask."
+	case pillarKeyDecisions:
+		return lowest.Key, "Confirm a decision Hygur surfaced — it learns what's settled for you."
+	case pillarKeyContradictions:
+		return lowest.Key, "Resolve a flagged contradiction — your call teaches Hygur the truth."
 	}
 	return lowest.Key, "Keep using Hygur — the gauge will catch up."
 }
