@@ -169,6 +169,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("retrieval.entity_synonymy", true)
 	v.SetDefault("retrieval.entity_synonymy_threshold", 0.60)
 	v.SetDefault("retrieval.hebbian_expansion", false) // default registered so HYGUR_RETRIEVAL_HEBBIAN_EXPANSION env binds (like its siblings)
+	v.SetDefault("retrieval.salience_rerank", false)   // recycle of salience into SAIT ranking; env-bindable
 
 	// DailyBrief defaults — opt-in. 48 h window so the brief catches the last
 	// two days of activity rather than collapsing on a quiet 24 h.

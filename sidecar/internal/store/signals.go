@@ -183,6 +183,36 @@ GROUP BY em.content_id`, args...)
 	return out, connRows.Err()
 }
 
+// ItemSaliences batch-reads the stored composite salience for the given items
+// (absent = unscored, treated as 0 by the caller). Feeds the salience rerank lens.
+func (d *DB) ItemSaliences(ctx context.Context, contentIDs []string) (map[string]float64, error) {
+	out := make(map[string]float64, len(contentIDs))
+	if len(contentIDs) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(contentIDs))
+	args := make([]any, len(contentIDs))
+	for i, id := range contentIDs {
+		ph[i] = "?"
+		args[i] = id
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT content_id, salience FROM item_signals WHERE content_id IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid string
+		var sal float64
+		if err := rows.Scan(&cid, &sal); err != nil {
+			return nil, err
+		}
+		out[cid] = sal
+	}
+	return out, rows.Err()
+}
+
 // ItemSignal is one row of item_signals: the nightly consolidation scoring for an
 // item. Tier is "hot" (vectors kept) or "cold" (vectors evictable — Phase E).
 type ItemSignal struct {

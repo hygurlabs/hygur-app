@@ -194,6 +194,8 @@ type UnifiedSearcher struct {
 	// P-2 attention re-score (off by default): a small boost for often/recently-used
 	// items, read from the item_access bus.
 	useAttentionRerank bool
+	// useSalienceRerank boosts by the composite item_signals.salience (recycle).
+	useSalienceRerank bool
 
 	// P-2 imminence re-score (off by default): a small boost for items tied to an
 	// obligation due very soon. The imminent content-id set is supplied by a provider
@@ -225,6 +227,10 @@ type UnifiedSearcher struct {
 // SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
 // items). Off by default; a no-op until the item_access bus has data.
 func (us *UnifiedSearcher) SetAttentionRerank(on bool) { us.useAttentionRerank = on }
+
+// SetSalienceRerank toggles the composite-salience rerank lens — the recycle of the
+// importance signal into SAIT ranking. Off by default; no-op until items are scored.
+func (us *UnifiedSearcher) SetSalienceRerank(on bool) { us.useSalienceRerank = on }
 
 // SetHebbianExpansion enables Phase D associative expansion (fold entity_edges
 // co-occurrence neighbours into the entity lens). Off by default; a no-op until the
@@ -292,6 +298,7 @@ type RetrievalOptions struct {
 	EntitySynonymy          bool    // brick 2: embedding synonymy expansion
 	EntitySynonymyThreshold float64 // brick 2: min cosine (default 0.80 if <= 0)
 	HebbianExpansion        bool    // brick 3 (Phase D): fold entity_edges neighbours (default off)
+	SalienceRerank          bool    // recycle: boost results by composite item_signals.salience (default off)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -311,6 +318,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	us.useEntitySynonymy = opts.EntitySynonymy
 	us.entitySynonymyThreshold = opts.EntitySynonymyThreshold
 	us.useHebbianExpansion = opts.HebbianExpansion
+	us.useSalienceRerank = opts.SalienceRerank
 	if us.entitySynonymyThreshold <= 0 {
 		us.entitySynonymyThreshold = 0.80
 	}
@@ -896,6 +904,7 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	us.applyAuthorityRescore(results)
 	us.applyAttentionRescore(ctx, results) // P-2: attention nudges within the authority band
 	us.applyImminenceRescore(ctx, results) // P-2: imminent obligations nudge within the band
+	us.applySalienceRescore(ctx, results)  // recycle: composite-salience nudge (off by default)
 
 	// Apply TopK after freshness re-ranking.
 	if len(results) > req.TopK {

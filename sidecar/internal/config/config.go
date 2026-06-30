@@ -189,6 +189,11 @@ type RetrievalConfig struct {
 	// Requires EntityIndex. Default false; a no-op until the edge graph is populated
 	// (run /knowledge/backfill-entity-edges). Kill-switch: OFF = byte-identical retrieval.
 	HebbianExpansion bool `mapstructure:"hebbian_expansion" yaml:"hebbian_expansion,omitempty"`
+
+	// SalienceRerank boosts results by the composite item_signals.salience (the
+	// recycle of the importance signal into ranking). Bounded, boost-only, off by
+	// default; a no-op until the consolidation pass has scored items.
+	SalienceRerank bool `mapstructure:"salience_rerank" yaml:"salience_rerank,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.
