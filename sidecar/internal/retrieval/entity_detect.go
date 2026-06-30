@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"log"
 	"strings"
 	"unicode"
 
@@ -84,4 +85,36 @@ func detectQuerySubject(ctx context.Context, db *store.DB, query string) (string
 		}
 	}
 	return chosen, nil
+}
+
+// applyEntityConsolidation (brick 2a) unions the subject entity's literal/claim-grounded
+// items (EntitySearch — LIKE + entity index) into the semantic fusion results, so the
+// FULL connected set surfaces: a query about a subject pulls everything that mentions it,
+// not just the cosine-close chunks. Append-only (never drops a semantic hit). Order is a
+// later refinement (chronology, brick 2c). Deterministic; no LLM.
+func (us *UnifiedSearcher) applyEntityConsolidation(ctx context.Context, results *[]UnifiedResult, entity string) {
+	if us.store == nil || strings.TrimSpace(entity) == "" {
+		return
+	}
+	er, err := EntitySearch(ctx, us.store, &QueryIntent{Entity: entity},
+		EntitySearchOptions{TopK: 40, UseEntityIndex: us.useEntityIndex})
+	if err != nil || len(er) == 0 {
+		return
+	}
+	have := make(map[string]bool, len(*results))
+	for i := range *results {
+		have[(*results)[i].ContentID] = true
+	}
+	added := 0
+	for _, r := range er {
+		if r.ContentID == "" || have[r.ContentID] {
+			continue
+		}
+		have[r.ContentID] = true
+		*results = append(*results, r)
+		added++
+	}
+	if added > 0 {
+		log.Printf("[entity-consolidation] +%d connected items for subject=%q", added, entity)
+	}
 }

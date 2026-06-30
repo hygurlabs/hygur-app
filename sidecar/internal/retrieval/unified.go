@@ -466,13 +466,14 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	// already elapsed; the channel close lets us continue immediately.
 	<-llmIntentDone
 
-	// Deterministic entity consolidation: when the query names a known entity and the
-	// LLM classifier didn't already route to one, anchor on it via the same entity
-	// lens — triggered by the index, NO LLM. Off by default (kill-switch).
-	if us.useEntityConsolidation && us.store != nil &&
-		(llmIntent == nil || llmIntent.Category != IntentFactualEntity) {
+	// Deterministic entity consolidation (brick 2a): detect a known subject entity in
+	// the query (index match, NO LLM). We do NOT take the entity early-return — we let
+	// the semantic fusion run, then union the subject's literal items afterward, so the
+	// full connected set (semantic + literal) surfaces. Off by default (kill-switch).
+	var consolidationEntity string
+	if us.useEntityConsolidation && us.store != nil {
 		if ent, derr := detectQuerySubject(ctx, us.store, req.Query); derr == nil && ent != "" {
-			llmIntent = &QueryIntent{Category: IntentFactualEntity, Entity: ent}
+			consolidationEntity = ent
 			log.Printf("[entity-consolidation] deterministic subject=%q", ent)
 		}
 	}
@@ -914,6 +915,12 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 		results, knowledgeCount, mailCount = enrich(false)
 	}
 
+	// Entity consolidation (brick 2a): union the subject's connected items into the
+	// semantic results before ranking/cap, so the full "about X" set surfaces.
+	if us.useEntityConsolidation && consolidationEntity != "" {
+		us.applyEntityConsolidation(ctx, &results, consolidationEntity)
+	}
+
 	// Re-sort by final score (scoring may have reordered results).
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 
@@ -926,9 +933,14 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	us.applyImminenceRescore(ctx, results) // P-2: imminent obligations nudge within the band
 	us.applySalienceRescore(ctx, results)  // recycle: composite-salience nudge (off by default)
 
-	// Apply TopK after freshness re-ranking.
-	if len(results) > req.TopK {
-		results = results[:req.TopK]
+	// Apply TopK after freshness re-ranking — widen for entity consolidation so the
+	// connected set isn't truncated below the query's own top_k.
+	topKEff := req.TopK
+	if consolidationEntity != "" && topKEff < 20 {
+		topKEff = 20
+	}
+	if len(results) > topKEff {
+		results = results[:topKEff]
 	}
 
 	// Normalize top → 1.0 for interpretable scores.
