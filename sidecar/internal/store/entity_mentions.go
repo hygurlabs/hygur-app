@@ -136,3 +136,28 @@ func (d *DB) EntityNormsMatching(ctx context.Context, norms []string) (map[strin
 	}
 	return out, rows.Err()
 }
+
+// EntityAttributeCounts returns the attribute → mention-count distribution for one
+// entity norm. Used to label a subject by its dominant NER tag (person/org/project/
+// topic) in an Engram dossier; a norm seen only via claims has no ner_* attribute.
+func (d *DB) EntityAttributeCounts(ctx context.Context, norm string) (map[string]int, error) {
+	out := make(map[string]int)
+	if d == nil || d.db == nil || strings.TrimSpace(norm) == "" {
+		return out, nil
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT attribute, COUNT(*) FROM entity_mentions WHERE entity_norm = ? GROUP BY attribute`, norm)
+	if err != nil {
+		return nil, fmt.Errorf("entity attribute counts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var attr string
+		var c int
+		if err := rows.Scan(&attr, &c); err != nil {
+			return nil, err
+		}
+		out[attr] = c
+	}
+	return out, rows.Err()
+}

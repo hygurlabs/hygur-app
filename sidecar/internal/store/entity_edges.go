@@ -70,10 +70,18 @@ ON CONFLICT(entity_a, entity_b) DO UPDATE SET co_count = co_count + 1, last_co_a
 	return tx.Commit()
 }
 
-// HebbianNeighbors returns the entity norms most strongly co-occurring with `norm`,
-// ranked by recency-decayed weight: weight = co_count · exp(-ln2 · ageDays / HL).
+// Neighbor is a Hebbian co-occurrence neighbor with its recency-decayed edge weight
+// (weight = co_count · exp(-ln2 · ageDays / HL)). Exposed where the connection
+// strength matters — e.g. down-weighting 2nd-order items in an Engram dossier.
+type Neighbor struct {
+	Norm   string  `json:"norm"`
+	Weight float64 `json:"weight"`
+}
+
+// HebbianNeighborsWeighted returns the entities most strongly co-occurring with `norm`,
+// each with its recency-decayed weight (weight = co_count · exp(-ln2 · ageDays / HL)).
 // Only neighbors with weight ≥ minWeight are returned, top `max` by weight (§3.3).
-func (d *DB) HebbianNeighbors(ctx context.Context, norm string, now time.Time, minWeight float64, max int) ([]string, error) {
+func (d *DB) HebbianNeighborsWeighted(ctx context.Context, norm string, now time.Time, minWeight float64, max int) ([]Neighbor, error) {
 	if strings.TrimSpace(norm) == "" {
 		return nil, nil
 	}
@@ -87,11 +95,7 @@ FROM entity_edges WHERE entity_a = ? OR entity_b = ?`, norm, norm, norm)
 		return nil, err
 	}
 	defer rows.Close()
-	type cand struct {
-		norm   string
-		weight float64
-	}
-	var cands []cand
+	var cands []Neighbor
 	for rows.Next() {
 		var other, lastCo string
 		var coCount int
@@ -105,19 +109,29 @@ FROM entity_edges WHERE entity_a = ? OR entity_b = ?`, norm, norm, norm)
 			}
 		}
 		if w >= minWeight {
-			cands = append(cands, cand{other, w})
+			cands = append(cands, Neighbor{Norm: other, Weight: w})
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].weight > cands[j].weight })
+	sort.Slice(cands, func(i, j int) bool { return cands[i].Weight > cands[j].Weight })
 	if len(cands) > max {
 		cands = cands[:max]
 	}
-	out := make([]string, len(cands))
-	for i, c := range cands {
-		out[i] = c.norm
+	return cands, nil
+}
+
+// HebbianNeighbors returns just the neighbor norms (weights dropped), top `max` by
+// weight — the common case for spreading-activation expansion.
+func (d *DB) HebbianNeighbors(ctx context.Context, norm string, now time.Time, minWeight float64, max int) ([]string, error) {
+	ns, err := d.HebbianNeighborsWeighted(ctx, norm, now, minWeight, max)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(ns))
+	for i, n := range ns {
+		out[i] = n.Norm
 	}
 	return out, nil
 }

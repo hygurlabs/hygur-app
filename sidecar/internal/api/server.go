@@ -47,6 +47,7 @@ type Server struct {
 	briefHandler         *handlers.BriefHandler
 	chronicleHandler     *handlers.ChronicleHandler
 	consolidationHandler *handlers.ConsolidationHandler
+	engramHandler        *handlers.EngramHandler
 	timelineHandler      *handlers.TimelineHandler
 	agendaHandler        *handlers.AgendaHandler
 	configHandler        *handlers.ConfigHandler
@@ -248,6 +249,19 @@ func (s *Server) handleConsolidationFeatureMatrix(w http.ResponseWriter, r *http
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "consolidation handler not configured")
+}
+
+// SetEngramHandler sets the Engram dossier handler (the subject-memory read).
+func (s *Server) SetEngramHandler(handler *handlers.EngramHandler) {
+	s.engramHandler = handler
+}
+
+func (s *Server) handleEngramDossier(w http.ResponseWriter, r *http.Request) {
+	if s.engramHandler != nil {
+		s.engramHandler.Dossier(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "engram handler not configured")
 }
 
 func (s *Server) handleChronicleClose(w http.ResponseWriter, r *http.Request) {

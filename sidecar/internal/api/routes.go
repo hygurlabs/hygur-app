@@ -198,6 +198,12 @@ func (s *Server) setupRoutes() {
 			r.Get("/feature-matrix", s.handleConsolidationFeatureMatrix)       // per-item inputs + proxies for offline ablation
 		})
 
+		// Engrams — per-subject consolidated dossier (Hebbian network + strength-ordered
+		// timeline + live/dead decisions/contradictions). Deterministic read; no LLM.
+		r.Route("/engrams", func(r chi.Router) {
+			r.Get("/{norm}", s.handleEngramDossier)
+		})
+
 		// Mail endpoints
 		r.Route("/mail", func(r chi.Router) {
 			r.Get("/sources", s.handleMailSources)
