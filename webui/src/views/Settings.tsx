@@ -62,7 +62,7 @@ function GaugeRow({
         <span className="font-medium">{label}</span>
         <span className={`tabular-nums ${over ? "font-semibold text-danger" : "text-muted"}`}>
           {f(used)} / {f(budget)}
-          {over && " — over budget"}
+          {over && " — budget dépassé"}
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-border">
@@ -139,22 +139,22 @@ function ConnectionSection() {
   };
 
   return (
-    <Section title="Connection">
+    <Section title="Connexion">
       <Row
         label="Mode"
         hint={
           remote
-            ? `Remote — ${initial.endpoint}`
-            : "Local — served by the sidecar on this machine"
+            ? `Distant — ${initial.endpoint}`
+            : "Local — servi par le sidecar sur cette machine"
         }
       >
         {remote && (
           <Button variant="ghost" onClick={disconnect}>
-            Disconnect
+            Déconnecter
           </Button>
         )}
       </Row>
-      <Row label="Server endpoint" hint="Empty = local sidecar. e.g. https://app.hygur.eu">
+      <Row label="Adresse du serveur" hint="Vide = sidecar local. ex. https://app.hygur.eu">
         <TextInput
           value={endpoint}
           spellCheck={false}
@@ -164,7 +164,7 @@ function ConnectionSection() {
           className="w-64"
         />
       </Row>
-      <Row label="API key" hint="Sent as X-Hygur-Token. Stored on this device only.">
+      <Row label="Clé API" hint="Envoyée comme X-Hygur-Token. Stockée uniquement sur cet appareil.">
         <TextInput
           type="password"
           value={key}
@@ -174,9 +174,9 @@ function ConnectionSection() {
           className="w-64"
         />
       </Row>
-      <Row label="Apply">
+      <Row label="Appliquer">
         <Button onClick={connect} disabled={!endpoint.trim()}>
-          {remote ? "Update & reconnect" : "Connect"}
+          {remote ? "Mettre à jour et reconnecter" : "Connecter"}
         </Button>
       </Row>
     </Section>
@@ -214,17 +214,17 @@ function EngineModeSection() {
 
   const cloud = cfg?.mode === "cloud";
   return (
-    <Section title="Engine mode">
+    <Section title="Mode moteur">
       <Row
         label="Mode"
         hint={
           cloud
-            ? `Hygur Cloud — ${cfg?.server || "not set"}`
-            : "Local — full engine on this Mac"
+            ? `Hygur Cloud — ${cfg?.server || "non défini"}`
+            : "Local — moteur complet sur ce Mac"
         }
       >
         <Button variant="ghost" onClick={() => setPicker(true)}>
-          {cloud ? "Reconfigure" : "Switch…"}
+          {cloud ? "Reconfigurer" : "Changer…"}
         </Button>
       </Row>
     </Section>
@@ -245,33 +245,33 @@ function BillingSection() {
   const b = q.data;
   const label =
     b.status === "active"
-      ? "Active"
+      ? "Actif"
       : b.status === "trialing"
-        ? "Trial"
+        ? "Essai"
         : b.status === "past_due"
-          ? "Payment due"
+          ? "Paiement dû"
           : b.status === "canceled"
-            ? "Canceled"
+            ? "Annulé"
             : b.status;
   const until = b.valid_until
-    ? ` · ${b.active ? "renews" : "ends"} ${new Date(b.valid_until).toLocaleDateString()}`
+    ? ` · ${b.active ? "renouvellement le" : "fin le"} ${new Date(b.valid_until).toLocaleDateString()}`
     : "";
   return (
-    <Section title="Billing">
-      <Row label="Plan" hint={`Hygur Cloud — Personal${until}`}>
+    <Section title="Facturation">
+      <Row label="Forfait" hint={`Hygur Cloud — Personnel${until}`}>
         <span className={`text-[13px] font-medium ${b.active ? "text-green-600" : "text-danger"}`}>
           {label}
         </span>
       </Row>
       {b.portal_url && (
-        <Row label="Subscription" hint="Update payment method, download invoices, or cancel.">
+        <Row label="Abonnement" hint="Modifier le moyen de paiement, télécharger les factures ou annuler.">
           <a
             href={b.portal_url}
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
           >
-            Manage
+            Gérer
           </a>
         </Row>
       )}
@@ -291,24 +291,24 @@ function PasskeySecuritySection() {
   const supported = passkeysSupported();
   const has = (count ?? 0) > 0;
   return (
-    <Section title="Security">
+    <Section title="Sécurité">
       <Row
-        label={has ? "Passkey active" : "Passkey"}
+        label={has ? "Clé d'accès active" : "Clé d'accès"}
         hint={
           supported
-            ? "Add a passkey (Face ID, Touch ID, or your device PIN) to sign in from any device — not just this browser."
-            : "Passkeys aren't supported on this browser."
+            ? "Ajoutez une clé d'accès (Face ID, Touch ID ou le code de votre appareil) pour vous connecter depuis n'importe quel appareil — pas seulement ce navigateur."
+            : "Les clés d'accès ne sont pas prises en charge sur ce navigateur."
         }
       >
         {!supported ? (
-          <span className="text-[12.5px] text-faint">unsupported</span>
+          <span className="text-[12.5px] text-faint">non pris en charge</span>
         ) : (
           <Button
             variant={has ? "ghost" : undefined}
             onClick={() => void add()}
             disabled={busy || !ready}
           >
-            {busy ? "Adding…" : has ? "Add another" : "Add a passkey"}
+            {busy ? "Ajout…" : has ? "En ajouter une autre" : "Ajouter une clé d'accès"}
           </Button>
         )}
       </Row>
@@ -393,10 +393,10 @@ export function Settings() {
   if (isLoading || !draft) {
     return (
       <Page>
-        <PageHeader title="Settings" />
+        <PageHeader title="Réglages" />
         {error ? (
           <ErrorBanner
-            message={`Couldn't load settings: ${(error as Error).message}`}
+            message={`Impossible de charger les réglages : ${(error as Error).message}`}
             onRetry={() => refetch()}
           />
         ) : (
@@ -419,11 +419,11 @@ export function Settings() {
   return (
     <Page>
       <PageHeader
-        title="Settings"
-        subtitle="Everything runs locally. Changes are saved to the sidecar."
+        title="Réglages"
+        subtitle="Tout fonctionne en local. Les modifications sont enregistrées dans le sidecar."
         actions={
           <Button onClick={() => save.mutate(draft)} disabled={!dirty || save.isPending}>
-            {save.isPending ? "Saving…" : "Save"}
+            {save.isPending ? "Enregistrement…" : "Enregistrer"}
           </Button>
         }
       />
@@ -431,7 +431,7 @@ export function Settings() {
       <PasskeyBanner variant="settings" />
 
       {save.error && (
-        <ErrorBanner message={`Couldn't save: ${(save.error as Error).message}`} />
+        <ErrorBanner message={`Impossible d'enregistrer : ${(save.error as Error).message}`} />
       )}
 
       {/* Connection (endpoint + device key) is an advanced/self-host control; in a
@@ -443,8 +443,8 @@ export function Settings() {
       {/* In a managed cloud tenant the AI runtime is operator-controlled and
           redacted server-side — hide the editor entirely. */}
       {!draft.managed && (
-      <Section title="AI runtime">
-        <Row label="Inference URL" hint="OpenAI-compatible chat endpoint (LM Studio, vLLM…)">
+      <Section title="Moteur IA">
+        <Row label="URL d'inférence" hint="Point de terminaison de chat compatible OpenAI (LM Studio, vLLM…)">
           <TextInput
             value={draft.lm_studio.url}
             onChange={(e) => set("lm_studio", { url: e.target.value })}
@@ -452,11 +452,11 @@ export function Settings() {
           />
         </Row>
         <Row
-          label="API key"
+          label="Clé API"
           hint={
             draft.lm_studio.api_key_set
-              ? "A key is saved. Type a new one to replace it, or leave empty to keep it."
-              : "Only for hosted providers (Mistral, OpenAI…). Local runtimes need none."
+              ? "Une clé est enregistrée. Saisissez-en une nouvelle pour la remplacer, ou laissez vide pour la conserver."
+              : "Uniquement pour les fournisseurs hébergés (Mistral, OpenAI…). Les moteurs locaux n'en ont pas besoin."
           }
         >
           <TextInput
@@ -464,47 +464,47 @@ export function Settings() {
             value={apiKey}
             autoComplete="off"
             spellCheck={false}
-            placeholder={draft.lm_studio.api_key_set ? "•••••••• (saved)" : "sk-…"}
+            placeholder={draft.lm_studio.api_key_set ? "•••••••• (enregistré)" : "sk-…"}
             onChange={(e) => setApiKey(e.target.value)}
             className="w-64"
           />
         </Row>
-        <Row label="Embedding URL" hint="Leave empty to reuse the inference URL">
+        <Row label="URL d'embedding" hint="Laissez vide pour réutiliser l'URL d'inférence">
           <TextInput
             value={draft.lm_studio.embedding_url}
             onChange={(e) => set("lm_studio", { embedding_url: e.target.value })}
             className="w-64"
           />
         </Row>
-        <Row label="Indexing URL" hint="Fast small model for ingestion-time extraction (empty = inference URL)">
+        <Row label="URL d'indexation" hint="Petit modèle rapide pour l'extraction lors de l'ingestion (vide = URL d'inférence)">
           <TextInput
             value={draft.lm_studio.indexing_url}
             onChange={(e) => set("lm_studio", { indexing_url: e.target.value })}
             className="w-64"
           />
         </Row>
-        <Row label="Chat model">
+        <Row label="Modèle de chat">
           <TextInput
             value={draft.lm_studio.model_default}
             onChange={(e) => set("lm_studio", { model_default: e.target.value })}
             className="w-64"
           />
         </Row>
-        <Row label="Indexing model" hint="Small model used during ingestion (empty = chat model)">
+        <Row label="Modèle d'indexation" hint="Petit modèle utilisé pendant l'ingestion (vide = modèle de chat)">
           <TextInput
             value={draft.lm_studio.model_indexing}
             onChange={(e) => set("lm_studio", { model_indexing: e.target.value })}
             className="w-64"
           />
         </Row>
-        <Row label="Embedding model">
+        <Row label="Modèle d'embedding">
           <TextInput
             value={draft.lm_studio.embedding_model}
             onChange={(e) => set("lm_studio", { embedding_model: e.target.value })}
             className="w-64"
           />
         </Row>
-        <Row label="Embedding max tokens" hint="Per-input cap before the embedding call">
+        <Row label="Tokens max par embedding" hint="Plafond par entrée avant l'appel d'embedding">
           <TextInput
             type="number"
             value={String(draft.lm_studio.embedding_max_tokens)}
@@ -515,8 +515,8 @@ export function Settings() {
           />
         </Row>
         <Row
-          label="Embedding batch size"
-          hint="Chunks per request during indexing — higher = faster (lower if your server rejects big batches)"
+          label="Taille de lot d'embedding"
+          hint="Fragments par requête pendant l'indexation — plus élevé = plus rapide (réduisez si votre serveur rejette les gros lots)"
         >
           <TextInput
             type="number"
@@ -530,21 +530,21 @@ export function Settings() {
       </Section>
       )}
 
-      <Section title="Briefings">
-        <Row label="Daily brief" hint="Generate a morning digest of recent activity">
+      <Section title="Synthèses">
+        <Row label="Synthèse quotidienne" hint="Générer un condensé matinal de l'activité récente">
           <Toggle
             checked={draft.daily_brief.enabled}
             onChange={(v) => set("daily_brief", { enabled: v })}
           />
         </Row>
-        <Row label="Hour" hint="Local time, HH:MM">
+        <Row label="Heure" hint="Heure locale, HH:MM">
           <TextInput
             value={draft.daily_brief.hour_local}
             onChange={(e) => set("daily_brief", { hour_local: e.target.value })}
             className="w-24"
           />
         </Row>
-        <Row label="Lookback hours">
+        <Row label="Heures d'historique">
           <TextInput
             type="number"
             value={String(draft.daily_brief.lookback_hours)}
@@ -558,20 +558,20 @@ export function Settings() {
 
       {/* Retrieval tuning is a power-user/debug knob — hide on a managed tenant. */}
       {!draft.managed && (
-      <Section title="Retrieval">
-        <Row label="LLM intent classifier" hint="Slower, sometimes sharper routing">
+      <Section title="Récupération">
+        <Row label="Classifieur d'intention LLM" hint="Plus lent, parfois plus précis">
           <Toggle
             checked={draft.retrieval.use_llm_intent}
             onChange={(v) => set("retrieval", { use_llm_intent: v })}
           />
         </Row>
-        <Row label="Relevance judge" hint="Post-filter weak results (adds latency)">
+        <Row label="Juge de pertinence" hint="Filtre les résultats faibles a posteriori (ajoute de la latence)">
           <Toggle
             checked={draft.retrieval.use_judge}
             onChange={(v) => set("retrieval", { use_judge: v })}
           />
         </Row>
-        <Row label="Temporal scoring">
+        <Row label="Score temporel">
           <select
             value={draft.retrieval.temporal_scoring_mode || "additive"}
             onChange={(e) =>
@@ -586,10 +586,10 @@ export function Settings() {
       </Section>
       )}
 
-      <Section title="Mail">
+      <Section title="Courrier">
         <Row
-          label="Prune deleted mail"
-          hint="On a full sync, remove from the knowledge base mail deleted on the server"
+          label="Élaguer les courriers supprimés"
+          hint="Lors d'une synchronisation complète, retirer de la base de connaissances les courriers supprimés sur le serveur"
         >
           <Toggle
             checked={draft.mail.reconcile_deletions}
@@ -600,8 +600,8 @@ export function Settings() {
 
       {/* Log level is a debug control — hide on a managed tenant. */}
       {!draft.managed && (
-      <Section title="Logging">
-        <Row label="Log level">
+      <Section title="Journalisation">
+        <Row label="Niveau de journalisation">
           <select
             value={draft.logging.level || "info"}
             onChange={(e) => set("logging", { level: e.target.value })}
@@ -621,21 +621,21 @@ export function Settings() {
       {/* Managed cloud: subscription management + invoices + cancellation (which
           drives account deletion via Stripe → the reaper). */}
       {draft.managed && (
-        <Section title="Subscription & data">
+        <Section title="Abonnement et données">
           {draft.instance_name && (
-            <Row label="Instance name" hint="You sign in with this name and your passkey. Keep it handy in case you ever lose access.">
+            <Row label="Nom de l'instance" hint="Vous vous connectez avec ce nom et votre clé d'accès. Gardez-le à portée de main au cas où vous perdriez l'accès.">
               <span className="font-mono text-[13px] text-text">{draft.instance_name}</span>
             </Row>
           )}
           {draft.billing_portal_url && (
-            <Row label="Billing" hint="Manage your subscription, payment method, and monthly invoices.">
+            <Row label="Facturation" hint="Gérez votre abonnement, votre moyen de paiement et vos factures mensuelles.">
               <a
                 href={draft.billing_portal_url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-surface2"
               >
-                Open billing portal
+                Ouvrir le portail de facturation
               </a>
             </Row>
           )}
@@ -696,35 +696,35 @@ function EncryptionSection() {
   }
 
   return (
-    <Section title="Local encryption">
+    <Section title="Chiffrement local">
       {error && (
         <div className="px-4 pt-3">
           <ErrorBanner message={error} />
         </div>
       )}
       <Row
-        label={enabled ? "Database encrypted" : "Encrypt the local database"}
+        label={enabled ? "Base de données chiffrée" : "Chiffrer la base de données locale"}
         hint={
           enabled
             ? envManaged
-              ? "Encrypted at rest; the key is managed by the server."
-              : "Encrypted at rest (SQLCipher); the key is in your OS keychain."
-            : "Encrypt the knowledge base at rest. The key is stored in your OS keychain; migration runs on the next restart and keeps a backup."
+              ? "Chiffrée au repos ; la clé est gérée par le serveur."
+              : "Chiffrée au repos (SQLCipher) ; la clé se trouve dans le trousseau de votre OS."
+            : "Chiffrer la base de connaissances au repos. La clé est stockée dans le trousseau de votre OS ; la migration s'exécute au prochain redémarrage et conserve une sauvegarde."
         }
       >
         {isLoading ? (
           <span className="text-[12.5px] text-muted">…</span>
         ) : enabled ? (
-          <span className="text-[12.5px] font-medium text-accent">Encrypted ✓</span>
+          <span className="text-[12.5px] font-medium text-accent">Chiffrée ✓</span>
         ) : (
           <Button onClick={() => void onEnable()} disabled={busy}>
-            {busy ? "Enabling…" : "Encrypt…"}
+            {busy ? "Activation…" : "Chiffrer…"}
           </Button>
         )}
       </Row>
       {staged && (
         <div className="px-4 py-3 text-[12.5px] text-accent">
-          Encryption enabled — restart Hygur to migrate your database.
+          Chiffrement activé — redémarrez Hygur pour migrer votre base de données.
         </div>
       )}
     </Section>
@@ -785,27 +785,27 @@ function BackupSection() {
   }
 
   return (
-    <Section title="Database backup">
+    <Section title="Sauvegarde de la base">
       {error && (
         <div className="px-4 pt-3">
           <ErrorBanner message={error} />
         </div>
       )}
       <Row
-        label="Save a backup"
+        label="Enregistrer une sauvegarde"
         hint={
           isRemote()
-            ? "Downloads a consistent snapshot of your database (encryption preserved)."
-            : "Writes a consistent snapshot (encryption preserved) to your Downloads folder."
+            ? "Télécharge un instantané cohérent de votre base de données (chiffrement préservé)."
+            : "Écrit un instantané cohérent (chiffrement préservé) dans votre dossier Téléchargements."
         }
       >
         <Button onClick={() => void onBackup()} disabled={busy !== null}>
-          {busy === "backup" ? "Preparing…" : isRemote() ? "Download" : "Save backup"}
+          {busy === "backup" ? "Préparation…" : isRemote() ? "Télécharger" : "Enregistrer la sauvegarde"}
         </Button>
       </Row>
       <Row
-        label="Restore from a backup"
-        hint="Replaces the database on the next restart; the current one is kept as a backup."
+        label="Restaurer depuis une sauvegarde"
+        hint="Remplace la base de données au prochain redémarrage ; l'actuelle est conservée comme sauvegarde."
       >
         <input
           ref={fileRef}
@@ -819,17 +819,17 @@ function BackupSection() {
           onClick={() => fileRef.current?.click()}
           disabled={busy !== null}
         >
-          {busy === "restore" ? "Uploading…" : "Restore…"}
+          {busy === "restore" ? "Envoi…" : "Restaurer…"}
         </Button>
       </Row>
       {savedPath && (
         <div className="px-4 py-3 text-[12.5px] text-accent">
-          Backup saved to <span className="font-mono">{savedPath}</span>
+          Sauvegarde enregistrée dans <span className="font-mono">{savedPath}</span>
         </div>
       )}
       {staged && (
         <div className="px-4 py-3 text-[12.5px] text-accent">
-          Backup staged — restart Hygur to apply it.
+          Sauvegarde préparée — redémarrez Hygur pour l'appliquer.
         </div>
       )}
     </Section>
@@ -866,22 +866,22 @@ function ExportSection() {
   const tooShort = passphrase.length > 0 && passphrase.length < 8;
 
   return (
-    <Section title="Export your data">
+    <Section title="Exporter vos données">
       {error && (
         <div className="px-4 pt-3">
           <ErrorBanner message={error} />
         </div>
       )}
       <Row
-        label="Download an encrypted export"
-        hint="A zip of the notes and briefs Hygur produced (your emails and files stay on your device). Encrypted with the passphrase you set below — keep it safe, it's the only way to open the archive."
+        label="Télécharger un export chiffré"
+        hint="Un zip des notes et synthèses produites par Hygur (vos e-mails et fichiers restent sur votre appareil). Chiffré avec la phrase secrète définie ci-dessous — conservez-la précieusement, c'est le seul moyen d'ouvrir l'archive."
       >
         <div className="flex flex-col items-end gap-1.5">
           <input
             type="password"
             value={passphrase}
             onChange={(e) => setPassphrase(e.target.value)}
-            placeholder="Passphrase (min. 8 chars)"
+            placeholder="Phrase secrète (min. 8 caractères)"
             autoComplete="new-password"
             className="w-56 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm outline-none transition-colors focus:border-accent"
           />
@@ -889,18 +889,18 @@ function ExportSection() {
             onClick={() => void onExport()}
             disabled={busy || passphrase.length < 8}
           >
-            {busy ? "Preparing…" : "Export"}
+            {busy ? "Préparation…" : "Exporter"}
           </Button>
         </div>
       </Row>
       {tooShort && (
         <div className="px-4 pb-3 text-[12.5px] text-muted">
-          Use at least 8 characters.
+          Utilisez au moins 8 caractères.
         </div>
       )}
       {done && (
         <div className="px-4 py-3 text-[12.5px] text-accent">
-          Export downloaded. Decrypt it with your passphrase (see the hint).
+          Export téléchargé. Déchiffrez-le avec votre phrase secrète (voir l'indication).
         </div>
       )}
     </Section>
@@ -948,44 +948,45 @@ function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instan
   const canCancel = portalURL !== "";
   return (
     <div className="px-4 py-3">
-      <p className="text-[14px]">Delete my space</p>
+      <p className="text-[14px]">Supprimer mon espace</p>
       <p className="mt-0.5 text-[12.5px] text-muted">
-        Cancelling ends your subscription. Your access continues until the end of the paid period
-        (no refund). When it ends, your encryption key is destroyed immediately and the space is
-        permanently purged after 30 days. This cannot be undone.
+        L'annulation met fin à votre abonnement. Votre accès se poursuit jusqu'à la fin de la
+        période payée (sans remboursement). À son terme, votre clé de chiffrement est détruite
+        immédiatement et l'espace est définitivement purgé après 30 jours. Cette action est
+        irréversible.
       </p>
       <p className="mt-2 text-[12.5px] text-muted">
-        Want a copy? Export your data before you cancel.
+        Vous voulez une copie ? Exportez vos données avant d'annuler.
       </p>
       {instanceName ? (
         <p className="mt-2 text-[12.5px] text-muted">
-          To confirm, type your space name{" "}
+          Pour confirmer, saisissez le nom de votre espace{" "}
           <code className="select-all rounded bg-surface2 px-1.5 py-0.5 font-mono text-[12px] text-text">
             {instanceName}
           </code>{" "}
-          below.
+          ci-dessous.
         </p>
       ) : (
         <p className="mt-2 text-[12.5px] text-muted">
-          To confirm, type{" "}
+          Pour confirmer, saisissez{" "}
           <code className="select-all rounded bg-surface2 px-1.5 py-0.5 font-mono text-[12px] text-text">
             DELETE
           </code>{" "}
-          below.
+          ci-dessous.
         </p>
       )}
       <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
-          placeholder={`Type "${expected}" to confirm`}
+          placeholder={`Saisissez « ${expected} » pour confirmer`}
           spellCheck={false}
           autoCapitalize="off"
           className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-[13px] outline-none focus:border-danger"
         />
         {!canCancel ? (
           <span className="shrink-0 cursor-not-allowed rounded-lg border border-border px-3 py-1.5 text-center text-[13px] font-medium text-faint">
-            Available at launch
+            Disponible au lancement
           </span>
         ) : matched ? (
           <a
@@ -994,11 +995,11 @@ function DeleteSpaceRow({ portalURL, instanceName }: { portalURL: string; instan
             rel="noopener noreferrer"
             className="shrink-0 rounded-lg border border-danger/50 bg-danger/10 px-3 py-1.5 text-center text-[13px] font-medium text-danger hover:bg-danger/20"
           >
-            Cancel &amp; delete
+            Annuler et supprimer
           </a>
         ) : (
           <span className="shrink-0 cursor-not-allowed rounded-lg border border-border px-3 py-1.5 text-center text-[13px] font-medium text-faint">
-            Cancel &amp; delete
+            Annuler et supprimer
           </span>
         )}
       </div>
@@ -1027,9 +1028,9 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
 
   if (!data || !price) {
     return (
-      <Section title="Token usage & cost">
-        <Row label="Usage">
-          <span className="text-[12.5px] text-faint">loading…</span>
+      <Section title="Utilisation et coût des tokens">
+        <Row label="Utilisation">
+          <span className="text-[12.5px] text-faint">Chargement…</span>
         </Row>
       </Section>
     );
@@ -1045,9 +1046,9 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
     ((p.embedding + p.indexing) / 1e6) * price.ingest_per_1m;
 
   const periods: { key: keyof TokenUsageResponse["periods"]; label: string }[] = [
-    { key: "today", label: "Today" },
-    { key: "this_week", label: "This week" },
-    { key: "this_month", label: "This month" },
+    { key: "today", label: "Aujourd'hui" },
+    { key: "this_week", label: "Cette semaine" },
+    { key: "this_month", label: "Ce mois-ci" },
   ];
   const dirty = JSON.stringify(price) !== JSON.stringify(data.pricing);
 
@@ -1076,45 +1077,45 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
     const g = gauge(usedWk, budgetWk);
     const pct = Math.round(g.pct * 100);
     return (
-      <Section title="Usage">
+      <Section title="Utilisation">
         <div className="px-4 pb-4 pt-3">
           <div className="mb-1.5 flex items-baseline justify-between text-[12px]">
-            <span className="font-medium">This week</span>
+            <span className="font-medium">Cette semaine</span>
             <span className={`tabular-nums ${g.over ? "font-semibold text-danger" : "text-muted"}`}>
-              {pct}% used
+              {pct}% utilisé
             </span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-border">
             <div className={`h-full rounded-full ${g.color}`} style={{ width: `${g.pct * 100}%` }} />
           </div>
-          <p className="mt-2 text-[11.5px] text-faint">Resets weekly. Your plan covers normal daily use.</p>
+          <p className="mt-2 text-[11.5px] text-faint">Réinitialisé chaque semaine. Votre forfait couvre un usage quotidien normal.</p>
         </div>
       </Section>
     );
   }
 
   return (
-    <Section title="Token usage & cost">
+    <Section title="Utilisation et coût des tokens">
       <div className="px-4 pb-1 pt-3">
         <div className="mb-1 flex items-baseline justify-between">
-          <span className="text-[12px] font-medium">This week's budget</span>
+          <span className="text-[12px] font-medium">Budget de la semaine</span>
           <span className="text-[11px] text-faint">
-            caps: {fmtTok(MONTHLY_IN)} IN · {fmtTok(MONTHLY_OUT)} OUT / month
+            plafonds : {fmtTok(MONTHLY_IN)} IN · {fmtTok(MONTHLY_OUT)} OUT / mois
           </span>
         </div>
-        <GaugeRow label="Input" used={wk.total_in} budget={weekBudget(MONTHLY_IN)} {...inG} />
-        <GaugeRow label="Output" used={wk.total_out} budget={weekBudget(MONTHLY_OUT)} {...outG} />
+        <GaugeRow label="Entrée" used={wk.total_in} budget={weekBudget(MONTHLY_IN)} {...inG} />
+        <GaugeRow label="Sortie" used={wk.total_out} budget={weekBudget(MONTHLY_OUT)} {...outG} />
       </div>
       <div className="overflow-x-auto px-4 py-3">
         <table className="w-full text-[13px]">
           <thead>
             <tr className="text-[11px] uppercase tracking-wide text-faint">
-              <th className="pb-2 text-left font-medium">Period</th>
+              <th className="pb-2 text-left font-medium">Période</th>
               <th className="pb-2 text-right font-medium">Chat IN</th>
               <th className="pb-2 text-right font-medium">Chat OUT</th>
               <th className="pb-2 text-right font-medium">Embeddings</th>
-              <th className="pb-2 text-right font-medium">Indexing</th>
-              <th className="pb-2 text-right font-medium">Cost</th>
+              <th className="pb-2 text-right font-medium">Indexation</th>
+              <th className="pb-2 text-right font-medium">Coût</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -1137,21 +1138,21 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
         </table>
       </div>
 
-      <Row label="Chat IN price" hint={`Per 1M tokens (${cur})`}>
+      <Row label="Prix Chat IN" hint={`Par 1M tokens (${cur})`}>
         <PriceField
           value={price.chat_in_per_1m}
           onChange={(n) => setPrice({ ...price, chat_in_per_1m: n })}
         />
       </Row>
-      <Row label="Chat OUT price" hint={`Per 1M tokens (${cur})`}>
+      <Row label="Prix Chat OUT" hint={`Par 1M tokens (${cur})`}>
         <PriceField
           value={price.chat_out_per_1m}
           onChange={(n) => setPrice({ ...price, chat_out_per_1m: n })}
         />
       </Row>
       <Row
-        label="Embeddings & indexing price"
-        hint={`Per 1M tokens (${cur}) — applied to both`}
+        label="Prix embeddings et indexation"
+        hint={`Par 1M tokens (${cur}) — appliqué aux deux`}
       >
         <PriceField
           value={price.ingest_per_1m}
@@ -1168,7 +1169,7 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
           onClick={() => save.mutate(price)}
           disabled={!dirty || save.isPending}
         >
-          {save.isPending ? "Saving…" : "Save prices"}
+          {save.isPending ? "Enregistrement…" : "Enregistrer les prix"}
         </Button>
       </div>
     </Section>
@@ -1178,9 +1179,9 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
 // MARK: - Native notification toggles (macOS UserDefaults via the prefs bridge)
 
 const NOTIF_TOGGLES: { key: string; label: string; hint: string }[] = [
-  { key: "notify.dailyBrief", label: "Daily brief", hint: "Notify when the morning brief is ready" },
-  { key: "notify.priorityMail", label: "Important mail", hint: "Notify on actionable incoming mail" },
-  { key: "notify.agendaAlerts", label: "Deadline alerts", hint: "Notify ahead of upcoming deadlines" },
+  { key: "notify.dailyBrief", label: "Synthèse quotidienne", hint: "Notifier quand la synthèse du matin est prête" },
+  { key: "notify.priorityMail", label: "Courrier important", hint: "Notifier à la réception de courriers à traiter" },
+  { key: "notify.agendaAlerts", label: "Alertes d'échéance", hint: "Notifier à l'approche des échéances" },
 ];
 
 // WebPushRow enrols the browser for Web Push (notifications when the tab is
@@ -1206,7 +1207,7 @@ function WebPushRow({ vapidPublicKey }: { vapidPublicKey: string }) {
       if (v) {
         const ok = await enablePush(vapidPublicKey);
         setOn(ok);
-        if (!ok) setMsg("Permission denied or unsupported on this browser.");
+        if (!ok) setMsg("Autorisation refusée ou non prise en charge sur ce navigateur.");
       } else {
         await disablePush();
         setOn(false);
@@ -1222,7 +1223,7 @@ function WebPushRow({ vapidPublicKey }: { vapidPublicKey: string }) {
     setMsg("");
     try {
       const r = await api.testPush();
-      setMsg(`Sent to ${r.sent} device(s) — check your notifications.`);
+      setMsg(`Envoyé à ${r.sent} appareil(s) — vérifiez vos notifications.`);
     } catch (e) {
       setMsg((e as Error).message);
     }
@@ -1231,13 +1232,13 @@ function WebPushRow({ vapidPublicKey }: { vapidPublicKey: string }) {
 
   return (
     <>
-      <Row label="Browser notifications" hint={msg || "Get your daily brief even when the tab is closed."}>
+      <Row label="Notifications du navigateur" hint={msg || "Recevez votre synthèse quotidienne même quand l'onglet est fermé."}>
         <Toggle checked={on} disabled={busy} onChange={(v) => void change(v)} />
       </Row>
       {on && (
-        <Row label="Test" hint="Send a test notification to this browser.">
+        <Row label="Test" hint="Envoyer une notification de test à ce navigateur.">
           <Button variant="ghost" onClick={() => void test()} disabled={busy}>
-            Send test
+            Envoyer un test
           </Button>
         </Row>
       )}
@@ -1263,16 +1264,16 @@ function ConnectPhoneSection() {
     setBusy(false);
   };
   return (
-    <Section title="Connect a phone">
+    <Section title="Connecter un téléphone">
       <Row
-        label="Add a device"
+        label="Ajouter un appareil"
         hint={
           err ||
-          "Scan with your phone's camera to sign in there — no typing. The code works once and expires in 10 minutes."
+          "Scannez avec l'appareil photo de votre téléphone pour vous y connecter — sans saisie. Le code fonctionne une fois et expire dans 10 minutes."
         }
       >
         <Button variant="ghost" onClick={() => void generate()} disabled={busy}>
-          {busy ? "Generating…" : url ? "New code" : "Show QR code"}
+          {busy ? "Génération…" : url ? "Nouveau code" : "Afficher le QR code"}
         </Button>
       </Row>
       {url && (
@@ -1319,8 +1320,8 @@ function NotificationsSection({ vapidPublicKey }: { vapidPublicKey: string }) {
     }
     return (
       <Section title="Notifications">
-        <Row label="Notifications" hint="Available in the Hygur desktop app.">
-          <span className="text-[12.5px] text-faint">desktop only</span>
+        <Row label="Notifications" hint="Disponible dans l'application de bureau Hygur.">
+          <span className="text-[12.5px] text-faint">bureau uniquement</span>
         </Row>
       </Section>
     );
@@ -1350,8 +1351,8 @@ function NotificationsSection({ vapidPublicKey }: { vapidPublicKey: string }) {
 
 const PERMS: { key: string; label: string }[] = [
   { key: "microphone", label: "Microphone" },
-  { key: "speech", label: "Speech recognition" },
-  { key: "calendar", label: "Calendar" },
+  { key: "speech", label: "Reconnaissance vocale" },
+  { key: "calendar", label: "Calendrier" },
   { key: "notifications", label: "Notifications" },
 ];
 
@@ -1378,7 +1379,7 @@ function PermissionsSection() {
   if (!native.available) return null;
 
   return (
-    <Section title="Permissions">
+    <Section title="Autorisations">
       {PERMS.map((p) => (
         <Row key={p.key} label={p.label}>
           <span className="inline-flex items-center gap-2 text-[12.5px] text-muted">

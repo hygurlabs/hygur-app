@@ -39,9 +39,9 @@ export function QuickCapture() {
           active={mode === "ask"}
           onClick={() => setMode("ask")}
           icon={MessageSquareText}
-          label="Ask"
+          label="Demander"
         />
-        <span className="ml-auto select-none text-[11px] text-faint">esc to close</span>
+        <span className="ml-auto select-none text-[11px] text-faint">échap pour fermer</span>
       </header>
       {mode === "note" ? <NotePane /> : <AskPane />}
     </div>
@@ -106,7 +106,7 @@ function NotePane() {
   const save = async () => {
     const content = text.trim();
     if (!content || saving) return;
-    const title = (content.split("\n")[0] ?? "").trim().slice(0, 80) || "Quick note";
+    const title = (content.split("\n")[0] ?? "").trim().slice(0, 80) || "Note rapide";
     setSaving(true);
     setError(null);
     try {
@@ -116,7 +116,7 @@ function NotePane() {
       window.setTimeout(() => setSaved(false), 2500);
       ref.current?.focus();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the note");
+      setError(e instanceof Error ? e.message : "Impossible d’enregistrer la note");
     } finally {
       setSaving(false);
     }
@@ -136,7 +136,7 @@ function NotePane() {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="Jot something down…"
+        placeholder="Notez quelque chose…"
         className="min-h-0 flex-1 resize-none rounded-lg border border-border bg-bg p-3 text-[14px] leading-relaxed outline-none focus:border-accent"
       />
       <div className="mt-2 flex items-center gap-3">
@@ -146,12 +146,12 @@ function NotePane() {
           className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-surface transition-opacity disabled:opacity-40"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          Save note
+          Enregistrer la note
         </button>
         <span className="flex items-center gap-1 text-[11px] text-faint">
-          <CornerDownLeft size={12} /> ⌘↵ to save
+          <CornerDownLeft size={12} /> ⌘↵ pour enregistrer
         </span>
-        {saved && <span className="text-[12px] text-accent">Saved ✓</span>}
+        {saved && <span className="text-[12px] text-accent">Enregistré ✓</span>}
         {error && <span className="text-[12px] text-danger">{error}</span>}
       </div>
     </div>
@@ -214,7 +214,7 @@ function AskPane() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask Hygur about your documents, mail, notes…"
+          placeholder="Interrogez Hygur sur vos documents, courriers, notes…"
           className="w-full resize-none rounded-lg border border-border bg-bg p-3 pr-10 text-[14px] leading-relaxed outline-none focus:border-accent"
         />
         <span className="pointer-events-none absolute right-3 top-3 flex items-center gap-1 text-[11px] text-faint">
@@ -231,9 +231,9 @@ function AskPane() {
         ) : answer ? (
           <div className="whitespace-pre-wrap">{answer}</div>
         ) : streaming ? (
-          <span className="text-muted">Thinking…</span>
+          <span className="text-muted">Réflexion…</span>
         ) : (
-          <span className="text-faint">Press ↵ to ask · ⇧↵ for a new line</span>
+          <span className="text-faint">Appuyez sur ↵ pour demander · ⇧↵ pour un saut de ligne</span>
         )}
       </div>
     </div>

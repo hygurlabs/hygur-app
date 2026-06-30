@@ -36,16 +36,16 @@ export function Contradictions() {
     filter === "conflict" ? conflicts : filter === "supersedes" ? evolutions : all;
 
   const TABS: { id: Filter; label: string; count: number }[] = [
-    { id: "all", label: "All", count: all.length },
-    { id: "conflict", label: "Conflicts", count: conflicts.length },
-    { id: "supersedes", label: "Evolutions", count: evolutions.length },
+    { id: "all", label: "Toutes", count: all.length },
+    { id: "conflict", label: "Conflits", count: conflicts.length },
+    { id: "supersedes", label: "Évolutions", count: evolutions.length },
   ];
 
   return (
     <Page>
       <PageHeader
         title="Contradictions"
-        subtitle="Where two of your own sources disagree on the same fact — each value cited verbatim. A conflict can't both be true; an evolution is a later update to an earlier value."
+        subtitle="Là où deux de vos propres sources divergent sur un même fait — chaque valeur citée mot pour mot. Un conflit ne peut pas être vrai des deux côtés ; une évolution est une mise à jour ultérieure d’une valeur antérieure."
         actions={
           <button
             onClick={() => setShowDismissed((v) => !v)}
@@ -56,7 +56,7 @@ export function Contradictions() {
                 : "border-border text-muted hover:text-text"
             }`}
           >
-            {showDismissed ? "Hide dismissed" : "Show dismissed"}
+            {showDismissed ? "Masquer les écartées" : "Afficher les écartées"}
           </button>
         }
       />
@@ -81,7 +81,7 @@ export function Contradictions() {
 
       {error && (
         <ErrorBanner
-          message={`Couldn't load contradictions: ${(error as Error).message}`}
+          message={`Impossible de charger les contradictions : ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
@@ -91,7 +91,7 @@ export function Contradictions() {
           {slow && (
             <div className="mb-3 flex items-center gap-2 text-[12.5px] text-muted">
               <span className="size-1.5 rounded-full bg-amber-500" />
-              Still analysing your sources…
+              Analyse de vos sources en cours…
             </div>
           )}
           <Skeleton rows={4} />
@@ -99,11 +99,11 @@ export function Contradictions() {
       ) : shown.length > 0 ? (
         <ContradictionList items={shown} onOpenSource={openItem} onDismiss={dismiss} />
       ) : all.length > 0 ? (
-        <EmptyState title="Nothing here" hint="No items match this filter." />
+        <EmptyState title="Rien ici" hint="Aucun élément ne correspond à ce filtre." />
       ) : (
         <EmptyState
-          title="No contradictions found"
-          hint="When two of your sources disagree on the same fact, they show up here — cited, so you can check for yourself."
+          title="Aucune contradiction trouvée"
+          hint="Quand deux de vos sources divergent sur un même fait, elles apparaissent ici — sourcées, pour que vous puissiez vérifier par vous-même."
         />
       )}
     </Page>

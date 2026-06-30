@@ -47,18 +47,18 @@ export function FollowUp() {
   return (
     <Page>
       <PageHeader
-        title="Follow-up"
-        subtitle="A grounded read of what's going on and what to focus on next. Refreshes hourly; every fact comes from your own messages."
+        title="Suivi"
+        subtitle="Une lecture ancrée de ce qui se passe et de ce sur quoi vous concentrer ensuite. Actualisé chaque heure ; chaque fait provient de vos propres messages."
         actions={
           <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] focus-within:border-accent">
             <FolderKanban size={14} strokeWidth={1.75} className="shrink-0 text-muted" />
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              aria-label="Scope"
+              aria-label="Portée"
               className="min-w-0 max-w-[12rem] cursor-pointer truncate bg-transparent pr-1 outline-none"
             >
-              <option value="">Recent mail &amp; notes</option>
+              <option value="">Courriers et notes récents</option>
               {(projects.data ?? []).map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -76,7 +76,7 @@ export function FollowUp() {
       {/* Deadlines — open tasks due soon or overdue, surfaced proactively. */}
       {dueTasks.length > 0 && (
         <section className="mb-8">
-          <Label tone="warn">Deadlines</Label>
+          <Label tone="warn">Échéances</Label>
           <ul className="flex flex-col gap-2">
             {dueTasks.map((t) => {
               const overdue = t.due_date.slice(0, 10) < today;
@@ -90,7 +90,7 @@ export function FollowUp() {
                   <span
                     className={`tnum shrink-0 text-[12px] ${overdue ? "text-danger" : "text-muted"}`}
                   >
-                    {overdue ? "overdue · " : "due "}
+                    {overdue ? "en retard · " : "échéance "}
                     {fmtDate(t.due_date)}
                   </span>
                 </li>
@@ -104,7 +104,7 @@ export function FollowUp() {
           into a real conflict vs an evolution, each backed by a verbatim quote. */}
       {reconciled.length > 0 && (
         <section className="mb-8">
-          <Label tone="warn">Contradictions (cited)</Label>
+          <Label tone="warn">Contradictions (citées)</Label>
           <ContradictionList
             items={reconciled}
             onOpenSource={openItem}
@@ -116,7 +116,7 @@ export function FollowUp() {
       {/* Contradictions — the verified, cited signal stays visible. */}
       {contradictions.length > 0 && (
         <section className="mb-8">
-          <Label tone="warn">To clarify</Label>
+          <Label tone="warn">À clarifier</Label>
           <ul className="flex flex-col gap-3">
             {contradictions.map((c, i) => (
               <EntryCard key={i} entry={c} warn onOpen={openItem} />
@@ -128,7 +128,7 @@ export function FollowUp() {
       {/* Exchange timeline — project scope only: who, when, what, clickable. */}
       {projectId !== "" && (
         <section className="mb-8">
-          <Label>Exchange timeline</Label>
+          <Label>Chronologie des échanges</Label>
           {rows.length > 0 ? (
             <ul className="border-t border-border">
               {rows.map((r) => (
@@ -138,7 +138,7 @@ export function FollowUp() {
                   className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-2.5 transition-colors hover:bg-surface2"
                 >
                   <span className="truncate text-[13.5px] text-text">
-                    {r.title || "(untitled)"}
+                    {r.title || "(sans titre)"}
                   </span>
                   <span className="tnum whitespace-nowrap text-[12px] text-muted">
                     {fmtDate(r.date)}
@@ -152,9 +152,9 @@ export function FollowUp() {
               ))}
             </ul>
           ) : timeline.isLoading ? (
-            <p className="text-[13px] text-muted">Loading…</p>
+            <p className="text-[13px] text-muted">Chargement…</p>
           ) : (
-            <p className="text-[13px] text-muted">No items linked to this project yet.</p>
+            <p className="text-[13px] text-muted">Aucun élément lié à ce projet pour l’instant.</p>
           )}
         </section>
       )}
@@ -168,7 +168,7 @@ export function FollowUp() {
               strokeWidth={2.2}
               className="transition-transform group-open:rotate-90"
             />
-            Active topics ({topics.length})
+            Sujets actifs ({topics.length})
           </summary>
           <ul className="mt-3 flex flex-col gap-3">
             {topics.map((t, i) => (
@@ -180,7 +180,7 @@ export function FollowUp() {
 
       {digest.isError && (
         <ErrorBanner
-          message="Couldn't load topics & contradictions."
+          message="Impossible de charger les sujets et contradictions."
           onRetry={() => digest.refetch()}
         />
       )}
@@ -249,11 +249,11 @@ function ReportStream({ projectId }: { projectId?: string }) {
       {paragraphs.length === 0 && streaming && !reportErr ? (
         <div className="flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13.5px] text-accent">
           <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
-          Hygur is synthesizing your knowledge to focus on what matters next…
+          Hygur synthétise vos connaissances pour cibler ce qui compte ensuite…
         </div>
       ) : reportErr && paragraphs.length === 0 ? (
         <p className="text-[13.5px] text-muted">
-          The report is unavailable right now. The details below still work.
+          Le rapport est indisponible pour le moment. Les détails ci-dessous restent accessibles.
         </p>
       ) : (
         <div className="prose-answer text-[14.5px] leading-relaxed text-text">
@@ -272,7 +272,7 @@ function ReportStream({ projectId }: { projectId?: string }) {
       {stalled && !reportErr && (
         <div className="mt-2 flex items-center gap-2 text-[12.5px] text-muted">
           <span className="size-1.5 rounded-full bg-amber-500" />
-          Still working — taking longer than usual…
+          Toujours en cours — cela prend plus de temps que d’habitude…
         </div>
       )}
     </section>

@@ -45,7 +45,7 @@ export function Projects() {
   const rows: RecordRow[] = projects.map((p) => ({
     id: p.id,
     title: p.name,
-    badge: `${p.item_count} item${p.item_count === 1 ? "" : "s"}`,
+    badge: `${p.item_count} élément${p.item_count === 1 ? "" : "s"}`,
     meta: fmtDate(p.updated_at),
     excerpt: p.description || undefined,
     onClick: () => setOpenId(p.id),
@@ -54,8 +54,8 @@ export function Projects() {
   return (
     <Page>
       <PageHeader
-        title="Projects"
-        subtitle="Group notes, mails and documents — and scope a chat to one with @."
+        title="Projets"
+        subtitle="Regroupez notes, mails et documents — et ciblez une conversation sur l’un d’eux avec @."
       />
 
       <form
@@ -68,17 +68,17 @@ export function Projects() {
         <TextInput
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="New project name…"
+          placeholder="Nom du nouveau projet…"
         />
         <Button type="submit" disabled={!name.trim() || create.isPending}>
           <Plus size={16} strokeWidth={2} />
-          {create.isPending ? "Creating…" : "New project"}
+          {create.isPending ? "Création…" : "Nouveau projet"}
         </Button>
       </form>
 
       {error && (
         <ErrorBanner
-          message={`Couldn't load projects: ${(error as Error).message}`}
+          message={`Impossible de charger les projets : ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
@@ -89,8 +89,8 @@ export function Projects() {
         <RecordList rows={rows} />
       ) : (
         <EmptyState
-          title="No projects yet"
-          hint="Create one above, then link notes, mails and documents to it."
+          title="Aucun projet pour l’instant"
+          hint="Créez-en un ci-dessus, puis liez-y des notes, mails et documents."
         />
       )}
     </Page>
@@ -155,7 +155,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
   // Create a note and link it to this project in one step.
   const addNote = useMutation({
     mutationFn: async () => {
-      const note = await api.createNote(noteTitle.trim() || "New note", noteBody.trim());
+      const note = await api.createNote(noteTitle.trim() || "Nouvelle note", noteBody.trim());
       await api.linkItemToProject(note.id, id);
     },
     onSuccess: () => {
@@ -183,7 +183,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
         contentId,
         sourceType,
         meta: [srcLabel(sourceType)],
-        body: "_(could not load this item)_",
+        body: "_(impossible de charger cet élément)_",
       });
     }
   }
@@ -202,30 +202,30 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
           onClick={onClose}
           className="inline-flex items-center gap-1.5 text-[13.5px] text-muted transition-colors hover:text-text"
         >
-          <ArrowLeft size={16} strokeWidth={1.75} /> Projects
+          <ArrowLeft size={16} strokeWidth={1.75} /> Projets
         </button>
         <div className="flex items-center gap-2">
           {confirmDelete ? (
             <>
-              <span className="text-[12.5px] text-muted">Delete project?</span>
+              <span className="text-[12.5px] text-muted">Supprimer le projet ?</span>
               <Button variant="ghost" onClick={() => remove.mutate()}>
-                {remove.isPending ? "Deleting…" : "Yes, delete"}
+                {remove.isPending ? "Suppression…" : "Oui, supprimer"}
               </Button>
               <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
-                Cancel
+                Annuler
               </Button>
             </>
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
-              aria-label="Delete project"
+              aria-label="Supprimer le projet"
               className="rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
             >
               <Trash2 size={17} strokeWidth={1.75} />
             </button>
           )}
           <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
-            {save.isPending ? "Saving…" : "Save"}
+            {save.isPending ? "Enregistrement…" : "Enregistrer"}
           </Button>
         </div>
       </div>
@@ -233,20 +233,20 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Project name"
+        placeholder="Nom du projet"
         className="mb-2 w-full bg-transparent font-display text-[24px] font-semibold leading-tight tracking-tight outline-none placeholder:text-faint"
       />
       <textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        placeholder="A short description…"
+        placeholder="Une brève description…"
         rows={2}
         className="mb-4 w-full resize-y bg-transparent text-[14px] text-muted outline-none placeholder:text-faint"
       />
 
       <div className="mb-6">
         <span className="mb-1.5 block text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-          Tags
+          Étiquettes
         </span>
         <TagInput
           value={tags}
@@ -257,13 +257,13 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
 
       <div className="mb-1 flex items-center justify-between gap-3">
         <p className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-          Linked items
+          Éléments liés
         </p>
         <button
           onClick={() => setNoteOpen((v) => !v)}
           className="inline-flex items-center gap-1 text-[12.5px] font-medium text-accent transition-colors hover:underline"
         >
-          <Plus size={14} strokeWidth={2} /> New note
+          <Plus size={14} strokeWidth={2} /> Nouvelle note
         </button>
       </div>
       {noteOpen && (
@@ -271,14 +271,14 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
           <input
             value={noteTitle}
             onChange={(e) => setNoteTitle(e.target.value)}
-            placeholder="Note title"
+            placeholder="Titre de la note"
             autoFocus
             className="mb-2 w-full bg-transparent text-[14px] font-medium outline-none placeholder:text-faint"
           />
           <textarea
             value={noteBody}
             onChange={(e) => setNoteBody(e.target.value)}
-            placeholder="Write your note…"
+            placeholder="Rédigez votre note…"
             rows={3}
             className="w-full resize-y bg-transparent text-[13.5px] leading-relaxed outline-none placeholder:text-faint"
           />
@@ -287,7 +287,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
               onClick={() => addNote.mutate()}
               disabled={addNote.isPending || (!noteTitle.trim() && !noteBody.trim())}
             >
-              {addNote.isPending ? "Creating…" : "Create note"}
+              {addNote.isPending ? "Création…" : "Créer la note"}
             </Button>
             <Button
               variant="ghost"
@@ -297,7 +297,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 setNoteBody("");
               }}
             >
-              Cancel
+              Annuler
             </Button>
           </div>
         </div>
@@ -306,8 +306,8 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
         <Skeleton rows={3} />
       ) : items.length === 0 ? (
         <EmptyState
-          title="Nothing linked yet"
-          hint="Open a note, mail or document and link it to this project."
+          title="Rien de lié pour l’instant"
+          hint="Ouvrez une note, un mail ou un document et liez-le à ce projet."
         />
       ) : (
         <ul className="border-t border-border">
@@ -321,12 +321,12 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors hover:text-accent"
               >
                 <FolderOpen size={15} strokeWidth={1.75} className="shrink-0 text-faint" />
-                <span className="truncate font-medium">{it.title || "(untitled)"}</span>
+                <span className="truncate font-medium">{it.title || "(sans titre)"}</span>
                 <Badge>{srcLabel(it.source_type)}</Badge>
               </button>
               <button
                 onClick={() => unlink.mutate(it.id)}
-                aria-label="Unlink"
+                aria-label="Délier"
                 className="shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-surface2 hover:text-danger"
               >
                 <X size={15} strokeWidth={1.75} />

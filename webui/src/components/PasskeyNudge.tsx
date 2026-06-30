@@ -4,9 +4,9 @@ import { useAddPasskey, usePasskeyCount } from "../lib/usePasskey";
 
 const BANNER_TEXT = {
   global:
-    "Right now you can only get back into your space from this browser. Add a passkey to sign in from any device.",
+    "Pour l’instant, vous ne pouvez accéder à votre espace que depuis ce navigateur. Ajoutez une clé d’accès pour vous connecter depuis n’importe quel appareil.",
   settings:
-    "No passkey yet — you can only sign back in from this browser. Add one to keep access from anywhere.",
+    "Aucune clé d’accès pour l’instant — vous ne pouvez vous reconnecter que depuis ce navigateur. Ajoutez-en une pour conserver l’accès partout.",
 } as const;
 
 /** Persistent nudge shown to a cloud user with no passkey. `global` is a top strip
@@ -36,7 +36,7 @@ export function PasskeyBanner({ variant }: { variant: "global" | "settings" }) {
         disabled={busy || !ready}
         className="shrink-0 rounded-md bg-accent px-3 py-1 font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
       >
-        {busy ? "Adding…" : "Add a passkey"}
+        {busy ? "Ajout…" : "Ajouter une clé d’accès"}
       </button>
     </div>
   );

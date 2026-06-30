@@ -56,11 +56,11 @@ export function Tasks() {
         <div className="mx-auto w-full max-w-[760px] px-4 pb-24 pt-9 sm:px-7">
           <header className="mb-7">
             <h1 className="font-display text-[26px] font-semibold leading-tight tracking-tight">
-              Tasks
+              Tâches
             </h1>
             <p className="mt-1 max-w-[64ch] text-[13.5px] text-muted">
-              Note-like to-dos: a Markdown body, tags and a project, with a due date Hygur
-              surfaces in your briefings. Click a task to edit it.
+              Des tâches façon notes : un corps en Markdown, des étiquettes et un projet, avec une
+              échéance que Hygur fait remonter dans vos briefings. Cliquez sur une tâche pour la modifier.
             </p>
           </header>
 
@@ -74,23 +74,23 @@ export function Tasks() {
             <TextInput
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="New task…"
+              placeholder="Nouvelle tâche…"
             />
             <Button type="submit" disabled={!title.trim() || create.isPending}>
               <Plus size={16} strokeWidth={2} />
-              {create.isPending ? "Adding…" : "Add"}
+              {create.isPending ? "Ajout…" : "Ajouter"}
             </Button>
           </form>
 
           {error && (
             <ErrorBanner
-              message={`Couldn't load tasks: ${(error as Error).message}`}
+              message={`Impossible de charger les tâches : ${(error as Error).message}`}
               onRetry={() => refetch()}
             />
           )}
           {create.error && (
             <ErrorBanner
-              message={`Couldn't add the task: ${(create.error as Error).message}`}
+              message={`Impossible d’ajouter la tâche : ${(create.error as Error).message}`}
             />
           )}
 
@@ -99,7 +99,7 @@ export function Tasks() {
           ) : tasks.length > 0 ? (
             <>
               <div className="mb-2 text-[12.5px] text-muted">
-                {openCount} open · {tasks.length - openCount} done
+                {openCount} à faire · {tasks.length - openCount} terminées
               </div>
               <ul className="divide-y divide-border rounded-xl border border-border bg-surface">
                 {tasks.map((t) => {
@@ -114,7 +114,7 @@ export function Tasks() {
                     >
                       <button
                         onClick={() => toggle.mutate(t)}
-                        aria-label={done ? "Mark as open" : "Mark as done"}
+                        aria-label={done ? "Marquer comme à faire" : "Marquer comme terminée"}
                         className={`grid size-[18px] shrink-0 place-items-center rounded-md border transition-colors ${
                           done
                             ? "border-accent bg-accent text-white"
@@ -142,7 +142,7 @@ export function Tasks() {
                                 {proj}
                               </span>
                             )}
-                            {t.due_date && <span className="tnum">due {fmtDate(t.due_date)}</span>}
+                            {t.due_date && <span className="tnum">échéance {fmtDate(t.due_date)}</span>}
                             {t.tags.length > 0 && (
                               <span className="truncate">{t.tags.map((tag) => tag.name).join(", ")}</span>
                             )}
@@ -151,7 +151,7 @@ export function Tasks() {
                       </button>
                       <button
                         onClick={() => remove.mutate(t.id)}
-                        aria-label="Delete task"
+                        aria-label="Supprimer la tâche"
                         className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
                       >
                         <Trash2 size={15} strokeWidth={1.75} />
@@ -163,8 +163,8 @@ export function Tasks() {
             </>
           ) : (
             <EmptyState
-              title="No tasks yet"
-              hint="Add one above — then click it to add a body, tags, a project and a due date."
+              title="Aucune tâche pour l’instant"
+              hint="Ajoutez-en une ci-dessus — puis cliquez dessus pour ajouter un corps, des étiquettes, un projet et une échéance."
             />
           )}
         </div>
@@ -222,7 +222,7 @@ function TaskEditor({
       const tagIds = await api.resolveTagIds(tagNames, tagsQ.data?.tags ?? []);
       qc.invalidateQueries({ queryKey: ["tags"] });
       return api.updateTask(task.id, {
-        title: title.trim() || "Untitled",
+        title: title.trim() || "Sans titre",
         body,
         status,
         due_date: dueDate,
@@ -237,11 +237,11 @@ function TaskEditor({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-          Edit task
+          Modifier la tâche
         </span>
         <button
           onClick={onClose}
-          aria-label="Close"
+          aria-label="Fermer"
           className="rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text"
         >
           <X size={15} strokeWidth={1.75} />
@@ -252,7 +252,7 @@ function TaskEditor({
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title"
+          placeholder="Titre"
           className="mb-3 w-full bg-transparent font-display text-[18px] font-semibold tracking-tight outline-none placeholder:text-faint"
         />
 
@@ -271,7 +271,7 @@ function TaskEditor({
             >
               <Check size={12} strokeWidth={2.5} />
             </span>
-            {status === "done" ? "Done" : "Open"}
+            {status === "done" ? "Terminée" : "À faire"}
           </button>
           <label className="inline-flex items-center gap-2 text-muted">
             <CalendarClock size={14} strokeWidth={1.75} />
@@ -291,32 +291,32 @@ function TaskEditor({
             onClick={() => setPreview((v) => !v)}
             className="text-[12px] text-muted transition-colors hover:text-accent"
           >
-            {preview ? "Write" : "Preview"}
+            {preview ? "Écrire" : "Aperçu"}
           </button>
         </div>
         {preview ? (
           <div className="prose-answer min-h-[120px] rounded-lg border border-border bg-surface px-3 py-2 text-[14px]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || "_Nothing yet_"}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || "_Rien pour l’instant_"}</ReactMarkdown>
           </div>
         ) : (
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
             rows={8}
-            placeholder="Add details in Markdown…"
+            placeholder="Ajouter des détails en Markdown…"
             className="w-full resize-y rounded-lg border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-accent placeholder:text-faint"
           />
         )}
 
         <div className="mt-5 border-t border-border pt-4">
           <div className="mb-3 flex items-center gap-2.5">
-            <span className="w-16 text-[12.5px] text-muted">Project</span>
+            <span className="w-16 text-[12.5px] text-muted">Projet</span>
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
               className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
             >
-              <option value="">No project</option>
+              <option value="">Aucun projet</option>
               {(projectsQ.data ?? []).map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -325,7 +325,7 @@ function TaskEditor({
             </select>
           </div>
           <div className="flex items-start gap-2.5">
-            <span className="w-16 shrink-0 pt-2 text-[12.5px] text-muted">Tags</span>
+            <span className="w-16 shrink-0 pt-2 text-[12.5px] text-muted">Étiquettes</span>
             <div className="flex-1">
               <TagInput
                 value={tagNames}
@@ -339,10 +339,10 @@ function TaskEditor({
 
       <div className="flex items-center justify-end gap-3 border-t border-border px-4 py-3">
         {save.error && (
-          <span className="mr-auto text-[12px] text-danger">Couldn't save</span>
+          <span className="mr-auto text-[12px] text-danger">Impossible d’enregistrer</span>
         )}
         <Button onClick={() => save.mutate()} disabled={save.isPending}>
-          {save.isPending ? "Saving…" : "Save"}
+          {save.isPending ? "Enregistrement…" : "Enregistrer"}
         </Button>
       </div>
     </div>

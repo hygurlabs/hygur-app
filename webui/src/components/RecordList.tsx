@@ -95,7 +95,7 @@ export function RecordList({
                 )}
                 {r.icon}
                 <span className="min-w-0 flex-1 truncate font-medium">
-                  {r.title || "(untitled)"}
+                  {r.title || "(sans titre)"}
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <RowPills row={r} />
@@ -128,7 +128,7 @@ export function RecordList({
                   />
                 )}
                 {r.icon}
-                <span className="truncate">{r.title || "(untitled)"}</span>
+                <span className="truncate">{r.title || "(sans titre)"}</span>
               </span>
               <span className="flex items-center gap-2.5 text-[12.5px] text-muted">
                 {r.badge && <Badge>{r.badge}</Badge>}

@@ -46,12 +46,12 @@ export function EdgeFilesCard() {
         ? "bg-green-500"
         : "bg-amber-500";
   const statusLine = statusQ.isLoading
-    ? "Checking on-device sync…"
+    ? "Vérification de la synchro sur l’appareil…"
     : errMsg
-      ? `Edge unreachable: ${errMsg}`
+      ? `Edge injoignable : ${errMsg}`
       : configured
-        ? `Indexing ${configured}${st?.files_pushed ? ` · ${st.files_pushed} pushed last run` : ""}`
-        : "No folder selected yet.";
+        ? `Indexation de ${configured}${st?.files_pushed ? ` · ${st.files_pushed} envoyés au dernier passage` : ""}`
+        : "Aucun dossier sélectionné pour l’instant.";
   const syncing = !!st?.running;
 
   // Persist the folder to the edge config via Tauri. Reads the current config and
@@ -85,7 +85,7 @@ export function EdgeFilesCard() {
         <div className="flex items-center gap-2.5">
           <span className={`inline-block size-2.5 rounded-full ${dot}`} />
           <div>
-            <h3 className="text-[14px] font-semibold">Local files · this device</h3>
+            <h3 className="text-[14px] font-semibold">Fichiers locaux · cet appareil</h3>
             <p className="text-[12px] text-muted">{statusLine}</p>
           </div>
         </div>
@@ -95,7 +95,7 @@ export function EdgeFilesCard() {
           disabled={sync.isPending || syncing || !configured}
           className="rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
         >
-          {sync.isPending || syncing ? "Syncing…" : "Sync now"}
+          {sync.isPending || syncing ? "Synchronisation…" : "Synchroniser maintenant"}
         </button>
       </div>
       <div className="mt-3 flex items-center gap-2">
@@ -116,11 +116,11 @@ export function EdgeFilesCard() {
           disabled={busy || !value.trim()}
           className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
         >
-          Save folder
+          Enregistrer le dossier
         </button>
       </div>
       {err && <p className="mt-2 text-[12px] text-danger">{err}</p>}
-      {saved && <p className="mt-2 text-[12px] text-green-600">Saved — indexes on next sync.</p>}
+      {saved && <p className="mt-2 text-[12px] text-green-600">Enregistré — indexé à la prochaine synchro.</p>}
     </div>
   );
 }

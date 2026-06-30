@@ -29,13 +29,13 @@ export function InstallPrompt() {
   const steps =
     os === "ios" ? (
       <>
-        Tap <Share size={14} strokeWidth={2} className="inline align-text-bottom" /> then{" "}
-        <span className="font-medium text-text">Add to Home Screen</span>
+        Touchez <Share size={14} strokeWidth={2} className="inline align-text-bottom" /> puis{" "}
+        <span className="font-medium text-text">Sur l’écran d’accueil</span>
       </>
     ) : (
       <>
-        Tap <MoreVertical size={14} strokeWidth={2} className="inline align-text-bottom" /> then{" "}
-        <span className="font-medium text-text">Install app</span>
+        Touchez <MoreVertical size={14} strokeWidth={2} className="inline align-text-bottom" /> puis{" "}
+        <span className="font-medium text-text">Installer l’application</span>
       </>
     );
 
@@ -45,12 +45,12 @@ export function InstallPrompt() {
         <Plus size={18} strokeWidth={2} />
       </span>
       <div className="min-w-0 flex-1 text-[12.5px] leading-snug text-muted">
-        <p className="font-medium text-text">Install Hygur on your phone</p>
+        <p className="font-medium text-text">Installez Hygur sur votre téléphone</p>
         <p className="mt-0.5">{steps}</p>
       </div>
       <button
         onClick={dismiss}
-        aria-label="Dismiss"
+        aria-label="Écarter"
         className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md p-1 text-faint transition-colors hover:text-text"
       >
         <X size={16} strokeWidth={2} />

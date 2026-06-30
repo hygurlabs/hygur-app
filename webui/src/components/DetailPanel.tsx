@@ -66,7 +66,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     if (!data) return;
     try {
       await api.createTask({
-        title: data.title || "Untitled",
+        title: data.title || "Sans titre",
       });
       setTaskDone(true);
     } catch {
@@ -79,9 +79,9 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     setDrafting(true);
     try {
       const r = await api.draftReply(data.contentId);
-      setDraft(r.draft || "(no draft)");
+      setDraft(r.draft || "(aucun brouillon)");
     } catch {
-      setDraft("Couldn't draft a reply right now.");
+      setDraft("Impossible de rédiger une réponse pour le moment.");
     } finally {
       setDrafting(false);
     }
@@ -122,7 +122,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
             <div className="flex items-start gap-3 border-b border-border px-5 py-4">
               <div className="min-w-0 flex-1">
                 <h2 className="font-display text-[18px] font-medium leading-snug">
-                  {data.title || "(untitled)"}
+                  {data.title || "(sans titre)"}
                 </h2>
                 {data.meta.length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-muted">
@@ -138,7 +138,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                 {data.actions}
                 <button
                   onClick={close}
-                  aria-label="Close"
+                  aria-label="Fermer"
                   className="-mr-1 rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text"
                 >
                   <X size={18} strokeWidth={1.75} />
@@ -154,7 +154,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                   className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-white shadow-[var(--shadow-soft)] transition-opacity hover:opacity-90"
                 >
                   <MessageSquareText size={15} strokeWidth={2} />
-                  Ask Hygur
+                  Interroger Hygur
                 </button>
                 {isMail(data.sourceType) && (
                   <button
@@ -163,7 +163,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                     className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-accent-weak px-3.5 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-accent-weak/70 disabled:opacity-50"
                   >
                     <Reply size={15} strokeWidth={2} />
-                    {drafting ? "Drafting…" : "Draft reply"}
+                    {drafting ? "Rédaction…" : "Rédiger une réponse"}
                   </button>
                 )}
                 <button
@@ -175,7 +175,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                   ) : (
                     <ListPlus size={15} strokeWidth={2} />
                   )}
-                  {taskDone ? "Task added" : "Make a task"}
+                  {taskDone ? "Tâche ajoutée" : "Créer une tâche"}
                 </button>
               </div>
             )}
@@ -186,7 +186,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                 <div className="mb-5 rounded-xl border border-accent/30 bg-accent-weak/30 px-4 py-3">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-accent">
-                      Draft reply
+                      Brouillon de réponse
                     </span>
                     <button
                       onClick={() => {
@@ -201,7 +201,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                       className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-accent"
                     >
                       {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={1.75} />}
-                      {copied ? "Copied" : "Copy"}
+                      {copied ? "Copié" : "Copier"}
                     </button>
                   </div>
                   <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-text">
@@ -212,7 +212,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
 
               <div className="prose-answer text-[14px] leading-relaxed text-text">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {data.body || "_(empty)_"}
+                  {data.body || "_(vide)_"}
                 </ReactMarkdown>
               </div>
             </div>

@@ -53,7 +53,7 @@ export function TagInput({
             {t}
             <button
               onClick={() => remove(t)}
-              aria-label={`Remove ${t}`}
+              aria-label={`Retirer ${t}`}
               className="text-accent/70 transition-colors hover:text-danger"
             >
               <X size={11} strokeWidth={2.5} />
@@ -71,7 +71,7 @@ export function TagInput({
               remove(value[value.length - 1]);
             }
           }}
-          placeholder={value.length ? "" : (placeholder ?? "Add tags…")}
+          placeholder={value.length ? "" : (placeholder ?? "Ajouter des étiquettes…")}
           className="min-w-[90px] flex-1 bg-transparent py-0.5 text-[13px] outline-none placeholder:text-faint"
         />
       </div>
@@ -94,7 +94,7 @@ export function TagInput({
                 onClick={() => add(text)}
                 className="block w-full px-3 py-1.5 text-left text-[13px] text-accent transition-colors hover:bg-accent-weak/60"
               >
-                Create “{text.trim()}”
+                Créer « {text.trim()} »
               </button>
             </li>
           )}
