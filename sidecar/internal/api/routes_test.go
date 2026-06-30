@@ -153,7 +153,6 @@ func TestKnowledgeRoutes_NotConfigured(t *testing.T) {
 		body   []byte
 	}{
 		{"POST /knowledge/ingest", http.MethodPost, "/knowledge/ingest", []byte(`{"path":"/tmp/test.txt"}`)},
-		{"POST /knowledge/search", http.MethodPost, "/knowledge/search", []byte(`{"query":"test"}`)},
 		{"GET /knowledge/{id}", http.MethodGet, "/knowledge/test-id", nil},
 		{"DELETE /knowledge/{id}", http.MethodDelete, "/knowledge/test-id", nil},
 	}

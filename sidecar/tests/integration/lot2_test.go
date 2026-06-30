@@ -772,69 +772,9 @@ This is a test document for the API integration tests.
 		}
 	})
 
-	// Test 2: POST /knowledge/search
-	t.Run("POST_knowledge_search", func(t *testing.T) {
-		// First, create a knowledge item for the search test
-		searchContentID := "search-test-content"
-		ki := &store.KnowledgeItem{
-			ContentID:      searchContentID,
-			SourceType:     "markdown",
-			Title:          "Search Test Document",
-			NormalizedText: testContent,
-			Metadata:       nil,
-			VersionID:      "v1",
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
-		}
-		if err := db.InsertKnowledgeItem(context.Background(), ki); err != nil {
-			t.Logf("Note: knowledge item insert skipped (may already exist): %v", err)
-		}
-
-		// Then store a chunk for searching
-		chunk := &store.Chunk{
-			ChunkID:   "search-test-chunk",
-			ContentID: searchContentID,
-			ChunkHash: hashText(testContent),
-			Text:      testContent,
-			Metadata:  map[string]any{"position": 0},
-			CreatedAt: time.Now(),
-		}
-		if err := db.InsertChunk(context.Background(), chunk); err != nil {
-			t.Logf("Note: chunk insert skipped (may already exist): %v", err)
-		}
-
-		// Also insert embedding
-		embedding := generateDeterministicEmbedding(testContent, 768)
-		if err := db.InsertChunkVector(context.Background(), chunk.ChunkID, embedding); err != nil {
-			t.Logf("Note: vector insert skipped (may already exist): %v", err)
-		}
-
-		reqBody := `{"query": "API test document", "top_k": 10}`
-		req := httptest.NewRequest(http.MethodPost, "/knowledge/search", strings.NewReader(reqBody))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Hygur-Token", testTokenLot2)
-		rec := httptest.NewRecorder()
-
-		server.Router().ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Errorf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
-			return
-		}
-
-		var resp map[string]interface{}
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
-		}
-
-		results, ok := resp["results"].([]interface{})
-		if !ok {
-			t.Error("expected 'results' array in response")
-			return
-		}
-
-		t.Logf("Search returned %d results", len(results))
-	})
+	// Search is exercised by TestLot2_SearchHybrid; the former POST /knowledge/search
+	// E2E subtest was dropped when that endpoint was retired (consolidated on /search,
+	// which this minimal server doesn't wire).
 
 	// Test 3: Project CRUD operations
 	t.Run("project_crud", func(t *testing.T) {
