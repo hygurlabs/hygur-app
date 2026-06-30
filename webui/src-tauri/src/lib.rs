@@ -11,6 +11,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// Supervises the bundled sidecar: holds the child to kill on exit, a shutdown
 /// flag (so we don't respawn during app quit), and a rapid-restart guard.
@@ -312,13 +313,14 @@ fn sign_out_desktop(app: AppHandle) -> Result<(), String> {
 /// ceremony can run (it can't on the 127.0.0.1 webview origin).
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> Result<(), String> {
-    app.shell().open(url, None).map_err(|e| e.to_string())
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(
