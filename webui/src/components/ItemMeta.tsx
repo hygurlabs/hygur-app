@@ -71,13 +71,13 @@ export function ItemMeta({ contentId }: { contentId: string }) {
   return (
     <div className="mb-5 border-b border-border pb-5">
       <div className="mb-3 flex items-center gap-2.5">
-        <span className="w-14 shrink-0 text-[12px] text-muted">Projet</span>
+        <span className="w-14 shrink-0 text-[12px] text-muted">Project</span>
         <select
           value={projectId}
           onChange={(e) => setProject.mutate(e.target.value)}
           className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
         >
-          <option value="">Aucun projet</option>
+          <option value="">No project</option>
           {(projectsQ.data ?? []).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -90,25 +90,25 @@ export function ItemMeta({ contentId }: { contentId: string }) {
           <span className="w-14 shrink-0" />
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <span className="truncate rounded-full bg-accent-weak px-2 py-0.5 text-[12px] text-accent">
-              Suggéré : {suggestedName}
+              Suggested: {suggestedName}
             </span>
             <button
               onClick={() => setProject.mutate(suggestedId)}
               className="shrink-0 text-[12px] font-medium text-accent hover:underline"
             >
-              Ajouter
+              Add
             </button>
             <button
               onClick={() => dismissSuggestion.mutate()}
               className="shrink-0 text-[12px] text-muted hover:text-text"
             >
-              Écarter
+              Dismiss
             </button>
           </div>
         </div>
       )}
       <div className="flex items-start gap-2.5">
-        <span className="w-14 shrink-0 pt-2 text-[12px] text-muted">Étiquettes</span>
+        <span className="w-14 shrink-0 pt-2 text-[12px] text-muted">Tags</span>
         <div className="min-w-0 flex-1">
           <TagInput
             value={currentNames}

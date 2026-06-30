@@ -131,11 +131,11 @@ export function Connectors() {
   return (
     <Page>
       <PageHeader
-        title="Connecteurs"
-        subtitle="Connectez votre messagerie, vos calendriers, vos fichiers et plus encore — et ajoutez de nouvelles sources depuis le catalogue."
+        title="Connectors"
+        subtitle="Connect your mail, calendars, files and more — and add new sources from the marketplace."
       />
 
-      {err && <ErrorBanner message={`Échec de l’action : ${(err as Error).message}`} />}
+      {err && <ErrorBanner message={`Action failed: ${(err as Error).message}`} />}
 
       {/* Cloud desktop: local sources (Proton Bridge, filesystem) run on THIS
           device — the pod can't reach them. Each streams to the central KB via the
@@ -149,19 +149,19 @@ export function Connectors() {
       )}
 
       <h2 className="mb-2 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-        Configurés
+        Configured
       </h2>
       {instancesQ.isLoading ? (
         <Skeleton rows={3} />
       ) : instancesQ.error ? (
         <ErrorBanner
-          message={`Impossible de charger les connecteurs : ${(instancesQ.error as Error).message}`}
+          message={`Couldn't load connectors: ${(instancesQ.error as Error).message}`}
           onRetry={() => instancesQ.refetch()}
         />
       ) : instances.length === 0 ? (
         <EmptyState
-          title="Aucun connecteur pour l’instant"
-          hint="Installez-en un depuis le catalogue ci-dessous pour commencer à synchroniser des données."
+          title="No connectors yet"
+          hint="Install one from the marketplace below to start syncing data."
         />
       ) : (
         <ul className="border-t border-border">
@@ -176,13 +176,13 @@ export function Connectors() {
                   aria-hidden
                   className="size-2.5 shrink-0 rounded-full"
                   style={{ background: healthColor(c.health) }}
-                  title={c.health.status ?? "inconnu"}
+                  title={c.health.status ?? "unknown"}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">{c.display_name}</span>
                     {c.info.multi_instance && <Badge>{c.type_id}</Badge>}
-                    {!c.enabled && <Badge>désactivé</Badge>}
+                    {!c.enabled && <Badge>off</Badge>}
                   </div>
                   <p className="mt-0.5 line-clamp-1 text-[12.5px] text-muted">
                     {c.health.last_error
@@ -190,10 +190,10 @@ export function Connectors() {
                       : [
                           c.info.description,
                           typeof c.health.item_count === "number"
-                            ? `${c.health.item_count} éléments`
+                            ? `${c.health.item_count} items`
                             : "",
                           c.health.last_sync && !c.health.last_sync.startsWith("0001")
-                            ? `synchronisé ${fmtDateTime(c.health.last_sync)}`
+                            ? `synced ${fmtDateTime(c.health.last_sync)}`
                             : "",
                         ]
                           .filter(Boolean)
@@ -203,8 +203,8 @@ export function Connectors() {
                 <div className="flex shrink-0 items-center gap-1.5">
                   <button
                     onClick={() => setConfigId(c.instance_id)}
-                    aria-label="Configurer"
-                    title="Configurer"
+                    aria-label="Configure"
+                    title="Configure"
                     className="rounded-md p-1.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
                   >
                     <Settings2 size={16} strokeWidth={1.9} />
@@ -213,8 +213,8 @@ export function Connectors() {
                     <button
                       onClick={() => sync.mutate(c.instance_id)}
                       disabled={sync.isPending}
-                      aria-label="Synchroniser maintenant"
-                      title="Synchroniser maintenant"
+                      aria-label="Sync now"
+                      title="Sync now"
                       className="rounded-md p-1.5 text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
                     >
                       <RefreshCw
@@ -231,16 +231,16 @@ export function Connectors() {
                         onBlur={() => setArmedRemove(null)}
                         disabled={remove.isPending}
                         autoFocus
-                        title="Les éléments indexés sont conservés — cliquez pour confirmer"
+                        title="Indexed items are kept — click to confirm"
                         className="rounded-md px-2 py-1 text-[12.5px] font-medium text-danger ring-1 ring-danger/40 transition-colors hover:bg-danger/10 disabled:opacity-40"
                       >
-                        Retirer ?
+                        Remove?
                       </button>
                     ) : (
                       <button
                         onClick={() => setArmedRemove(c.instance_id)}
-                        aria-label="Retirer le compte"
-                        title="Retirer le compte"
+                        aria-label="Remove account"
+                        title="Remove account"
                         className="rounded-md p-1.5 text-muted transition-colors hover:bg-surface2 hover:text-danger"
                       >
                         <Trash2 size={16} strokeWidth={1.9} />
@@ -254,7 +254,7 @@ export function Connectors() {
                         : enable.mutate(c.instance_id)
                     }
                   >
-                    {c.enabled ? "Désactiver" : "Activer"}
+                    {c.enabled ? "Disable" : "Enable"}
                   </Button>
                 </div>
               </li>
@@ -272,21 +272,21 @@ export function Connectors() {
               onClick={() => addInstance.mutate(t)}
               disabled={addInstance.isPending}
             >
-              <Plus size={15} strokeWidth={2} /> Ajouter un compte {t.name}
+              <Plus size={15} strokeWidth={2} /> Add {t.name} account
             </Button>
           ))}
         </div>
       )}
 
       <h2 className="mb-2 mt-10 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-        Catalogue
+        Marketplace
       </h2>
       {marketQ.isLoading ? (
         <Skeleton rows={3} />
       ) : available.length === 0 ? (
         <EmptyState
-          title="Tout est installé"
-          hint="Tous les connecteurs disponibles sont déjà configurés."
+          title="Everything's installed"
+          hint="All available connectors are already configured."
         />
       ) : (
         <ul className="border-t border-border">
@@ -298,8 +298,8 @@ export function Connectors() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate font-medium">{m.display_name}</span>
-                  {m.verified && <Badge>vérifié</Badge>}
-                  {m.multi_instance && <Badge>multicompte</Badge>}
+                  {m.verified && <Badge>verified</Badge>}
+                  {m.multi_instance && <Badge>multi-account</Badge>}
                 </div>
                 {m.description && (
                   <p className="mt-0.5 line-clamp-1 text-[12.5px] text-muted">
@@ -314,11 +314,11 @@ export function Connectors() {
               >
                 {m.is_installed ? (
                   <>
-                    <Check size={15} strokeWidth={2} /> Installé
+                    <Check size={15} strokeWidth={2} /> Installed
                   </>
                 ) : (
                   <>
-                    <Plus size={15} strokeWidth={2} /> Installer
+                    <Plus size={15} strokeWidth={2} /> Install
                   </>
                 )}
               </Button>

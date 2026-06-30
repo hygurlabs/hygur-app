@@ -91,7 +91,7 @@ export function Decisions() {
           <button
             key={ref}
             onClick={() => openSource(ref, `Source [${i + 1}]`)}
-            title="Ouvrir la source"
+            title="Open the source"
             className="tnum grid size-[18px] place-items-center rounded border border-border text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
           >
             {i + 1}
@@ -103,25 +103,25 @@ export function Decisions() {
   return (
     <Page>
       <PageHeader
-        title="Décisions"
-        subtitle="Vos décisions et engagements, conservés comme des enregistrements à part entière — ancrés dans vos propres mails et notes, et réexaminables. Hygur propose celles qu’il repère ; vous confirmez."
+        title="Decisions"
+        subtitle="Your decisions and commitments, kept as first-class records — grounded in your own mail and notes, and revisitable. Hygur proposes the ones it spots; you confirm."
         actions={
           <Button onClick={() => scan.mutate()} disabled={scan.isPending || scanning}>
             <Sparkles size={15} strokeWidth={1.9} />
-            {scanning ? "Analyse…" : "Analyser maintenant"}
+            {scanning ? "Scanning…" : "Scan now"}
           </Button>
         }
       />
 
       {scanning && (
         <p className="mb-3 text-[12.5px] text-muted">
-          Analyse de vos enregistrements récents à la recherche de décisions — les propositions apparaîtront ici sous peu.
+          Scanning your recent records for decisions — proposals appear here shortly.
         </p>
       )}
 
       {error && (
         <ErrorBanner
-          message={`Impossible de charger les décisions : ${(error as Error).message}`}
+          message={`Couldn't load decisions: ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
@@ -140,20 +140,20 @@ export function Decisions() {
           htmlFor="decision-statement"
           className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.08em] text-faint"
         >
-          Décision
+          Decision
         </label>
         <input
           id="decision-statement"
           value={statement}
           onChange={(e) => setStatement(e.target.value)}
-          placeholder="Qu’avez-vous décidé ?"
+          placeholder="What did you decide?"
           className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-[15px] font-medium text-text outline-none transition-colors placeholder:font-normal placeholder:text-faint focus:border-accent"
         />
         <textarea
           value={rationale}
           onChange={(e) => setRationale(e.target.value)}
           rows={2}
-          placeholder="Pourquoi (facultatif) — le raisonnement que vous voudrez retrouver en y revenant."
+          placeholder="Why (optional) — the reasoning you'll want when you revisit this."
           className="mt-2 w-full resize-y rounded-lg border border-border/60 bg-transparent px-2.5 py-1.5 text-[13px] text-muted outline-none placeholder:text-faint focus:border-accent"
         />
         <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
@@ -162,7 +162,7 @@ export function Decisions() {
             onChange={(e) => setProjectId(e.target.value)}
             className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
           >
-            <option value="">Aucun projet</option>
+            <option value="">No project</option>
             {(projectsQ.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -173,19 +173,19 @@ export function Decisions() {
             type="date"
             value={decidedOn}
             onChange={(e) => setDecidedOn(e.target.value)}
-            title="Date de la décision"
+            title="When it was decided"
             className="rounded-lg border border-border bg-surface px-2 py-1.5 text-[13px] text-text outline-none focus:border-accent"
           />
           <div className="ml-auto">
             <Button type="submit" disabled={!statement.trim() || create.isPending}>
               <Gavel size={15} strokeWidth={1.9} />
-              {create.isPending ? "Consignation…" : "Consigner la décision"}
+              {create.isPending ? "Logging…" : "Log decision"}
             </Button>
           </div>
         </div>
         {create.error && (
           <p className="mt-2 text-[12px] text-danger">
-            Impossible de la consigner : {(create.error as Error).message}
+            Couldn't log it: {(create.error as Error).message}
           </p>
         )}
       </form>
@@ -194,8 +194,8 @@ export function Decisions() {
         <Skeleton rows={5} />
       ) : decisions.length === 0 ? (
         <EmptyState
-          title="Aucune décision pour l’instant"
-          hint="Consignez-en une ci-dessus, ou cliquez sur « Analyser maintenant » pour laisser Hygur faire ressortir les décisions de vos mails et notes récents."
+          title="No decisions yet"
+          hint="Log one above, or hit “Scan now” to let Hygur surface the decisions in your recent mail and notes."
         />
       ) : (
         <>
@@ -203,7 +203,7 @@ export function Decisions() {
           {proposed.length > 0 && (
             <section className="mb-7">
               <h2 className="mb-2 text-[12px] font-medium uppercase tracking-[0.09em] text-faint">
-                Proposées · {proposed.length}
+                Proposed · {proposed.length}
               </h2>
               <ul className="divide-y divide-border rounded-xl border border-accent/40 bg-accent-weak/20">
                 {proposed.map((d) => (
@@ -225,16 +225,16 @@ export function Decisions() {
                       <button
                         onClick={() => confirm.mutate(d.id)}
                         disabled={confirm.isPending}
-                        title="Confirmer — c’est une vraie décision"
+                        title="Confirm — this is a real decision"
                         className="inline-flex items-center gap-1 rounded-md border border-accent bg-accent px-2 py-1 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90"
                       >
-                        <Check size={13} strokeWidth={2.25} /> Confirmer
+                        <Check size={13} strokeWidth={2.25} /> Confirm
                       </button>
                       <button
                         onClick={() => remove.mutate(d.id)}
                         disabled={remove.isPending}
-                        aria-label="Écarter"
-                        title="Écarter — ce n’est pas une décision"
+                        aria-label="Dismiss"
+                        title="Dismiss — not a decision"
                         className="rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
                       >
                         <X size={15} strokeWidth={1.9} />
@@ -250,7 +250,7 @@ export function Decisions() {
           {settled.length > 0 && (
             <section>
               <h2 className="mb-2 text-[12px] font-medium uppercase tracking-[0.09em] text-faint">
-                Actées
+                Standing
               </h2>
               <ul className="divide-y divide-border rounded-xl border border-border bg-surface">
                 {settled.map((d) => {
@@ -274,7 +274,7 @@ export function Decisions() {
                           <p className="mt-1 flex items-start gap-1 text-[12px] text-muted">
                             <RotateCcw size={12} strokeWidth={1.75} className="mt-[2px] shrink-0" />
                             <span>
-                              Met à jour votre décision antérieure :{" "}
+                              Updates your earlier decision:{" "}
                               <span className="text-text">{d.updates_statement}</span>
                             </span>
                           </p>
@@ -282,7 +282,7 @@ export function Decisions() {
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
                           {superseded && (
                             <span className="rounded bg-surface2 px-1.5 py-0.5 text-faint">
-                              remplacée
+                              superseded
                             </span>
                           )}
                           {d.decided_on && <span className="tnum">{fmtDate(d.decided_on)}</span>}
@@ -301,7 +301,7 @@ export function Decisions() {
                             supersede.mutate({ id: d.id, to: superseded ? "standing" : "superseded" })
                           }
                           disabled={supersede.isPending}
-                          title={superseded ? "Réinstaurer cette décision" : "Marquer comme caduque"}
+                          title={superseded ? "Reinstate this decision" : "Mark as no longer holding"}
                           className="rounded-md p-1.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
                         >
                           {superseded ? (
@@ -313,7 +313,7 @@ export function Decisions() {
                         <button
                           onClick={() => remove.mutate(d.id)}
                           disabled={remove.isPending}
-                          aria-label="Supprimer la décision"
+                          aria-label="Delete decision"
                           className="rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
                         >
                           <Trash2 size={15} strokeWidth={1.75} />

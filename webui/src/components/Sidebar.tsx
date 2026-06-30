@@ -32,25 +32,25 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: "/digest", label: "Aujourd'hui", icon: Sunrise },
-  { to: "/ask", label: "Demander", icon: MessageSquareText, end: true },
-  { to: "/library", label: "Bibliothèque", icon: Library },
+  { to: "/digest", label: "Today", icon: Sunrise },
+  { to: "/ask", label: "Ask", icon: MessageSquareText, end: true },
+  { to: "/library", label: "Library", icon: Library },
   { to: "/notes", label: "Notes", icon: StickyNote },
-  { to: "/projects", label: "Projets", icon: FolderKanban },
-  { to: "/briefings", label: "Synthèses", icon: Newspaper },
-  { to: "/tags", label: "Étiquettes", icon: Tag },
-  { to: "/calendar", label: "Calendrier", icon: CalendarDays },
-  { to: "/tasks", label: "Tâches", icon: CheckSquare },
-  { to: "/follow-up", label: "Suivi", icon: GitCompareArrows },
-  // Esprit — le hub psyché consolidé (Décisions, Contradictions, Mémoire, Chronique).
-  { to: "/mind", label: "Esprit", icon: Brain },
+  { to: "/projects", label: "Projects", icon: FolderKanban },
+  { to: "/briefings", label: "Briefings", icon: Newspaper },
+  { to: "/tags", label: "Tags", icon: Tag },
+  { to: "/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/tasks", label: "Tasks", icon: CheckSquare },
+  { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
+  // Mind — the consolidated psyché hub (Decisions, Contradictions, Memory, Chronicle).
+  { to: "/mind", label: "Mind", icon: Brain },
 ];
 
 // Pinned to the bottom, just above the health indicator. Settings joins this
 // group once the integrated Settings panel lands.
 const BOTTOM_NAV: NavItem[] = [
-  { to: "/connectors", label: "Connecteurs", icon: Plug },
-  { to: "/settings", label: "Réglages", icon: SettingsIcon },
+  { to: "/connectors", label: "Connectors", icon: Plug },
+  { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -155,7 +155,7 @@ export function Sidebar({
             className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[14px] text-muted transition-colors hover:bg-accent-weak/50 hover:text-text"
           >
             <LogOut size={17} strokeWidth={1.75} />
-            Se déconnecter
+            Sign out
           </button>
         )}
 
@@ -163,7 +163,7 @@ export function Sidebar({
           <div className="px-2.5 pt-3 text-[12px] text-accent">
             <div className="flex items-center gap-2">
               <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-              <span className="truncate">{label || "En cours…"}</span>
+              <span className="truncate">{label || "Working…"}</span>
             </div>
             {progress && (
               <div className="mt-1.5">
@@ -196,10 +196,10 @@ export function Sidebar({
               }`}
             />
             {healthy === undefined
-              ? "Connexion…"
+              ? "connecting…"
               : healthy
-                ? "Connecté"
-                : "Hors ligne"}
+                ? "connected"
+                : "offline"}
           </div>
         )}
       </div>

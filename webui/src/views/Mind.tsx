@@ -11,16 +11,16 @@ import { Chronicle } from "./Chronicle";
 type Tab = "decisions" | "contradictions" | "memory" | "chronicle";
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: "decisions", label: "Décisions" },
+  { key: "decisions", label: "Decisions" },
   { key: "contradictions", label: "Contradictions" },
-  { key: "memory", label: "Mémoire" },
-  { key: "chronicle", label: "Chronique" },
+  { key: "memory", label: "Memory" },
+  { key: "chronicle", label: "Chronicle" },
 ];
 
-// Esprit — le hub psyché consolidé (« ce que Hygur sait de toi »). Son en-tête rend
-// la boucle de feedback explicite : une jauge qui monte à mesure que tu confirmes ou
-// corriges. Les onglets montent les vues existantes telles quelles ; leurs actions
-// nourrissent la jauge (elle interroge /insights/learning-progress).
+// Mind — the consolidated psyché hub ("what Hygur knows about you"). Its header
+// makes the feedback loop explicit: a gauge that climbs as the user confirms or
+// corrects. The tabs mount the existing self-contained views unchanged; their
+// per-item actions feed the gauge (it polls /insights/learning-progress).
 export function Mind() {
   const [tab, setTab] = useState<Tab>("decisions");
   const [showWhy, setShowWhy] = useState(false);
@@ -41,7 +41,7 @@ export function Mind() {
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-[14px] font-medium text-text">
                 <Brain size={17} strokeWidth={1.75} className="text-accent" />
-                Hygur te connaît
+                Hygur knows you
               </div>
               <div className="tnum text-[15px] font-semibold text-accent">{pct}%</div>
             </div>
@@ -52,20 +52,20 @@ export function Mind() {
               />
             </div>
             <p className="mt-2.5 text-[13px] leading-relaxed text-muted">
-              Ton feedback ici l'aide à mieux te cerner — plus tu confirmes ou corriges, plus Hygur
-              devient pertinent au fil de l'usage.{" "}
+              Your feedback here helps Hygur get to know you — the more you confirm or correct, the
+              more relevant it becomes over time.{" "}
               <button
                 type="button"
                 onClick={() => setShowWhy((v) => !v)}
                 className="inline-flex items-center gap-1 text-accent hover:underline"
               >
-                <Info size={12} strokeWidth={2} /> pourquoi
+                <Info size={12} strokeWidth={2} /> why
               </button>
             </p>
             {showWhy && lp && (
               <div className="mt-3 rounded-lg border border-border bg-accent-weak/30 p-3 text-[12.5px]">
                 {lp.next_step_hint && (
-                  <p className="mb-2 text-text">Prochain pas : {lp.next_step_hint}</p>
+                  <p className="mb-2 text-text">Next step: {lp.next_step_hint}</p>
                 )}
                 <ul className="flex flex-col gap-1">
                   {lp.pillars.map((p) => (

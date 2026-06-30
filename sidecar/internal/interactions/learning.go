@@ -110,7 +110,7 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 	pillars := []LearningPillar{
 		{
 			Key:      pillarKeyMemoryDiversity,
-			Label:    "Diversité mémoire",
+			Label:    "Memory diversity",
 			Progress: progressRatio(diversity, targetMemoryDiversity),
 			Current:  diversity,
 			Target:   targetMemoryDiversity,
@@ -118,7 +118,7 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 		},
 		{
 			Key:      pillarKeyMemoryVolume,
-			Label:    "Mémoires acceptées",
+			Label:    "Accepted memories",
 			Progress: progressRatio(volume, targetMemoryVolume),
 			Current:  volume,
 			Target:   targetMemoryVolume,
@@ -126,7 +126,7 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 		},
 		{
 			Key:      pillarKeyConnectors,
-			Label:    "Connecteurs synchronisés",
+			Label:    "Synced connectors",
 			Progress: progressRatio(connectors, targetConnectors),
 			Current:  connectors,
 			Target:   targetConnectors,
@@ -134,7 +134,7 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 		},
 		{
 			Key:      pillarKeyChatEngagement,
-			Label:    "Engagement chat",
+			Label:    "Chat engagement",
 			Progress: progressRatio(chats, targetChatMessages),
 			Current:  chats,
 			Target:   targetChatMessages,
@@ -142,7 +142,7 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 		},
 		{
 			Key:      pillarKeyDecisions,
-			Label:    "Décisions confirmées",
+			Label:    "Decisions confirmed",
 			Progress: progressRatio(decisions, targetDecisions),
 			Current:  decisions,
 			Target:   targetDecisions,
@@ -150,7 +150,7 @@ func (c *LearningCalculator) Compute(ctx context.Context) (LearningProgress, err
 		},
 		{
 			Key:      pillarKeyContradictions,
-			Label:    "Contradictions tranchées",
+			Label:    "Contradictions resolved",
 			Progress: progressRatio(contradictions, targetContradictions),
 			Current:  contradictions,
 			Target:   targetContradictions,
@@ -202,21 +202,21 @@ func nextStep(pillars []LearningPillar) (string, string) {
 		}
 	}
 	if lowest == nil {
-		return "", "Hygur a atteint tous les jalons — référence phase 1 atteinte."
+		return "", "Hygur has hit every milestone — phase 1 baseline reached."
 	}
 	switch lowest.Key {
 	case pillarKeyMemoryDiversity:
-		return lowest.Key, "Épingle une mémoire d'un nouveau type — préférences, faits, projets, outils."
+		return lowest.Key, "Pin a memory of a new type — preferences, facts, projects, tools."
 	case pillarKeyMemoryVolume:
-		return lowest.Key, "Accepte quelques mémoires de plus pour que Hygur ancre ses futures réponses."
+		return lowest.Key, "Accept a few more memories so Hygur can ground future replies."
 	case pillarKeyConnectors:
-		return lowest.Key, "Connecte une autre source — calendrier, mail, ou un dossier de notes."
+		return lowest.Key, "Connect another source — calendar, mail, or a notes folder."
 	case pillarKeyChatEngagement:
-		return lowest.Key, "Échange davantage pour que Hygur apprenne tes vraies questions."
+		return lowest.Key, "Chat more so Hygur learns the questions you actually ask."
 	case pillarKeyDecisions:
-		return lowest.Key, "Confirme une décision remontée par Hygur — il apprend ce qui est acté pour toi."
+		return lowest.Key, "Confirm a decision Hygur surfaced — it learns what's settled for you."
 	case pillarKeyContradictions:
-		return lowest.Key, "Tranche une contradiction signalée — ton choix apprend la vérité à Hygur."
+		return lowest.Key, "Resolve a flagged contradiction — your call teaches Hygur the truth."
 	}
-	return lowest.Key, "Continue d'utiliser Hygur — la jauge va suivre."
+	return lowest.Key, "Keep using Hygur — the gauge will catch up."
 }

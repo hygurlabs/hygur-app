@@ -42,14 +42,14 @@ export function Briefings() {
   const rows: RecordRow[] = briefings.map((b) => ({
     id: b.content_id,
     title: b.title,
-    badge: b.kind === "meeting_brief" ? "réunion" : "quotidien",
+    badge: b.kind === "meeting_brief" ? "meeting" : "daily",
     meta: fmtDateTime(b.when || b.created_at),
     excerpt: b.content.replace(/[#*`>_]/g, "").slice(0, 180),
     onClick: () =>
       openDetail({
         title: b.title,
         meta: [
-          b.kind === "meeting_brief" ? "synthèse de réunion" : "synthèse quotidienne",
+          b.kind === "meeting_brief" ? "meeting brief" : "daily brief",
           fmtDateTime(b.when || b.created_at),
         ],
         body: b.content,
@@ -59,12 +59,12 @@ export function Briefings() {
   return (
     <Page>
       <PageHeader
-        title="Synthèses"
-        subtitle="Récapitulatifs quotidiens et les rappels que Hygur prépare avant les réunions et les échéances."
+        title="Briefings"
+        subtitle="Daily digests and the heads-up Hygur prepares before meetings and deadlines."
         actions={
           <Button onClick={() => setComposing((v) => !v)}>
             <Sparkles size={15} strokeWidth={1.9} />
-            Nouvelle synthèse
+            New briefing
           </Button>
         }
       />
@@ -85,7 +85,7 @@ export function Briefings() {
 
       {error && (
         <ErrorBanner
-          message={`Impossible de charger les synthèses : ${(error as Error).message}`}
+          message={`Couldn't load briefings: ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
@@ -96,8 +96,8 @@ export function Briefings() {
         <RecordList rows={rows} />
       ) : (
         <EmptyState
-          title="Aucune synthèse pour l’instant"
-          hint="Utilisez « Nouvelle synthèse » pour en générer une maintenant, ou attendez le récapitulatif quotidien."
+          title="No briefings yet"
+          hint="Use “New briefing” to generate one now, or wait for the daily digest."
         />
       )}
     </Page>
@@ -120,11 +120,11 @@ function BriefContradictions() {
     <section className="mb-6 rounded-xl border border-danger/30 bg-danger/5 p-4">
       <h2 className="flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-danger">
         <AlertTriangle size={13} strokeWidth={2} />
-        Vos sources se contredisent
+        Your sources disagree
       </h2>
       <p className="mb-3 mt-1.5 text-[13px] text-muted">
-        {items.length} point{items.length === 1 ? "" : "s"} où deux de vos sources se
-        contredisent — à vérifier avant de vous y fier.
+        {items.length} point{items.length === 1 ? "" : "s"} where two of your sources contradict
+        each other — worth a look before you rely on them.
       </p>
       <ContradictionList
         items={items}
@@ -181,11 +181,11 @@ function NewBriefingForm({
     <div className="mb-6 rounded-xl border border-border bg-surface p-4">
       <div className="mb-3 flex items-center justify-between">
         <span className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-          Nouvelle synthèse
+          New briefing
         </span>
         <button
           onClick={onClose}
-          aria-label="Fermer"
+          aria-label="Close"
           className="rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text"
         >
           <X size={15} strokeWidth={1.75} />
@@ -196,7 +196,7 @@ function NewBriefingForm({
         value={instructions}
         onChange={(e) => setInstructions(e.target.value)}
         rows={2}
-        placeholder="Sur quoi cette synthèse doit-elle se concentrer ? (texte libre)"
+        placeholder="What should this briefing focus on? (free text)"
         className="mb-3 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-[14px] outline-none focus:border-accent placeholder:text-faint"
       />
 
@@ -211,7 +211,7 @@ function NewBriefingForm({
               <span className="max-w-[200px] truncate">{c.title}</span>
               <button
                 onClick={() => setContext((prev) => prev.filter((x) => x.id !== c.id))}
-                aria-label="Retirer"
+                aria-label="Remove"
                 className="rounded-full p-0.5 text-faint hover:text-danger"
               >
                 <X size={12} strokeWidth={2} />
@@ -225,7 +225,7 @@ function NewBriefingForm({
         <TextInput
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Ajouter du contexte — projets, notes, courriers, documents…"
+          placeholder="Add context — projects, notes, mails, documents…"
         />
         {query.trim() && matches.length > 0 && (
           <ul className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-surface py-1 shadow-lg">
@@ -251,12 +251,12 @@ function NewBriefingForm({
       </div>
 
       {run.error && (
-        <ErrorBanner message={`Impossible de démarrer la synthèse : ${(run.error as Error).message}`} />
+        <ErrorBanner message={`Couldn't start briefing: ${(run.error as Error).message}`} />
       )}
 
       <div className="flex justify-end">
         <Button onClick={() => run.mutate()} disabled={!canRun || run.isPending}>
-          {run.isPending ? "Démarrage…" : "Générer la synthèse"}
+          {run.isPending ? "Starting…" : "Generate briefing"}
         </Button>
       </div>
     </div>

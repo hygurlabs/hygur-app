@@ -99,7 +99,7 @@ export function ErrorBanner({
           onClick={onRetry}
           className="shrink-0 rounded-md border border-danger/40 px-2.5 py-1 text-[12.5px] font-medium transition-colors hover:bg-danger/10"
         >
-          Réessayer
+          Retry
         </button>
       )}
     </div>

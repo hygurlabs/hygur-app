@@ -94,7 +94,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 /** Small inline copy button that flips to a check for ~1.2s after copying. */
-function CopyButton({ text, title = "Copier" }: { text: string; title?: string }) {
+function CopyButton({ text, title = "Copy" }: { text: string; title?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -165,7 +165,7 @@ function AudioAttachment({
       <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface2/50 px-3 py-2 text-[12.5px] text-muted">
         <FileAudio size={14} strokeWidth={1.75} className="shrink-0 text-faint" />
         <span className="truncate">
-          {att.title ? `${att.title} — ` : ""}enregistrement non conservé
+          {att.title ? `${att.title} — ` : ""}recording not kept
         </span>
       </div>
     );
@@ -199,7 +199,7 @@ function buildChatMarkdown(turns: Turn[]): string {
       (a): a is Extract<AttachmentRef, { type: "audio" }> => a.type === "audio",
     );
     if (!t.content && images.length === 0 && audios.length === 0) continue;
-    out.push(t.role === "user" ? "## 🧑 Vous" : "## 🤖 Hygur", "");
+    out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "");
     for (const a of images) {
       out.push(`_[Image jointe : ${a.title || "image"}]_`, "");
     }
@@ -208,7 +208,7 @@ function buildChatMarkdown(turns: Turn[]): string {
     }
     if (t.content) out.push(t.content, "");
     if (t.role === "assistant" && t.sources?.length) {
-      out.push("**Sources :**");
+      out.push("**Sources:**");
       for (const s of t.sources) {
         out.push(`- ${s.title}${s.mail_date ? ` — ${fmtDate(s.mail_date)}` : ""}`);
       }
@@ -280,7 +280,7 @@ async function transcodeToWav16kMono(file: File): Promise<string> {
     (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext })
       .webkitOfflineAudioContext;
   if (!Ctx || !Offline) {
-    throw new Error(`Audio "${file.name}" : transcodage non supporté par ce navigateur`);
+    throw new Error(`Audio "${file.name}": transcoding not supported by this browser`);
   }
   const buf = await file.arrayBuffer();
   const decodeCtx = new Ctx();
@@ -288,7 +288,7 @@ async function transcodeToWav16kMono(file: File): Promise<string> {
   try {
     decoded = await decodeCtx.decodeAudioData(buf.slice(0));
   } catch {
-    throw new Error(`Audio "${file.name}" : format non décodable`);
+    throw new Error(`Audio "${file.name}": format not decodable`);
   } finally {
     void decodeCtx.close();
   }
@@ -333,9 +333,9 @@ async function buildAttachment(file: File): Promise<AttachmentRef> {
 }
 
 const EXAMPLES = [
-  "Où en sont les choses en ce moment ?",
-  "Qu’ai-je décidé récemment — et pourquoi ?",
-  "Qu’est-ce qui demande mon attention cette semaine ?",
+  "Where do things stand right now?",
+  "What have I decided lately — and why?",
+  "What needs my attention this week?",
 ];
 
 let turnSeq = 0;
@@ -363,14 +363,14 @@ function HomeContradictions() {
       <div className="mb-3 flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-danger">
           <AlertTriangle size={13} strokeWidth={2} />
-          {items.length} contradiction{items.length === 1 ? "" : "s"} dans vos sources
+          {items.length} contradiction{items.length === 1 ? "" : "s"} in your sources
         </span>
         {items.length > 2 && (
           <button
             onClick={() => navigate("/contradictions")}
             className="shrink-0 text-[12.5px] text-muted transition-colors hover:text-accent"
           >
-            Voir tout →
+            See all →
           </button>
         )}
       </div>
@@ -532,7 +532,7 @@ export function Ask() {
       id: nextId(),
       role: "assistant",
       content: "",
-      activity: "Réflexion…",
+      activity: "Thinking…",
     };
     setTurns((prev) => [...prev, userTurn, assistantTurn]);
 
@@ -578,7 +578,7 @@ export function Ask() {
             patchLast((t) => ({
               ...t,
               sources,
-              activity: `Lecture de ${sources.length} source${sources.length === 1 ? "" : "s"}…`,
+              activity: `Reading ${sources.length} source${sources.length === 1 ? "" : "s"}…`,
             }));
           },
           onTool: (name) =>
@@ -586,8 +586,8 @@ export function Ask() {
               ...t,
               activity:
                 name === "search_knowledge_base"
-                  ? "Recherche dans votre base de connaissances…"
-                  : `Exécution de ${name}…`,
+                  ? "Searching your knowledge base…"
+                  : `Running ${name}…`,
             })),
           onDelta: (delta) => {
             // The answer is now streaming — retract the ephemeral context panel.
@@ -645,14 +645,14 @@ export function Ask() {
         title: item.title || att.title || "Document",
         contentId: att.content_id,
         meta: [srcLabel(item.source_type), fmtDate(item.date)].filter(Boolean),
-        body: item.normalized_text || "_(vide)_",
+        body: item.normalized_text || "_(empty)_",
       });
     } catch {
       openDetail({
         title: att.title || "Document",
         contentId: att.content_id,
         meta: [],
-        body: "_(impossible de charger ce document)_",
+        body: "_(couldn't load this document)_",
       });
     }
   }
@@ -706,13 +706,13 @@ export function Ask() {
           <div className="pointer-events-none absolute inset-0 z-40 m-3 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-accent bg-accent-weak/70 backdrop-blur-sm print:hidden">
             <Upload size={28} strokeWidth={1.75} className="text-accent" />
             <span className="text-[14px] font-medium text-accent">
-              Déposez vos fichiers pour les joindre
+              Drop your files to attach them
             </span>
           </div>
         )}
         <header className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-7 print:hidden">
           <span className="font-display text-[15px] font-semibold tracking-tight">
-            Demander à Hygur
+            Ask Hygur
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -720,7 +720,7 @@ export function Ask() {
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text"
             >
               <Plus size={15} strokeWidth={1.9} />
-              <span className="hidden sm:inline">Nouveau</span>
+              <span className="hidden sm:inline">New</span>
             </button>
             <button
               onClick={toggleHistory}
@@ -732,7 +732,7 @@ export function Ask() {
               }`}
             >
               <History size={15} strokeWidth={1.9} />
-              <span className="hidden sm:inline">Historique</span>
+              <span className="hidden sm:inline">History</span>
             </button>
             <button
               onClick={() =>
@@ -743,7 +743,7 @@ export function Ask() {
                 )
               }
               disabled={turns.length === 0}
-              title="Exporter la conversation en Markdown"
+              title="Export conversation as Markdown"
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
             >
               <FileDown size={15} strokeWidth={1.9} />
@@ -752,7 +752,7 @@ export function Ask() {
             <button
               onClick={() => native.print()}
               disabled={turns.length === 0}
-              title="Exporter en PDF (via l’impression système)"
+              title="Export as PDF (via system print)"
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-40"
             >
               <Printer size={15} strokeWidth={1.9} />
@@ -766,12 +766,12 @@ export function Ask() {
             {turns.length === 0 ? (
               <div className="pt-8">
                 <h1 className="font-display text-[28px] font-semibold leading-tight tracking-tight">
-                  Demander à Hygur
+                  Ask Hygur
                 </h1>
                 <p className="mt-2 max-w-[56ch] text-[14px] text-muted">
-                  Tout reste sur votre machine. Joignez des documents avec le
-                  trombone, ajoutez des notes, mails et projets avec{" "}
-                  <span className="font-mono">@</span>, ou dictez avec le micro.
+                  Everything stays on your machine. Attach documents with the
+                  clip, pull in notes, mails and projects with{" "}
+                  <span className="font-mono">@</span>, or dictate with the mic.
                 </p>
                 <div className="mt-7 flex flex-col items-start gap-2">
                   {EXAMPLES.map((ex) => (
@@ -869,7 +869,7 @@ export function Ask() {
                       )}
                       {t.content && (
                         <div className="print:hidden">
-                          <CopyButton text={t.content} title="Copier le message" />
+                          <CopyButton text={t.content} title="Copy message" />
                         </div>
                       )}
                     </div>
@@ -890,7 +890,7 @@ export function Ask() {
         {dropError && (
           <div className="px-4 sm:px-7 print:hidden">
             <div className="mx-auto max-w-[760px] pb-1">
-              <ErrorBanner message={`Pièce jointe : ${dropError}`} />
+              <ErrorBanner message={`Attachment: ${dropError}`} />
             </div>
           </div>
         )}
@@ -1104,8 +1104,8 @@ function Composer({
             ) : (
               <li className="px-3.5 py-2 text-[13px] text-muted">
                 {mentionsLoading
-                  ? "Recherche…"
-                  : "Aucun résultat — tapez pour trouver des notes, mails, docs et projets"}
+                  ? "Searching…"
+                  : "No matches — type to find notes, mails, docs & projects"}
               </li>
             )}
           </ul>
@@ -1148,7 +1148,7 @@ function Composer({
 
         {uploadError && (
           <div className="mb-2">
-            <ErrorBanner message={`Échec de l’envoi : ${uploadError}`} />
+            <ErrorBanner message={`Upload failed: ${uploadError}`} />
           </div>
         )}
 
@@ -1161,7 +1161,7 @@ function Composer({
             onChange={(e) => void onFiles(e.target.files)}
           />
           <ComposerIcon
-            label="Joindre un document"
+            label="Attach a document"
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
             spinning={uploading}
@@ -1169,7 +1169,7 @@ function Composer({
             <Paperclip size={17} strokeWidth={1.9} />
           </ComposerIcon>
           <ComposerIcon
-            label="Ajouter du contexte (notes, mails, projets, étiquettes)"
+            label="Add context (notes, mails, projects, tags)"
             onClick={toggleMentionPicker}
             active={mentionQuery !== null}
           >
@@ -1182,13 +1182,13 @@ function Composer({
             value={input}
             onChange={onChange}
             onKeyDown={handleKeyDown}
-            placeholder="Posez n’importe quelle question — @ pour ajouter du contexte, 📎 pour joindre…"
+            placeholder="Ask anything — @ to add context, 📎 to attach…"
             className="max-h-[168px] flex-1 resize-none bg-transparent py-1.5 text-[14.5px] text-text outline-none placeholder:text-faint"
           />
 
           {native.dictationAvailable && (
             <ComposerIcon
-              label={recording ? "Arrêter la dictée" : "Dicter"}
+              label={recording ? "Stop dictation" : "Dictate"}
               onClick={() => void toggleMic()}
               active={recording}
             >
@@ -1199,7 +1199,7 @@ function Composer({
           <button
             onClick={onSend}
             disabled={streaming || !input.trim()}
-            aria-label="Envoyer"
+            aria-label="Send"
             className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-white transition-opacity hover:opacity-90 disabled:opacity-30"
           >
             <ArrowUp size={18} strokeWidth={2.2} />
@@ -1258,7 +1258,7 @@ function Chip({
       <span className="truncate">{label}</span>
       <button
         onClick={onRemove}
-        aria-label="Retirer"
+        aria-label="Remove"
         className="rounded-full p-0.5 text-faint transition-colors hover:bg-surface2 hover:text-danger"
       >
         <X size={12} strokeWidth={2} />
@@ -1314,7 +1314,7 @@ function SessionsPanel({
         </span>
         <button
           onClick={onClose}
-          aria-label="Fermer"
+          aria-label="Close"
           className="rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text"
         >
           <X size={15} strokeWidth={1.75} />
@@ -1322,9 +1322,9 @@ function SessionsPanel({
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {isLoading ? (
-          <p className="px-2 py-3 text-[13px] text-muted">Chargement…</p>
+          <p className="px-2 py-3 text-[13px] text-muted">Loading…</p>
         ) : sessions.length === 0 ? (
-          <p className="px-2 py-3 text-[13px] text-muted">Aucune conversation pour l’instant.</p>
+          <p className="px-2 py-3 text-[13px] text-muted">No past conversations yet.</p>
         ) : (
           <ul className="flex flex-col gap-0.5">
             {sessions.map((s) => (
@@ -1339,13 +1339,13 @@ function SessionsPanel({
                 >
                   <span className="flex w-full items-center gap-2">
                     <span className="truncate text-[13.5px] font-medium">
-                      {s.title || "Sans titre"}
+                      {s.title || "Untitled"}
                     </span>
                     <span
                       onClick={(e) => void remove(s.id, e)}
                       role="button"
                       tabIndex={0}
-                      aria-label="Supprimer la conversation"
+                      aria-label="Delete conversation"
                       className="ml-auto rounded p-0.5 text-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
                     >
                       <X size={13} strokeWidth={2} />
@@ -1377,14 +1377,14 @@ function ContextPanel({
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
         <span className="text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
-          Constitution du contexte
+          Building context
         </span>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {sources.length === 0 ? (
           <div className="flex items-center gap-2 px-1 py-3 text-[13px] text-muted">
             <span className="size-1.5 animate-pulse rounded-full bg-accent" />
-            Recherche dans vos données…
+            Searching your data…
           </div>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -1397,7 +1397,7 @@ function ContextPanel({
                       meta: [
                         srcLabel(s.source_type),
                         fmtDate(s.mail_date),
-                        s.mail_from ? `de ${s.mail_from}` : "",
+                        s.mail_from ? `from ${s.mail_from}` : "",
                       ].filter(Boolean),
                       body: s.excerpt,
                     })
@@ -1405,7 +1405,7 @@ function ContextPanel({
                   className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent/40"
                 >
                   <span className="line-clamp-1 text-[13px] font-medium">
-                    {s.title || "(sans titre)"}
+                    {s.title || "(untitled)"}
                   </span>
                   <span className="mt-0.5 line-clamp-2 text-[12px] text-muted">
                     {s.excerpt}
@@ -1450,7 +1450,7 @@ function AssistantTurn({
         meta: [
           srcLabel(s.source_type),
           fmtDate(s.mail_date),
-          s.mail_from ? `de ${s.mail_from}` : "",
+          s.mail_from ? `from ${s.mail_from}` : "",
         ].filter(Boolean),
         body: s.excerpt,
       }),
@@ -1468,7 +1468,7 @@ function AssistantTurn({
       {turn.degraded && (
         <div className="mb-2 flex items-center gap-2 text-[12.5px] text-muted">
           <span className="size-1.5 rounded-full bg-amber-500" />
-          Mode hors ligne — synthèse IA en pause ; affichage de ce que Hygur a trouvé.
+          Offline mode — AI synthesis paused; showing what Hygur found.
         </div>
       )}
 
@@ -1489,7 +1489,7 @@ function AssistantTurn({
       {stalled && !turn.error && (
         <div className="mt-2 flex items-center gap-2 text-[12.5px] text-muted">
           <span className="size-1.5 rounded-full bg-amber-500" />
-          Toujours en cours — cela prend plus de temps que d’habitude…
+          Still working — taking longer than usual…
         </div>
       )}
 
@@ -1500,16 +1500,16 @@ function AssistantTurn({
               of being sourced. */}
           {sourceRows.length > 0 && (
             <span
-              title={`Fondé sur ${sourceRows.length} de vos propres ${
+              title={`Grounded in ${sourceRows.length} of your own ${
                 sourceRows.length === 1 ? "source" : "sources"
-              } — pas des connaissances générales`}
+              } — not general knowledge`}
               className="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent"
             >
               <Search size={12.5} strokeWidth={2.2} />
-              Issu de vos données
+              From your data
             </span>
           )}
-          <CopyButton text={turn.content} title="Copier la réponse" />
+          <CopyButton text={turn.content} title="Copy reply" />
         </div>
       )}
 

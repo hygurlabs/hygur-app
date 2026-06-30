@@ -187,8 +187,8 @@ export function Calendar() {
   return (
     <Page>
       <PageHeader
-        title="Calendrier"
-        subtitle="Vos prochaines réunions et les échéances que Hygur extrait de vos mails."
+        title="Calendar"
+        subtitle="Upcoming meetings and the deadlines Hygur extracts from your mail."
         actions={
           isNative && enabled ? (
             <Button
@@ -196,12 +196,12 @@ export function Calendar() {
               onClick={() =>
                 native.notify(
                   "Hygur",
-                  "Les notifications fonctionnent — vous recevrez un briefing 30 min avant les réunions concernées.",
+                  "Notifications are working — you'll get a briefing 30 min before relevant meetings.",
                 )
               }
             >
               <Bell size={15} strokeWidth={1.75} />
-              Tester la notification
+              Test notification
             </Button>
           ) : undefined
         }
@@ -211,12 +211,12 @@ export function Calendar() {
       {calSummary.isLoading ? (
         <div className="mb-7 flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3.5 text-[13px] text-accent">
           <Sparkles size={15} strokeWidth={2} className="animate-pulse" />
-          Hygur résume ce qui arrive…
+          Hygur is summarizing what's coming up…
         </div>
       ) : calSummary.data?.summary ? (
         <div className="mb-7 rounded-xl border border-accent/30 bg-accent-weak/40 px-4 py-3">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-accent">
-            <Sparkles size={13} strokeWidth={2} /> À venir
+            <Sparkles size={13} strokeWidth={2} /> What's coming up
           </div>
           <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-text">
             {calSummary.data.summary}
@@ -226,7 +226,7 @@ export function Calendar() {
 
       {/* --- Upcoming events (synced CalDAV / iCal calendars) — works in every
            shell (web, cloud, desktop). Primary calendar surface. --- */}
-      <SectionLabel>Événements à venir</SectionLabel>
+      <SectionLabel>Upcoming events</SectionLabel>
 
       {upcomingSynced.length > 0 ? (
         renderEventList(upcomingSynced)
@@ -235,36 +235,36 @@ export function Calendar() {
       ) : recentSynced.length > 0 ? (
         <>
           <p className="mb-2 text-[13.5px] text-muted">
-            Rien à venir sur votre calendrier. {syncedCount} événement
-            {syncedCount === 1 ? "" : "s"} synchronisé{syncedCount === 1 ? "" : "s"} — les 10
-            derniers sont ci-dessous ; le reste se trouve dans votre Bibliothèque.
+            Nothing coming up on your calendar. {syncedCount} event
+            {syncedCount === 1 ? "" : "s"} synced — the last 10 are below; the rest
+            live in your Library.
           </p>
           {renderEventList(recentSynced)}
         </>
       ) : hasCalendarConnector ? (
         <p className="rounded-lg border border-border bg-surface px-4 py-3 text-[13.5px] text-muted">
-          Rien à venir sur votre calendrier.
+          Nothing coming up on your calendar.
         </p>
       ) : (
         <div className="rounded-lg border border-border bg-surface px-5 py-6">
           <p className="mb-3 max-w-[58ch] text-[13.5px] text-muted">
-            Connectez votre calendrier pour que ses événements apparaissent ici,
-            deviennent étiquetables et alimentent vos briefings. Deux méthodes courantes :
+            Connect your calendar so its events appear here, become taggable, and
+            feed your briefings. Two common ways:
           </p>
           <ul className="mb-4 max-w-[64ch] list-disc space-y-1.5 pl-5 text-[12.5px] text-muted">
             <li>
-              <span className="font-medium text-text">Google Agenda</span> — ouvrez
-              Google Agenda dans un navigateur → Paramètres → cliquez sur votre agenda →
-              « Intégrer l’agenda » → copiez le lien{" "}
-              <span className="font-medium">« Adresse secrète au format iCal »</span>.{" "}
-              Il est privé ; aucun mot de passe requis.
+              <span className="font-medium text-text">Google Calendar</span> — open
+              Google Calendar in a browser → Settings → click your calendar →
+              “Integrate calendar” → copy the{" "}
+              <span className="font-medium">“Secret address in iCal format”</span>{" "}
+              link. It's private; no password needed.
             </li>
             <li>
               <span className="font-medium text-text">iCloud</span> — URL{" "}
-              <span className="font-medium">https://caldav.icloud.com</span>, Identifiant =
-              votre identifiant Apple, Mot de passe = un{" "}
-              <span className="font-medium">mot de passe d’application</span> (créez-en un sur
-              appleid.apple.com). Reste privé — aucun partage public.
+              <span className="font-medium">https://caldav.icloud.com</span>, Username =
+              your Apple ID, Password = an{" "}
+              <span className="font-medium">app-specific password</span> (create one at
+              appleid.apple.com). Stays private — no public sharing.
             </li>
           </ul>
           <Link
@@ -272,7 +272,7 @@ export function Calendar() {
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
           >
             <CalendarClock size={16} strokeWidth={1.75} />
-            Connecter un calendrier
+            Connect a calendar
           </Link>
         </div>
       )}
@@ -281,16 +281,16 @@ export function Calendar() {
            native bridge (window.HygurNative). Dormant on the current Tauri build. --- */}
       {isNative && (
         <>
-          <SectionLabel>Réunions (natif)</SectionLabel>
+          <SectionLabel>Meetings (native)</SectionLabel>
           {!enabled ? (
             <div className="rounded-lg border border-border bg-surface px-5 py-6">
               <p className="mb-3 max-w-[48ch] text-[13.5px] text-muted">
-                Connectez vos calendriers macOS pour que Hygur puisse préparer un court
-                briefing 30 minutes avant les réunions concernées.
+                Connect your macOS calendars so Hygur can prepare a short briefing
+                30 minutes before relevant meetings.
               </p>
               <Button onClick={connect}>
                 <CalendarClock size={16} strokeWidth={1.75} />
-                Connecter le calendrier
+                Connect calendar
               </Button>
             </div>
           ) : events.isLoading ? (
@@ -314,8 +314,8 @@ export function Calendar() {
             </ul>
           ) : (
             <EmptyState
-              title="Aucune réunion à venir"
-              hint="Rien de prévu dans les 7 prochains jours pour les calendriers sélectionnés."
+              title="No meetings ahead"
+              hint="Nothing scheduled in the next 7 days for the selected calendars."
             />
           )}
         </>
@@ -324,11 +324,11 @@ export function Calendar() {
       {/* --- Calendar selection --- */}
       {isNative && enabled && (calendars.data?.length ?? 0) > 0 && (
         <>
-          <SectionLabel>Calendriers à surveiller</SectionLabel>
+          <SectionLabel>Calendars to watch</SectionLabel>
           <p className="mb-3 text-[13px] text-muted">
             {selected.length === 0
-              ? "Tous les calendriers sont surveillés. Sélectionnez-en certains pour cibler les briefings."
-              : `${selected.length} calendrier${selected.length === 1 ? "" : "s"} surveillé${selected.length === 1 ? "" : "s"}.`}
+              ? "All calendars are watched. Select specific ones to narrow briefings."
+              : `${selected.length} calendar${selected.length === 1 ? "" : "s"} watched.`}
           </p>
           <div className="flex flex-wrap gap-2">
             {calendars.data!.map((c) => {
@@ -357,11 +357,11 @@ export function Calendar() {
       )}
 
       {/* --- Deadlines from mail (always available) --- */}
-      <SectionLabel>Échéances de vos mails</SectionLabel>
+      <SectionLabel>Deadlines from your mail</SectionLabel>
 
       {agenda.error ? (
         <ErrorBanner
-          message={`Impossible de charger les échéances : ${(agenda.error as Error).message}`}
+          message={`Couldn't load deadlines: ${(agenda.error as Error).message}`}
           onRetry={() => agenda.refetch()}
         />
       ) : agenda.isLoading ? (
@@ -382,8 +382,8 @@ export function Calendar() {
         </ul>
       ) : (
         <EmptyState
-          title="Aucune échéance à venir"
-          hint="Hygur fait remonter ici les échéances qu’il trouve dans vos mails."
+          title="No upcoming deadlines"
+          hint="Hygur surfaces due dates it finds in your mail here."
         />
       )}
     </Page>

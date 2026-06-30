@@ -89,7 +89,7 @@ export function ContradictionList({
                     : "bg-accent-weak text-accent"
                 }`}
               >
-                {c.verdict.kind === "conflict" ? "Conflit" : "Évolution"}
+                {c.verdict.kind === "conflict" ? "Conflict" : "Evolution"}
               </span>
               <span className="text-[13.5px] font-medium text-text">
                 {c.entity} · {c.attribute}
@@ -101,13 +101,13 @@ export function ContradictionList({
                   onClick={() => onDismiss(c.key, true)}
                   className="shrink-0 text-[11.5px] text-faint transition-colors hover:text-accent"
                 >
-                  Restaurer
+                  Restore
                 </button>
               ) : (
                 <button
                   onClick={() => onDismiss(c.key, false)}
-                  aria-label="Écarter"
-                  title="Écarter — je l’ai vue"
+                  aria-label="Dismiss"
+                  title="Dismiss — I've seen it"
                   className="shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-surface2 hover:text-text"
                 >
                   <X size={13} strokeWidth={2} />

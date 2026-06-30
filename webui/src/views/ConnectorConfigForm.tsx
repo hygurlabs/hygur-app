@@ -114,7 +114,7 @@ export function ConnectorConfigForm({
       <Page>
         <BackBar onClose={onClose} />
         {detailQ.error ? (
-          <ErrorBanner message={`Impossible de charger le connecteur : ${(detailQ.error as Error).message}`} />
+          <ErrorBanner message={`Couldn't load connector: ${(detailQ.error as Error).message}`} />
         ) : (
           <Skeleton rows={6} />
         )}
@@ -137,7 +137,7 @@ export function ConnectorConfigForm({
     <Page>
       <BackBar onClose={onClose}>
         <Button onClick={() => save.mutate()} disabled={save.isPending}>
-          {save.isPending ? "Enregistrement…" : "Enregistrer"}
+          {save.isPending ? "Saving…" : "Save"}
         </Button>
       </BackBar>
 
@@ -150,7 +150,7 @@ export function ConnectorConfigForm({
 
       {(save.error || oauth.error || oauthSubmit.error) && (
         <ErrorBanner
-          message={`Échec de l’action : ${
+          message={`Action failed: ${
             ((save.error || oauth.error || oauthSubmit.error) as Error).message
           }`}
         />
@@ -190,19 +190,19 @@ export function ConnectorConfigForm({
       {oauthStarted && (
         <div className="mb-7 rounded-xl border border-accent/40 bg-accent-weak/40 p-4">
           <p className="mb-2 text-[13px] text-muted">
-            Une fenêtre de navigateur s’est ouverte — autorisez Hygur, puis collez le code ici.
+            A browser window opened — authorize Hygur, then paste the code here.
           </p>
           <div className="flex gap-2">
             <TextInput
               value={oauthCode}
               onChange={(e) => setOauthCode(e.target.value)}
-              placeholder="Coller le code d’autorisation…"
+              placeholder="Paste authorization code…"
             />
             <Button
               onClick={() => oauthSubmit.mutate()}
               disabled={!oauthCode.trim() || oauthSubmit.isPending}
             >
-              {oauthSubmit.isPending ? "Validation…" : "Valider"}
+              {oauthSubmit.isPending ? "Validating…" : "Validate"}
             </Button>
           </div>
         </div>
@@ -218,7 +218,7 @@ function BackBar({ onClose, children }: { onClose: () => void; children?: React.
         onClick={onClose}
         className="inline-flex items-center gap-1.5 text-[13.5px] text-muted transition-colors hover:text-text"
       >
-        <ArrowLeft size={16} strokeWidth={1.75} /> Connecteurs
+        <ArrowLeft size={16} strokeWidth={1.75} /> Connectors
       </button>
       <div className="flex items-center gap-2">{children}</div>
     </div>
@@ -299,7 +299,7 @@ function FieldControl({
           type="password"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="•••• (inchangé)"
+          placeholder="•••• (unchanged)"
           className="w-56"
         />
       );
@@ -307,7 +307,7 @@ function FieldControl({
       return (
         <Button variant="ghost" onClick={onOAuth} disabled={oauthBusy}>
           <ExternalLink size={14} strokeWidth={1.75} />
-          {oauthBusy ? "Ouverture…" : "Connecter"}
+          {oauthBusy ? "Opening…" : "Connect"}
         </Button>
       );
     case "permission_check":
@@ -318,7 +318,7 @@ function FieldControl({
             if (field.description?.includes("://")) void native.openExternal(field.description);
           }}
         >
-          {field.default || "Ouvrir les réglages"}
+          {field.default || "Open settings"}
         </Button>
       );
     case "cron":
@@ -434,12 +434,12 @@ function MultiEnumField({
           disabled={loading}
           className="rounded-md border border-border px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-40"
         >
-          {loading ? "Chargement…" : loaded ? "Actualiser" : "Charger les dossiers"}
+          {loading ? "Loading…" : loaded ? "Refresh" : "Load folders"}
         </button>
       )}
       {err && (
         <p className="text-right text-[11.5px] text-danger">
-          Connectez-vous d’abord (enregistrez, puis réessayez).
+          Connect first (save, then retry).
         </p>
       )}
       {options.length > 0 ? (
@@ -463,7 +463,7 @@ function MultiEnumField({
         !loading &&
         !hasStatic && (
           <p className="text-right text-[11.5px] text-faint">
-            Aucun dossier — chargez la liste après la connexion.
+            No folders — load the list after connecting.
           </p>
         )
       )}

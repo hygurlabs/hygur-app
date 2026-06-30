@@ -48,11 +48,11 @@ export function FirstRun({ onDone }: { onDone: () => void }) {
         {busy ? (
           <>
             <h1 className="font-display text-[24px] font-semibold tracking-tight">
-              Configuration de votre base de connaissances
+              Setting up your knowledge base
             </h1>
             <p className="mt-2 max-w-[44ch] text-[13.5px] leading-relaxed text-muted">
-              {label || "Indexation de vos sources…"} Cela ne se produit qu’une fois,
-              puis reste incrémental — vous pouvez commencer à utiliser Hygur tout de suite.
+              {label || "Indexing your sources…"} This runs once, then stays
+              incremental — you can start using Hygur right away.
             </p>
             {progress ? (
               <div className="mt-7 w-full">
@@ -66,54 +66,54 @@ export function FirstRun({ onDone }: { onDone: () => void }) {
                 </div>
                 <div className="tnum mt-2 flex justify-between text-[12px] text-muted">
                   <span>
-                    {progress.processed}/{progress.total} indexés
+                    {progress.processed}/{progress.total} indexed
                   </span>
-                  {progress.etaSeconds > 0 && <span>~{fmtETA(progress.etaSeconds)} restant</span>}
+                  {progress.etaSeconds > 0 && <span>~{fmtETA(progress.etaSeconds)} left</span>}
                 </div>
               </div>
             ) : (
               <div className="mt-7 flex items-center gap-2 text-[13px] text-accent">
                 <Loader2 size={15} strokeWidth={2} className="animate-spin" />
-                En cours…
+                Working…
               </div>
             )}
             <button
               onClick={onDone}
               className="mt-8 text-[13px] text-muted transition-colors hover:text-text"
             >
-              Aller à l’application →
+              Go to the app →
             </button>
           </>
         ) : ready ? (
           <>
             <h1 className="font-display text-[24px] font-semibold tracking-tight">
-              Votre base de connaissances est prête
+              Your knowledge base is ready
             </h1>
             <p className="mt-2 text-[13.5px] leading-relaxed text-muted">
-              <span className="tnum">{total}</span> éléments indexés. Envie d’une première
-              lecture de l’essentiel ?
+              <span className="tnum">{total}</span> items indexed. Want a first read of what
+              matters?
             </p>
             <div className="mt-7 flex w-full flex-col items-stretch gap-2.5">
               <Button onClick={() => runBrief.mutate()} disabled={runBrief.isPending}>
                 <Sparkles size={16} strokeWidth={1.9} />
-                {runBrief.isPending ? "Préparation de votre synthèse…" : "Générer votre première synthèse"}
+                {runBrief.isPending ? "Preparing your brief…" : "Generate your first brief"}
               </Button>
               <button
                 onClick={onDone}
                 className="text-[13px] text-muted transition-colors hover:text-text"
               >
-                Aller à l’application →
+                Go to the app →
               </button>
             </div>
           </>
         ) : (
           <>
             <h1 className="font-display text-[24px] font-semibold tracking-tight">
-              Faisons entrer votre univers
+              Let's bring in your world
             </h1>
             <p className="mt-2 max-w-[42ch] text-[13.5px] leading-relaxed text-muted">
-              Connectez une source ou ajoutez des documents pour que Hygur réponde avec votre
-              propre contexte, et non le web public.
+              Connect a source or add documents so Hygur can answer with your own context,
+              not the public web.
             </p>
             <div className="mt-7 flex w-full flex-col items-stretch gap-2.5">
               <Button
@@ -123,13 +123,13 @@ export function FirstRun({ onDone }: { onDone: () => void }) {
                 }}
               >
                 <PlugZap size={16} strokeWidth={1.9} />
-                Connecter une source
+                Connect a source
               </Button>
               <button
                 onClick={onDone}
                 className="text-[13px] text-muted transition-colors hover:text-text"
               >
-                Explorer l’application d’abord →
+                Explore the app first →
               </button>
             </div>
           </>

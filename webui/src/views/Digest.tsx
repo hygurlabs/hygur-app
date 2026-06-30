@@ -31,21 +31,21 @@ export function Digest() {
   return (
     <Page>
       <PageHeader
-        title="Aujourd’hui"
-        subtitle="Voici où en sont les choses, ce qui reste ouvert, et ce qui demande votre attention aujourd’hui."
+        title="Today"
+        subtitle="Here's where things stand, what's still open, and what needs you today."
       />
 
       {isLoading ? (
         <Skeleton rows={6} />
       ) : nothing ? (
         <EmptyState
-          title="Rien ne requiert votre attention pour l’instant"
-          hint="Connectez vos mails et notes — une fois que Hygur les a lus, Aujourd’hui devient votre point de départ du matin : ce qui a bougé, ce qui est ouvert, et ce qui demande votre attention."
+          title="Nothing needs you right now"
+          hint="Connect your mail and notes — once Hygur has read them, Today becomes your morning starting point: what moved, what's open, and what needs you."
         />
       ) : (
         <div className="mx-auto flex max-w-[680px] flex-col gap-6">
           {synopsis && (
-            <Section icon={BookOpen} title="Où en sont les choses" to="/chronicle">
+            <Section icon={BookOpen} title="Where things stand" to="/chronicle">
               <div className="prose-answer font-display text-[15px] leading-[1.7] text-text [&_p]:mb-2">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{synopsis}</ReactMarkdown>
               </div>
@@ -53,7 +53,7 @@ export function Digest() {
           )}
 
           {positions && (
-            <Section icon={Compass} title="Où vous en êtes" to="/decisions">
+            <Section icon={Compass} title="Where you stand" to="/decisions">
               <div className="prose-answer font-display text-[15px] leading-[1.7] text-text [&_p]:mb-2">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{positions}</ReactMarkdown>
               </div>
@@ -61,7 +61,7 @@ export function Digest() {
           )}
 
           {upcoming.length > 0 && (
-            <Section icon={CalendarClock} title={`À venir · ${upcoming.length}`}>
+            <Section icon={CalendarClock} title={`Coming up · ${upcoming.length}`}>
               <ul className="flex flex-col gap-2">
                 {upcoming.map((u, i) => (
                   <li
@@ -81,7 +81,7 @@ export function Digest() {
           {decisions.length > 0 && (
             <Section
               icon={Gavel}
-              title={`Décisions à confirmer · ${decisions.length}`}
+              title={`Decisions to confirm · ${decisions.length}`}
               to="/decisions"
             >
               <ul className="flex flex-col gap-2">
@@ -100,7 +100,7 @@ export function Digest() {
           {contradictions.length > 0 && (
             <Section
               icon={Scale}
-              title={`Contradictions ouvertes · ${contradictions.length}`}
+              title={`Open contradictions · ${contradictions.length}`}
               to="/contradictions"
             >
               <ul className="flex flex-col gap-2.5">
@@ -121,7 +121,7 @@ export function Digest() {
           )}
 
           {tasks.length > 0 && (
-            <Section icon={CheckSquare} title={`Échéance proche · ${tasks.length}`} to="/tasks">
+            <Section icon={CheckSquare} title={`Due soon · ${tasks.length}`} to="/tasks">
               <ul className="flex flex-col gap-2">
                 {tasks.map((t) => (
                   <li key={t.id} className="flex items-baseline justify-between gap-3 text-[14px]">
@@ -162,7 +162,7 @@ function Section({
         </h2>
         {to && (
           <Link to={to} className="text-[12.5px] text-accent transition-colors hover:underline">
-            Ouvrir
+            Open
           </Link>
         )}
       </div>

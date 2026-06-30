@@ -41,12 +41,12 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
             boxSizing: "border-box",
           }}
         >
-          <strong>Hygur — une erreur est survenue</strong>
+          <strong>Hygur — something went wrong</strong>
           {"\n\n"}
           {this.state.error.message}
           {"\n\n"}
           {this.state.error.stack}
-          {this.state.stack ? `\n\nPile des composants :${this.state.stack}` : ""}
+          {this.state.stack ? `\n\nComponent stack:${this.state.stack}` : ""}
         </div>
       );
     }

@@ -80,7 +80,7 @@ export function Library() {
               meta: [
                 srcLabel(r.source_type),
                 fmtDate(date),
-                r.mail_from ? `de ${r.mail_from}` : "",
+                r.mail_from ? `from ${r.mail_from}` : "",
               ].filter(Boolean),
               body: r.excerpt,
             }),
@@ -113,8 +113,8 @@ export function Library() {
   return (
     <Page>
       <PageHeader
-        title="Bibliothèque"
-        subtitle="Tout ce qui est indexé — mails, notes et documents. Parcourez, ou cherchez dans l’ensemble."
+        title="Library"
+        subtitle="Everything indexed — mail, notes, and documents. Browse, or search across all of it."
       />
 
       <div className="mb-5">
@@ -122,20 +122,20 @@ export function Library() {
           type="search"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Recherchez dans tout l’index — un nom, un code, une date ou une question…"
+          placeholder="Search everything indexed — a name, a code, a date, or a question…"
         />
       </div>
 
       {error && (
         <ErrorBanner
-          message={`Impossible de charger : ${error.message}`}
+          message={`Couldn't load: ${error.message}`}
           onRetry={() => refetch()}
         />
       )}
 
       {searching && !isLoading && total != null && (
         <p className="mb-2 text-[13px] text-muted">
-          <span className="tnum">{total}</span> résultat{total === 1 ? "" : "s"} pour « {query} »
+          <span className="tnum">{total}</span> result{total === 1 ? "" : "s"} for “{query}”
         </p>
       )}
 
@@ -144,7 +144,7 @@ export function Library() {
           {slow && (
             <div className="mb-3 flex items-center gap-2 text-[12.5px] text-muted">
               <span className="size-1.5 rounded-full bg-amber-500" />
-              {searching ? "Recherche toujours en cours dans votre base de connaissances…" : "Chargement toujours en cours…"}
+              {searching ? "Still searching your knowledge base…" : "Still loading…"}
             </div>
           )}
           <Skeleton rows={5} />
@@ -153,13 +153,13 @@ export function Library() {
         <RecordList rows={rows} />
       ) : searching ? (
         <EmptyState
-          title="Aucun résultat"
-          hint="Essayez moins de termes ou des termes plus larges — ou un code, un montant ou une date exacts."
+          title="No matches"
+          hint="Try fewer or broader terms — or an exact code, amount, or date."
         />
       ) : (
         <EmptyState
-          title="Rien d’indexé pour l’instant"
-          hint="Connectez votre messagerie ou ajoutez des notes et documents — ils apparaîtront ici une fois indexés."
+          title="Nothing indexed yet"
+          hint="Connect your mail or add notes and documents — they'll appear here once indexed."
         />
       )}
     </Page>

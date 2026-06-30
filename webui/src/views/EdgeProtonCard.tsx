@@ -73,14 +73,14 @@ export function EdgeProtonCard() {
         ? "bg-green-500"
         : "bg-amber-500";
   const statusLine = statusQ.isLoading
-    ? "Vérification de la synchro sur l’appareil…"
+    ? "Checking on-device sync…"
     : errMsg
-      ? `Edge injoignable : ${errMsg}`
+      ? `Edge unreachable: ${errMsg}`
       : st?.running
-        ? "Synchronisation…"
+        ? "Syncing…"
         : st?.last_error
           ? st.last_error
-          : `Dernière synchro ${st?.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : "jamais"}${st?.mail_pushed ? ` · ${st.mail_pushed} envoyés au dernier passage` : ""}`;
+          : `Last synced ${st?.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : "never"}${st?.mail_pushed ? ` · ${st.mail_pushed} pushed last run` : ""}`;
   const syncing = !!st?.running;
   const userVal = user ?? cfgQ.data?.proton_user ?? "";
   const pwSet = !!cfgQ.data?.proton_password_set;
@@ -182,10 +182,10 @@ export function EdgeProtonCard() {
           <span className={`inline-block size-2.5 rounded-full ${dot}`} />
           <div>
             <h3 className="text-[14px] font-semibold">
-              Proton Mail · cet appareil
+              Proton Mail · this device
               {typeof mailCountQ.data?.total === "number" && (
                 <span className="ml-2 rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
-                  {mailCountQ.data.total.toLocaleString("fr-FR")} mails indexés
+                  {mailCountQ.data.total.toLocaleString("fr-FR")} mails indexed
                 </span>
               )}
             </h3>
@@ -201,7 +201,7 @@ export function EdgeProtonCard() {
             }}
             className="rounded-md border border-border px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
           >
-            Connexion Bridge
+            Bridge login
           </button>
           <button
             type="button"
@@ -209,7 +209,7 @@ export function EdgeProtonCard() {
             disabled={busy}
             className="rounded-md border border-border px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-40"
           >
-            {busy ? "…" : folders ? "Actualiser les dossiers" : "Charger les dossiers"}
+            {busy ? "…" : folders ? "Refresh folders" : "Load folders"}
           </button>
           <button
             type="button"
@@ -217,7 +217,7 @@ export function EdgeProtonCard() {
             disabled={sync.isPending || syncing}
             className="rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            {sync.isPending || syncing ? "Synchronisation…" : "Synchroniser maintenant"}
+            {sync.isPending || syncing ? "Syncing…" : "Sync now"}
           </button>
         </div>
       </div>
@@ -227,11 +227,11 @@ export function EdgeProtonCard() {
       {cfgOpen && (
         <div className="mt-3 space-y-2 rounded-lg border border-border p-3">
           <p className="text-[12px] text-muted">
-            Proton Bridge tourne sur ce Mac. Utilisez son adresse <strong>Bridge</strong> + le
-            mot de passe d’application qu’il affiche (pas votre mot de passe Proton).
+            Proton Bridge runs on this Mac. Use its <strong>Bridge</strong> address + the
+            app password it shows (not your Proton password).
           </p>
           <label className="block">
-            <span className="mb-1 block text-[12px] font-medium">Nom d’utilisateur Bridge</span>
+            <span className="mb-1 block text-[12px] font-medium">Bridge username</span>
             <input
               value={userVal}
               onChange={(e) => {
@@ -245,7 +245,7 @@ export function EdgeProtonCard() {
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-[12px] font-medium">Mot de passe d’application Bridge</span>
+            <span className="mb-1 block text-[12px] font-medium">Bridge app password</span>
             <input
               type="password"
               value={pass}
@@ -253,7 +253,7 @@ export function EdgeProtonCard() {
                 setPass(e.target.value);
                 setSaved(false);
               }}
-              placeholder={pwSet ? "•••••••• (enregistré — laisser vide pour conserver)" : "depuis Proton Bridge"}
+              placeholder={pwSet ? "•••••••• (stored — leave blank to keep)" : "from Proton Bridge"}
               spellCheck={false}
               autoCapitalize="off"
               className="w-full rounded-md border border-border bg-bg px-2.5 py-1 text-[12.5px]"
@@ -265,9 +265,9 @@ export function EdgeProtonCard() {
             disabled={busy || !userVal.trim() || (!pass && !pwSet)}
             className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            Enregistrer la connexion
+            Save login
           </button>
-          {saved && <span className="ml-2 text-[12px] text-green-600">Enregistré — appliqué à la prochaine synchro.</span>}
+          {saved && <span className="ml-2 text-[12px] text-green-600">Saved — applies on next sync.</span>}
         </div>
       )}
 
@@ -275,7 +275,7 @@ export function EdgeProtonCard() {
         <div className="mt-3">
           <div className="max-h-44 overflow-y-auto rounded-lg border border-border p-1">
             {folders.length === 0 ? (
-              <p className="px-2 py-1 text-[12px] text-muted">Aucun dossier renvoyé.</p>
+              <p className="px-2 py-1 text-[12px] text-muted">No folders returned.</p>
             ) : (
               folders.map((f) => (
                 <label
@@ -289,7 +289,7 @@ export function EdgeProtonCard() {
             )}
           </div>
           <label className="mt-2 flex items-center gap-2 text-[12px]">
-            <span className="text-muted">Mails à récupérer par dossier (première synchro) :</span>
+            <span className="text-muted">Mails to backfill per folder (first sync):</span>
             <input
               type="number"
               min={1}
@@ -308,9 +308,9 @@ export function EdgeProtonCard() {
               disabled={busy}
               className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
             >
-              Enregistrer la sélection
+              Save selection
             </button>
-            {saved && <span className="text-[12px] text-green-600">Enregistré — appliqué à la prochaine synchro.</span>}
+            {saved && <span className="text-[12px] text-green-600">Saved — applies on next sync.</span>}
           </div>
         </div>
       )}

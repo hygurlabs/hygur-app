@@ -96,24 +96,24 @@ export function Chronicle() {
 
   // Chapter rail: existing chapters (Life first), or just Life before the first run.
   const rail =
-    chapters.length > 0 ? chapters : [{ id: LIFE, title: "Vie", status: "open", act_count: 0 }];
+    chapters.length > 0 ? chapters : [{ id: LIFE, title: "Life", status: "open", act_count: 0 }];
 
   return (
     <Page>
       <PageHeader
-        title="Chronique"
-        subtitle="Un récit ancré de votre monde — une entrée par nuit et par chapitre, rédigée à partir de vos propres enregistrements."
+        title="Chronicle"
+        subtitle="A grounded narrative of your world — one entry a night per chapter, written from your own records."
         actions={
           <Button onClick={() => run.mutate()} disabled={run.isPending || generating}>
             <Sparkles size={15} strokeWidth={1.9} />
-            {generating ? "Génération…" : "Écrire l’entrée du jour"}
+            {generating ? "Generating…" : "Write today's entry"}
           </Button>
         }
       />
 
       {generating && (
         <p className="mb-3 text-[12.5px] text-muted">
-          Rédaction en arrière-plan — cela apparaîtra ici sous peu.
+          Writing in the background — it'll appear here shortly.
         </p>
       )}
 
@@ -145,14 +145,14 @@ export function Chronicle() {
             reopenOpen ? (
               <div className="rounded-lg border border-border bg-surface p-3">
                 <label className="mb-1.5 block text-[12.5px] text-muted">
-                  Rouvrir ce chapitre — dites à Hygur pourquoi en quelques mots. Il raconte la reprise
-                  à partir de cela dans la prochaine entrée, avec les mails ou notes qui l’étayent.
+                  Reopen this chapter — tell Hygur why in a few words. It narrates the resumption
+                  from this on the next entry, with any mails or notes that back it up.
                 </label>
                 <textarea
                   value={reopenNote}
                   onChange={(e) => setReopenNote(e.target.value)}
                   rows={2}
-                  placeholder="p. ex. le client est revenu — il veut une deuxième phase."
+                  placeholder="e.g. the client came back — they want a second phase."
                   className="w-full resize-y rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:border-accent focus:outline-none"
                 />
                 <div className="mt-2 flex items-center gap-3">
@@ -161,7 +161,7 @@ export function Chronicle() {
                     disabled={reopenChapter.isPending || !reopenNote.trim()}
                   >
                     <BookOpen size={14} strokeWidth={1.9} />
-                    {reopenChapter.isPending ? "Réouverture…" : "Rouvrir le chapitre"}
+                    {reopenChapter.isPending ? "Reopening…" : "Reopen chapter"}
                   </Button>
                   <button
                     onClick={() => {
@@ -170,40 +170,40 @@ export function Chronicle() {
                     }}
                     className="text-[13px] text-muted transition-colors hover:text-text"
                   >
-                    Annuler
+                    Cancel
                   </button>
                 </div>
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-3">
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-surface2 px-2.5 py-1 text-[12px] text-muted">
-                  <BookCheck size={13} strokeWidth={1.9} /> Ce chapitre est clos.
+                  <BookCheck size={13} strokeWidth={1.9} /> This chapter is closed.
                 </span>
                 <button
                   onClick={() => setReopenOpen(true)}
                   className="inline-flex items-center gap-1.5 text-[12.5px] text-accent transition-colors hover:underline"
                 >
-                  <BookOpen size={13} strokeWidth={1.9} /> Rouvrir
+                  <BookOpen size={13} strokeWidth={1.9} /> Reopen
                 </button>
               </div>
             )
           ) : closeOpen ? (
             <div className="rounded-lg border border-border bg-surface p-3">
               <label className="mb-1.5 block text-[12.5px] text-muted">
-                Clore ce chapitre — Hygur écrit une entrée finale. Ajoutez une ligne sur la façon
-                dont il se termine (facultatif).
+                Close this chapter — Hygur writes a final entry. Add a line on how it ends
+                (optional).
               </label>
               <textarea
                 value={closeNote}
                 onChange={(e) => setCloseNote(e.target.value)}
                 rows={2}
-                placeholder="p. ex. livré et transmis — plus rien d’attendu ici."
+                placeholder="e.g. shipped and handed over — nothing more expected here."
                 className="w-full resize-y rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:border-accent focus:outline-none"
               />
               <div className="mt-2 flex items-center gap-3">
                 <Button onClick={() => closeChapter.mutate()} disabled={closeChapter.isPending}>
                   <BookCheck size={14} strokeWidth={1.9} />
-                  {closeChapter.isPending ? "Clôture…" : "Clore le chapitre"}
+                  {closeChapter.isPending ? "Closing…" : "Close chapter"}
                 </Button>
                 <button
                   onClick={() => {
@@ -212,7 +212,7 @@ export function Chronicle() {
                   }}
                   className="text-[13px] text-muted transition-colors hover:text-text"
                 >
-                  Annuler
+                  Cancel
                 </button>
               </div>
             </div>
@@ -221,13 +221,13 @@ export function Chronicle() {
               onClick={() => setCloseOpen(true)}
               className="inline-flex items-center gap-1.5 text-[12.5px] text-muted transition-colors hover:text-text"
             >
-              <BookCheck size={13} strokeWidth={1.9} /> Clore ce chapitre
+              <BookCheck size={13} strokeWidth={1.9} /> Close this chapter
             </button>
           ) : null}
           {reopenedHint && (
             <p className="mt-2 text-[12.5px] text-muted">
-              Rouvert — la prochaine entrée reprend l’histoire à partir de votre note. Utilisez
-              « Écrire l’entrée du jour » pour la rédiger maintenant.
+              Reopened — the next entry resumes the story from your note. Use “Write today's
+              entry” to narrate it now.
             </p>
           )}
         </div>
@@ -237,8 +237,8 @@ export function Chronicle() {
         <Skeleton rows={6} />
       ) : total === 0 || !act ? (
         <EmptyState
-          title="Aucune entrée pour l’instant"
-          hint="Hygur écrit une entrée par nuit et par chapitre. Générez celle d’aujourd’hui pour voir ce que ça donne."
+          title="No entries yet"
+          hint="Hygur writes one entry a night per chapter. Generate today's now to see how it reads."
         />
       ) : (
         <>
@@ -247,7 +247,7 @@ export function Chronicle() {
               {act.title}
               {act.closing && (
                 <span className="ml-2 normal-case tracking-normal text-muted">
-                  · entrée finale
+                  · final entry
                 </span>
               )}
             </h2>
@@ -266,7 +266,7 @@ export function Chronicle() {
                     <button
                       key={n}
                       onClick={() => openSource(act.sources[n - 1], `Source [${n}]`)}
-                      title="Ouvrir la source"
+                      title="Open the source"
                       className="tnum grid size-6 place-items-center rounded-md border border-border text-[12px] text-muted transition-colors hover:border-accent hover:text-accent"
                     >
                       {n}
@@ -281,7 +281,7 @@ export function Chronicle() {
             <button
               onClick={() => setPage(Math.max(1, current - 1))}
               disabled={current <= 1}
-              aria-label="Page précédente"
+              aria-label="Previous page"
               className="grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-30"
             >
               <ChevronLeft size={16} strokeWidth={2} />
@@ -308,14 +308,14 @@ export function Chronicle() {
             <button
               onClick={() => setPage(Math.min(total, current + 1))}
               disabled={current >= total}
-              aria-label="Page suivante"
+              aria-label="Next page"
               className="grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-30"
             >
               <ChevronRight size={16} strokeWidth={2} />
             </button>
           </nav>
           <p className="mt-2 text-center text-[12px] text-faint">
-            Page {current} sur {total}
+            Page {current} of {total}
           </p>
         </>
       )}

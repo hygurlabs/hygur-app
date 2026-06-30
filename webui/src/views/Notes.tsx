@@ -34,12 +34,12 @@ import {
 // Static toolbar config (module scope so render builds no ref-capturing
 // closures). The component maps a key → formatting action.
 const NOTE_TOOLBAR = [
-  { key: "bold", icon: Bold, label: "Gras" },
-  { key: "italic", icon: Italic, label: "Italique" },
-  { key: "h2", icon: Heading2, label: "Titre" },
-  { key: "ul", icon: List, label: "Liste" },
-  { key: "ol", icon: ListOrdered, label: "Liste numérotée" },
-  { key: "quote", icon: Quote, label: "Citation" },
+  { key: "bold", icon: Bold, label: "Bold" },
+  { key: "italic", icon: Italic, label: "Italic" },
+  { key: "h2", icon: Heading2, label: "Heading" },
+  { key: "ul", icon: List, label: "List" },
+  { key: "ol", icon: ListOrdered, label: "Numbered list" },
+  { key: "quote", icon: Quote, label: "Quote" },
   { key: "code", icon: Code, label: "Code" },
   { key: "link", icon: LinkIcon, label: "Lien" },
 ] as const;
@@ -111,7 +111,7 @@ export function Notes() {
     <Page>
       <PageHeader
         title="Notes"
-        subtitle="Vos notes — Markdown, modifiables, indexées pour la recherche comme tout le reste."
+        subtitle="Your notes — Markdown, editable, indexed for retrieval like everything else."
       />
 
       <form
@@ -124,23 +124,23 @@ export function Notes() {
         <TextInput
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Titre de la nouvelle note…"
+          placeholder="New note title…"
         />
         <Button type="submit" disabled={!title.trim() || create.isPending}>
           <Plus size={16} strokeWidth={2} />
-          {create.isPending ? "Création…" : "Nouvelle note"}
+          {create.isPending ? "Creating…" : "New note"}
         </Button>
       </form>
 
       {error && (
         <ErrorBanner
-          message={`Impossible de charger les notes : ${(error as Error).message}`}
+          message={`Couldn't load notes: ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
       {create.error && (
         <ErrorBanner
-          message={`Impossible de créer la note : ${(create.error as Error).message}`}
+          message={`Couldn't create the note: ${(create.error as Error).message}`}
         />
       )}
 
@@ -149,7 +149,7 @@ export function Notes() {
           <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
             {(
               [
-                [false, "Détaillé", List],
+                [false, "Detailed", List],
                 [true, "Compact", Rows3],
               ] as const
             ).map(([value, label, Icon]) => (
@@ -177,8 +177,8 @@ export function Notes() {
         <RecordList rows={rows} compact={compact} />
       ) : (
         <EmptyState
-          title="Aucune note pour l’instant"
-          hint="Donnez un titre à une note ci-dessus pour créer la première."
+          title="No notes yet"
+          hint="Give a note a title above to create your first one."
         />
       )}
     </Page>
@@ -317,39 +317,39 @@ function NoteEditor({
         <div className="flex items-center gap-2">
           {confirmDelete ? (
             <>
-              <span className="text-[12.5px] text-muted">Supprimer ?</span>
+              <span className="text-[12.5px] text-muted">Delete?</span>
               <Button variant="ghost" onClick={() => remove.mutate()}>
-                {remove.isPending ? "Suppression…" : "Oui, supprimer"}
+                {remove.isPending ? "Deleting…" : "Yes, delete"}
               </Button>
               <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
-                Annuler
+                Cancel
               </Button>
             </>
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
-              aria-label="Supprimer la note"
+              aria-label="Delete note"
               className="rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
             >
               <Trash2 size={17} strokeWidth={1.75} />
             </button>
           )}
           <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
-            {save.isPending ? "Enregistrement…" : "Enregistrer"}
+            {save.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>
 
       {(save.error || remove.error) && (
         <ErrorBanner
-          message={`Impossible d’enregistrer : ${((save.error || remove.error) as Error).message}`}
+          message={`Couldn't save: ${((save.error || remove.error) as Error).message}`}
         />
       )}
 
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="Sans titre"
+        placeholder="Untitled"
         className="mb-4 w-full bg-transparent font-display text-[24px] font-semibold leading-tight tracking-tight outline-none placeholder:text-faint"
       />
 
@@ -378,9 +378,9 @@ function NoteEditor({
         <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
           {(
             [
-              ["split", "Partagé"],
-              ["write", "Éditeur"],
-              ["preview", "Aperçu"],
+              ["split", "Split"],
+              ["write", "Editor"],
+              ["preview", "Preview"],
             ] as const
           ).map(([v, label]) => (
             <button
@@ -410,14 +410,14 @@ function NoteEditor({
             ref={taRef}
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            placeholder="Rédigez en Markdown…"
+            placeholder="Write in Markdown…"
             className="min-h-[50vh] w-full resize-y rounded-xl border border-border bg-surface px-4 py-3 font-mono text-[13.5px] leading-relaxed text-text outline-none transition-colors focus:border-accent"
           />
         )}
         {view !== "write" && (
           <div className="prose-answer min-h-[50vh] overflow-auto rounded-xl border border-border bg-surface px-5 py-4 text-[14.5px] leading-relaxed">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {content || "_(rien à prévisualiser)_"}
+              {content || "_(nothing to preview)_"}
             </ReactMarkdown>
           </div>
         )}
@@ -426,13 +426,13 @@ function NoteEditor({
       {/* Project + tags at the bottom — attach the note and tag it. */}
       <div className="mt-5 border-t border-border pt-4">
         <div className="mb-3 flex items-center gap-2.5">
-          <span className="w-16 text-[12.5px] text-muted">Projet</span>
+          <span className="w-16 text-[12.5px] text-muted">Project</span>
           <select
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
             className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
           >
-            <option value="">Aucun projet</option>
+            <option value="">No project</option>
             {(projectsQ.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -441,7 +441,7 @@ function NoteEditor({
           </select>
         </div>
         <div className="flex items-start gap-2.5">
-          <span className="w-16 shrink-0 pt-2 text-[12.5px] text-muted">Étiquettes</span>
+          <span className="w-16 shrink-0 pt-2 text-[12.5px] text-muted">Tags</span>
           <div className="flex-1">
             <TagInput
               value={tagNames}

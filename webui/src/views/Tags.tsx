@@ -53,19 +53,19 @@ export function Tags() {
   return (
     <Page>
       <PageHeader
-        title="Étiquettes"
-        subtitle="Étiquettes automatiques et manuelles, classées par fréquence d’utilisation. Cliquez sur l’une d’elles pour voir ses éléments."
+        title="Tags"
+        subtitle="Automatic and manual tags, by how often they're used. Click one to see its items."
       />
 
       {error && (
         <ErrorBanner
-          message={`Impossible de charger les étiquettes : ${(error as Error).message}`}
+          message={`Couldn't load tags: ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
       {remove.error && (
         <ErrorBanner
-          message={`Impossible de supprimer l’étiquette : ${(remove.error as Error).message}`}
+          message={`Couldn't delete the tag: ${(remove.error as Error).message}`}
         />
       )}
 
@@ -118,7 +118,7 @@ export function Tags() {
               ) : (
                 <button
                   onClick={() => setConfirmId(t.id)}
-                  aria-label={`Supprimer l’étiquette ${t.name}`}
+                  aria-label={`Delete tag ${t.name}`}
                   className="rounded-md p-1 text-faint opacity-0 transition-all hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
                 >
                   <Trash2 size={15} strokeWidth={1.75} />
@@ -129,8 +129,8 @@ export function Tags() {
         </ul>
       ) : (
         <EmptyState
-          title="Aucune étiquette pour l’instant"
-          hint="Les étiquettes apparaissent à mesure que vos courriers et documents sont classés."
+          title="No tags yet"
+          hint="Tags appear as your mail and documents get classified."
         />
       )}
     </Page>
@@ -153,7 +153,7 @@ function TagItems({
   const items = data?.items ?? [];
   const rows: RecordRow[] = items.map((it) => ({
     id: it.id,
-    title: it.title || "(sans titre)",
+    title: it.title || "(untitled)",
     icon: <SourceIcon type={it.source_type} />,
     badge: srcLabel(it.source_type),
     onClick: () => openSource(it.id, it.title),
@@ -166,15 +166,15 @@ function TagItems({
         className="mb-4 inline-flex items-center gap-1 text-[13px] text-muted transition-colors hover:text-text"
       >
         <ChevronLeft size={15} strokeWidth={2} />
-        Étiquettes
+        Tags
       </button>
       <PageHeader
         title={tag.name}
-        subtitle={`${items.length} élément${items.length === 1 ? "" : "s"} avec cette étiquette.`}
+        subtitle={`${items.length} item${items.length === 1 ? "" : "s"} with this tag.`}
       />
       {error && (
         <ErrorBanner
-          message={`Impossible de charger les éléments : ${(error as Error).message}`}
+          message={`Couldn't load items: ${(error as Error).message}`}
           onRetry={() => refetch()}
         />
       )}
@@ -183,7 +183,7 @@ function TagItems({
       ) : rows.length > 0 ? (
         <RecordList rows={rows} />
       ) : (
-        <EmptyState title="Aucun élément" hint="Rien ne porte cette étiquette pour l’instant." />
+        <EmptyState title="No items" hint="Nothing carries this tag yet." />
       )}
     </Page>
   );
