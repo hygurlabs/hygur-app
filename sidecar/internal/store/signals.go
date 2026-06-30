@@ -481,8 +481,9 @@ type FeatureRow struct {
 	CreatedAt    string  `json:"created,omitempty"`
 	HitCount     int     `json:"hit"`
 	LastAccessed string  `json:"acc,omitempty"`
-	TagCount     int     `json:"tags"`
-	Connected    int     `json:"conn"` // distinct mentioned entities in the Hebbian graph
+	ManualTags   int     `json:"tags"`  // user-applied tags (is_auto=0) — deliberate signal
+	AutoTags     int     `json:"atags"` // auto-generated tags (is_auto=1) — NOT a user signal
+	Connected    int     `json:"conn"`  // distinct mentioned entities in the Hebbian graph
 }
 
 // FeatureMatrix returns the per-item feature rows for the whole scored corpus —
@@ -492,7 +493,8 @@ func (d *DB) FeatureMatrix(ctx context.Context) ([]FeatureRow, error) {
 	rows, err := d.db.QueryContext(ctx, `
 SELECT s.content_id, COALESCE(k.source_type, ''), s.salience, s.exempt,
        COALESCE(k.created_at, ''), COALESCE(a.hit_count, 0), COALESCE(a.last_accessed_at, ''),
-       (SELECT COUNT(*) FROM item_tags t WHERE t.content_id = s.content_id)
+       (SELECT COUNT(*) FROM item_tags t JOIN tags g ON g.id = t.tag_id WHERE t.content_id = s.content_id AND g.is_auto = 0),
+       (SELECT COUNT(*) FROM item_tags t JOIN tags g ON g.id = t.tag_id WHERE t.content_id = s.content_id AND g.is_auto = 1)
 FROM item_signals s
 JOIN knowledge_items k ON k.content_id = s.content_id
 LEFT JOIN item_access a ON a.content_id = s.content_id`)
@@ -506,7 +508,7 @@ LEFT JOIN item_access a ON a.content_id = s.content_id`)
 		var r FeatureRow
 		var exempt int
 		if err := rows.Scan(&r.ContentID, &r.SourceType, &r.Salience, &exempt,
-			&r.CreatedAt, &r.HitCount, &r.LastAccessed, &r.TagCount); err != nil {
+			&r.CreatedAt, &r.HitCount, &r.LastAccessed, &r.ManualTags, &r.AutoTags); err != nil {
 			return nil, err
 		}
 		r.Exempt = exempt != 0
