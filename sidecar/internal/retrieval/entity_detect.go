@@ -35,6 +35,17 @@ my your his her their our do does did know i we they me`) {
 // are real entities, and picks the most specific (longest n-gram) then most central
 // (most mentions). Returns "" when no clear subject is named. Pure string + index
 // match — NO LLM. The entity index is self-filtering: grammar can't match an entity.
+// hasProperSignal reports whether s looks like a proper noun: it carries at least one
+// uppercase letter or a digit. All-lowercase common nouns return false.
+func hasProperSignal(s string) bool {
+	for _, r := range s {
+		if unicode.IsUpper(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
 func detectQuerySubject(ctx context.Context, db *store.DB, query string) (string, error) {
 	if db == nil || strings.TrimSpace(query) == "" {
 		return "", nil
@@ -54,6 +65,12 @@ func detectQuerySubject(ctx context.Context, db *store.DB, query string) (string
 				}
 			}
 			if allStop {
+				continue
+			}
+			// Subject must be a proper noun (a named thing): keep only windows that
+			// carry an uppercase letter or a digit; drop all-lowercase common nouns,
+			// which are too generic and would over-trigger consolidation.
+			if !hasProperSignal(strings.Join(window, " ")) {
 				continue
 			}
 			norm := contradict.NormKey(strings.Join(window, " "))

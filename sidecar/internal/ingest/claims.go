@@ -136,6 +136,10 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	}
 	// Keep the associative entity index in step with the freshly-cached claims.
 	mentions := entityMentionsFromClaims(claims)
+	// Unified entity vocabulary: fold the Tier-2 NER entities (persons/orgs/projects/
+	// topics) in alongside the claim-derived ones, so people are first-class in the
+	// index and the graph — not just claim subjects.
+	mentions = append(mentions, nerEntityMentions(item)...)
 	// Surprise/novelty (DREAM Phase C): compute BEFORE writing the new mentions, so
 	// the item's own entities still read as "new". Best-effort — never blocks ingest.
 	i.stampSurprise(ctx, item.ContentID, mentions)
@@ -165,6 +169,60 @@ func entityMentionsFromClaims(claims []contradict.Claim) []store.EntityMention {
 			AssertedAt: c.AssertedAt,
 		})
 	}
+	return out
+}
+
+// metaStrings reads a metadata field as a []string (handles []string and []any from
+// a JSON round-trip); empty/missing → nil.
+func metaStrings(m map[string]any, key string) []string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch arr := v.(type) {
+	case []string:
+		return arr
+	case []any:
+		out := make([]string, 0, len(arr))
+		for _, e := range arr {
+			if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// nerEntityMentions folds an item's Tier-2 NER lists (persons/orgs/projects/topics,
+// set in metadata by extract/tier2.go) into entity_mentions rows, tagged by an ner_*
+// attribute and dated by the item. This makes named people/orgs first-class in the
+// entity index — so the subject detector AND the Hebbian graph see them, not only
+// claim subjects. Same NormKey as the claim path, so the read side matches.
+func nerEntityMentions(item *store.KnowledgeItem) []store.EntityMention {
+	if item == nil || item.Metadata == nil {
+		return nil
+	}
+	at := ""
+	if !item.CreatedAt.IsZero() {
+		at = item.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	var out []store.EntityMention
+	add := func(key, attr string) {
+		for _, raw := range metaStrings(item.Metadata, key) {
+			norm := contradict.NormKey(raw)
+			if norm == "" {
+				continue
+			}
+			out = append(out, store.EntityMention{
+				EntityNorm: norm, EntityRaw: raw, Attribute: attr, AssertedAt: at,
+			})
+		}
+	}
+	add("extracted_persons", "ner_person")
+	add("extracted_orgs", "ner_org")
+	add("extracted_projects", "ner_project")
+	add("extracted_topics", "ner_topic")
 	return out
 }
 
@@ -241,6 +299,7 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 					return processed, ctx.Err()
 				}
 				mentions := entityMentionsFromClaims(contradict.ClaimsFromMetadata(it.Metadata))
+				mentions = append(mentions, nerEntityMentions(it)...)
 				if rerr := i.store.ReplaceEntityMentions(ctx, it.ContentID, mentions); rerr != nil {
 					log.Printf("[ingest] entity-index backfill failed for %s: %v", it.ContentID, rerr)
 				}

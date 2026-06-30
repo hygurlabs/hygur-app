@@ -37,18 +37,19 @@ func TestDetectQuerySubject(t *testing.T) {
 			t.Fatalf("mentions %s: %v", cid, err)
 		}
 	}
-	mk("i1", "NRB", "contrat")
-	mk("i2", "NRB")
-	mk("i3", "NRB", "Maxime Metzgen")
-	mk("i4", "Maxime Metzgen")
+	mk("i1", "Acme", "report")
+	mk("i2", "Acme")
+	mk("i3", "Acme", "Alice Bernard")
+	mk("i4", "Alice Bernard")
 
 	cases := []struct {
 		q    string
 		want string
 	}{
-		{"Qu'est-ce qui est lié à NRB ?", contradict.NormKey("NRB")},
-		{"Ma dernière réunion au sujet de Maxime Metzgen", contradict.NormKey("Maxime Metzgen")},
-		{"Quelles sont les nouveautés cette semaine ?", ""}, // no known entity named
+		{"What is linked to Acme ?", contradict.NormKey("Acme")},
+		{"My last meeting about Alice Bernard", contradict.NormKey("Alice Bernard")},
+		{"Any news this week ?", ""},  // no known entity named
+		{"where is the report ?", ""}, // "report" is indexed but lowercase → guarded out
 		{"", ""},
 	}
 	for _, c := range cases {
