@@ -196,9 +196,12 @@ func metaStrings(m map[string]any, key string) []string {
 
 // nerEntityMentions folds an item's Tier-2 NER lists (persons/orgs/projects/topics,
 // set in metadata by extract/tier2.go) into entity_mentions rows, tagged by an ner_*
-// attribute and dated by the item. This makes named people/orgs first-class in the
-// entity index — so the subject detector AND the Hebbian graph see them, not only
-// claim subjects. Same NormKey as the claim path, so the read side matches.
+// attribute and dated by the item's canonical content date (the real sent/note date,
+// falling back to created_at only when undated — mirrors the claim path, so the
+// timeline orders by when entities were actually mentioned, not ingestion time). This
+// makes named people/orgs first-class in the entity index — so the subject detector
+// AND the Hebbian graph see them, not only claim subjects. Same NormKey as the claim
+// path, so the read side matches.
 func nerEntityMentions(item *store.KnowledgeItem) []store.EntityMention {
 	if item == nil || item.Metadata == nil {
 		return nil
@@ -206,6 +209,9 @@ func nerEntityMentions(item *store.KnowledgeItem) []store.EntityMention {
 	at := ""
 	if !item.CreatedAt.IsZero() {
 		at = item.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if d := store.GetCanonicalDate(item); !d.IsZero() {
+		at = d.UTC().Format(time.RFC3339)
 	}
 	var out []store.EntityMention
 	add := func(key, attr string) {

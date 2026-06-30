@@ -44,11 +44,12 @@ func (i *Ingestor) stampCoOccurrence(ctx context.Context, item *store.KnowledgeI
 	}
 }
 
-// BackfillEntityEdges rebuilds the Hebbian graph from the claims already cached on
-// each item — deterministic, no LLM. Idempotent: it clears the table first, so the
-// resulting graph is one co-occurrence count per item regardless of how often it is
-// run. Mirrors BackfillEntityIndex; intended to seed the graph on an existing corpus.
-// Returns items scanned.
+// BackfillEntityEdges rebuilds the Hebbian graph from each item's cached claims AND
+// its Tier-2 NER entities — deterministic, no LLM. Idempotent: it clears the table
+// first, so the resulting graph is one co-occurrence count per item regardless of how
+// often it is run. Mirrors BackfillEntityIndex (same claim+NER union, so a person and
+// the orgs/topics they co-occur with become neighbors); seeds the graph on an existing
+// corpus. Returns items scanned.
 func (i *Ingestor) BackfillEntityEdges(ctx context.Context) (int, error) {
 	if i.store == nil {
 		return 0, nil
@@ -69,6 +70,7 @@ func (i *Ingestor) BackfillEntityEdges(ctx context.Context) (int, error) {
 					return processed, ctx.Err()
 				}
 				mentions := entityMentionsFromClaims(contradict.ClaimsFromMetadata(it.Metadata))
+				mentions = append(mentions, nerEntityMentions(it)...)
 				i.stampCoOccurrence(ctx, it, mentions)
 				processed++
 			}

@@ -38,6 +38,19 @@ func TestNERMentions(t *testing.T) {
 		t.Errorf("org attribute = %q, want ner_org", a)
 	}
 
+	// Canonical content date wins over created_at for asserted_at, so the timeline
+	// orders by when the entity was actually mentioned, not by ingestion time.
+	dated := &store.KnowledgeItem{
+		CreatedAt: time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC),
+		Metadata: map[string]any{
+			"canonical_date":    "2025-01-02T08:00:00Z",
+			"extracted_persons": []any{"Alice Bernard"},
+		},
+	}
+	if dm := nerEntityMentions(dated); len(dm) != 1 || dm[0].AssertedAt != "2025-01-02T08:00:00Z" {
+		t.Errorf("canonical date should set asserted_at, got %+v", dm)
+	}
+
 	// Robustness: nil metadata / nil item → no panic, no rows.
 	if n := nerEntityMentions(&store.KnowledgeItem{}); n != nil {
 		t.Errorf("nil metadata should yield nil, got %v", n)
