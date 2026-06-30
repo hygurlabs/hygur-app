@@ -216,6 +216,22 @@ export interface Memory {
   accepted_at?: string; // "" = pending review
 }
 
+/** Learning gauge — "how well Hygur knows you" (GET /insights/learning-progress). */
+export interface LearningPillar {
+  key: string;
+  label: string;
+  progress: number; // [0,1]
+  current: number;
+  target: number;
+  weight: number;
+}
+export interface LearningProgress {
+  coverage: number; // [0,1]
+  next_step: string;
+  next_step_hint: string;
+  pillars: LearningPillar[];
+}
+
 /** Chronicle — Hygur's grounded narrative, read as a book. */
 export interface ChronicleChapterSummary {
   id: string;

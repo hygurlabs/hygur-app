@@ -22,6 +22,7 @@ import { Contradictions } from "./views/Contradictions";
 import { Decisions } from "./views/Decisions";
 import { Chronicle } from "./views/Chronicle";
 import { MemoryView } from "./views/Memory";
+import { Mind } from "./views/Mind";
 import { Tasks } from "./views/Tasks";
 import { FirstRun } from "./views/FirstRun";
 import { InstallPrompt } from "./components/InstallPrompt";
@@ -103,6 +104,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
                 <Route path="/calendar" element={<Calendar />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/follow-up" element={<FollowUp />} />
+                <Route path="/mind" element={<Mind />} />
                 <Route path="/contradictions" element={<Contradictions />} />
                 <Route path="/decisions" element={<Decisions />} />
                 <Route path="/chronicle" element={<Chronicle />} />

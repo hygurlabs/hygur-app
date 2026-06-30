@@ -11,10 +11,7 @@ import {
   CheckSquare,
   FolderKanban,
   GitCompareArrows,
-  Scale,
-  Gavel,
   Newspaper,
-  BookOpen,
   Brain,
   Plug,
   LogOut,
@@ -41,14 +38,12 @@ const NAV: NavItem[] = [
   { to: "/notes", label: "Notes", icon: StickyNote },
   { to: "/projects", label: "Projects", icon: FolderKanban },
   { to: "/briefings", label: "Briefings", icon: Newspaper },
-  { to: "/chronicle", label: "Chronicle", icon: BookOpen },
   { to: "/tags", label: "Tags", icon: Tag },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
-  { to: "/contradictions", label: "Contradictions", icon: Scale },
-  { to: "/decisions", label: "Decisions", icon: Gavel },
-  { to: "/memory", label: "Memory", icon: Brain },
+  // Mind — the consolidated psyché hub (Decisions, Contradictions, Memory, Chronicle).
+  { to: "/mind", label: "Mind", icon: Brain },
 ];
 
 // Pinned to the bottom, just above the health indicator. Settings joins this

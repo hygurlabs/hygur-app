@@ -13,6 +13,7 @@ import type {
   FocusScope,
   FollowUpDigest,
   KnowledgeItem,
+  LearningProgress,
   MarketplaceItem,
   Memory,
   Mention,
@@ -262,6 +263,9 @@ export const api = {
   acceptMemory: (id: string) => postJSON<void>(`/memory/${encodeURIComponent(id)}/accept`, {}),
   discardMemory: (id: string) => postJSON<void>(`/memory/${encodeURIComponent(id)}/discard`, {}),
   deleteMemory: (id: string) => del(`/memory/${encodeURIComponent(id)}`),
+
+  // Learning gauge — "how well Hygur knows you" (Mind hub header).
+  learningProgress: () => getJSON<LearningProgress>("/insights/learning-progress"),
 
   // Chronicle — Hygur's grounded narrative (read as a book).
   chronicle: () => getJSON<{ chapters: ChronicleChapterSummary[] }>("/chronicle"),
