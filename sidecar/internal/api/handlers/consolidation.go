@@ -5,25 +5,27 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/scheduler"
+	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
 
-// ConsolidationHandler exposes the manual trigger for the memory-consolidation pass
-// ("Quand Hygur rêve", DREAM_PLAN Phase 1). SHADOW: scoring runs and item_signals is
-// written, but nothing is evicted — so a manual run is safe to call any time.
+// ConsolidationHandler exposes the memory-consolidation pass ("Quand Hygur rêve",
+// DREAM_PLAN). SHADOW: scoring runs and item_signals is written, but nothing is
+// evicted — so both the manual run and the read are safe to call any time.
 type ConsolidationHandler struct {
+	store        *store.DB
 	consolidator *scheduler.Consolidator
 	logger       zerolog.Logger
 }
 
-// NewConsolidationHandler builds the handler. consolidator may be nil (run disabled).
-func NewConsolidationHandler(c *scheduler.Consolidator, logger zerolog.Logger) *ConsolidationHandler {
-	return &ConsolidationHandler{consolidator: c, logger: logger.With().Str("handler", "consolidation").Logger()}
+// NewConsolidationHandler builds the handler. consolidator/store may be nil (the
+// corresponding endpoint then returns 503).
+func NewConsolidationHandler(db *store.DB, c *scheduler.Consolidator, logger zerolog.Logger) *ConsolidationHandler {
+	return &ConsolidationHandler{store: db, consolidator: c, logger: logger.With().Str("handler", "consolidation").Logger()}
 }
 
 // Run handles POST /consolidation/run — runs one shadow pass synchronously and
-// returns its metrics (vector footprint, scored, hot/would-evict, reclaimable). It
-// evicts nothing; it just scores and writes item_signals.
+// returns its metrics. It evicts nothing; it just scores and writes item_signals.
 func (h *ConsolidationHandler) Run(w http.ResponseWriter, r *http.Request) {
 	if h.consolidator == nil {
 		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "consolidator not configured")
@@ -36,4 +38,24 @@ func (h *ConsolidationHandler) Run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeKnowledgeJSON(w, http.StatusOK, res)
+}
+
+// Signals handles GET /consolidation/signals — the shadow scoring distribution
+// (salience/strength/surprise histograms, tier counts, vector footprint, top-N) for
+// calibration. Read-only.
+func (h *ConsolidationHandler) Signals(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	summary, err := h.store.ItemSignalsSummary(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("signals summary failed")
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "signals summary failed")
+		return
+	}
+	if h.consolidator != nil {
+		summary.Vector.BudgetBytes = h.consolidator.BudgetBytes()
+	}
+	writeKnowledgeJSON(w, http.StatusOK, summary)
 }

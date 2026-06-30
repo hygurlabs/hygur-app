@@ -273,3 +273,152 @@ func (d *DB) OpenContradictionContentIDs(ctx context.Context) (map[string]struct
 	}
 	return out, nil
 }
+
+// ---- Calibration read API (DREAM Phase A) ----
+
+// StatSummary is a 0..1 distribution: average/min/max + 10 buckets ([i/10,(i+1)/10)).
+type StatSummary struct {
+	Avg       float64 `json:"avg"`
+	Min       float64 `json:"min"`
+	Max       float64 `json:"max"`
+	Histogram [10]int `json:"histogram"`
+}
+
+// ItemSignalRow is one row of a top-N inspection list.
+type ItemSignalRow struct {
+	ContentID  string  `json:"content_id"`
+	SourceType string  `json:"source_type"`
+	Title      string  `json:"title"`
+	Salience   float64 `json:"salience"`
+	Strength   float64 `json:"strength"`
+	Surprise   float64 `json:"surprise"`
+	Exempt     bool    `json:"exempt"`
+	Tier       string  `json:"tier"`
+}
+
+// SignalsSummary aggregates item_signals for calibration. Vector.BudgetBytes is left
+// 0 for the caller to fill (the budget constant lives in the scheduler package).
+type SignalsSummary struct {
+	Scored   int         `json:"scored"`
+	Hot      int         `json:"hot"`
+	Cold     int         `json:"cold"`
+	Exempt   int         `json:"exempt"`
+	Salience StatSummary `json:"salience"`
+	Strength StatSummary `json:"strength"`
+	Surprise struct {
+		CountNonzero int     `json:"count_nonzero"`
+		Avg          float64 `json:"avg"`
+		Histogram    [10]int `json:"histogram"`
+	} `json:"surprise"`
+	Vector struct {
+		Rows        int64 `json:"rows"`
+		Bytes       int64 `json:"bytes"`
+		Dim         int   `json:"dim"`
+		BudgetBytes int64 `json:"budget_bytes"`
+	} `json:"vector"`
+	LastScoredAt string          `json:"last_scored_at,omitempty"`
+	TopSalience  []ItemSignalRow `json:"top_salience"`
+	TopSurprise  []ItemSignalRow `json:"top_surprise"`
+}
+
+// histogramInto fills a [10]int from a 0..1 column of item_signals (bucket = floor
+// of col*10, clamped to 9). col is a fixed internal name — never user input.
+func (d *DB) histogramInto(ctx context.Context, col string, h *[10]int) error {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT MIN(CAST(`+col+`*10 AS INTEGER), 9) AS b, COUNT(*) FROM item_signals GROUP BY b`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b, n int
+		if err := rows.Scan(&b, &n); err != nil {
+			return err
+		}
+		if b >= 0 && b < 10 {
+			h[b] = n
+		}
+	}
+	return rows.Err()
+}
+
+// ItemSignalsSummary returns the aggregate distribution of item_signals (DREAM
+// Phase A — calibration). Vector.BudgetBytes is left 0 for the caller to fill.
+func (d *DB) ItemSignalsSummary(ctx context.Context) (*SignalsSummary, error) {
+	s := &SignalsSummary{}
+	var lastScored string
+	row := d.db.QueryRowContext(ctx, `
+SELECT COUNT(*),
+       COALESCE(SUM(CASE WHEN tier='cold' THEN 1 ELSE 0 END),0),
+       COALESCE(SUM(exempt),0),
+       COALESCE(AVG(salience),0), COALESCE(MIN(salience),0), COALESCE(MAX(salience),0),
+       COALESCE(AVG(strength),0), COALESCE(MIN(strength),0), COALESCE(MAX(strength),0),
+       COALESCE(SUM(CASE WHEN surprise>0 THEN 1 ELSE 0 END),0), COALESCE(AVG(surprise),0),
+       COALESCE(MAX(scored_at),'')
+FROM item_signals`)
+	if err := row.Scan(&s.Scored, &s.Cold, &s.Exempt,
+		&s.Salience.Avg, &s.Salience.Min, &s.Salience.Max,
+		&s.Strength.Avg, &s.Strength.Min, &s.Strength.Max,
+		&s.Surprise.CountNonzero, &s.Surprise.Avg, &lastScored); err != nil {
+		return nil, err
+	}
+	s.Hot = s.Scored - s.Cold
+	s.LastScoredAt = lastScored
+	if s.Scored > 0 {
+		if err := d.histogramInto(ctx, "salience", &s.Salience.Histogram); err != nil {
+			return nil, err
+		}
+		if err := d.histogramInto(ctx, "strength", &s.Strength.Histogram); err != nil {
+			return nil, err
+		}
+		if err := d.histogramInto(ctx, "surprise", &s.Surprise.Histogram); err != nil {
+			return nil, err
+		}
+	}
+	r, b, dim, err := d.VectorFootprint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.Vector.Rows, s.Vector.Bytes, s.Vector.Dim = r, b, dim
+	if s.TopSalience, err = d.TopItemSignals(ctx, "salience", 15); err != nil {
+		return nil, err
+	}
+	if s.TopSurprise, err = d.TopItemSignals(ctx, "surprise", 15); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// TopItemSignals returns the top-N scored items by "salience" (default) or
+// "surprise" — for spot-checking the scoring during calibration.
+func (d *DB) TopItemSignals(ctx context.Context, by string, n int) ([]ItemSignalRow, error) {
+	order := "s.salience"
+	if by == "surprise" {
+		order = "s.surprise"
+	}
+	if n <= 0 || n > 100 {
+		n = 15
+	}
+	rows, err := d.db.QueryContext(ctx, `
+SELECT s.content_id, COALESCE(k.source_type,''), COALESCE(k.title,''),
+       s.salience, s.strength, s.surprise, s.exempt, s.tier
+FROM item_signals s
+LEFT JOIN knowledge_items k ON k.content_id = s.content_id
+ORDER BY `+order+` DESC LIMIT ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ItemSignalRow, 0, n)
+	for rows.Next() {
+		var r ItemSignalRow
+		var ex int
+		if err := rows.Scan(&r.ContentID, &r.SourceType, &r.Title,
+			&r.Salience, &r.Strength, &r.Surprise, &ex, &r.Tier); err != nil {
+			return nil, err
+		}
+		r.Exempt = ex != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

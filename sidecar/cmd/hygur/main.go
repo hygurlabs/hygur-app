@@ -1072,7 +1072,7 @@ func main() {
 	// evicts nothing (shadow). The nightly auto-pass at 00:00 is opt-in on the home
 	// canary via HYGUR_DREAM_SHADOW=1, until the scoring is calibrated on real data.
 	consolidator := scheduler.NewConsolidator(db, logger)
-	server.SetConsolidationHandler(handlers.NewConsolidationHandler(consolidator, logger))
+	server.SetConsolidationHandler(handlers.NewConsolidationHandler(db, consolidator, logger))
 	if os.Getenv("HYGUR_DREAM_SHADOW") == "1" {
 		scheduler.NewConsolidationScheduler(consolidator, 0, logger).Start(ctx)
 	}

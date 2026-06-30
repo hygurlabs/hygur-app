@@ -61,10 +61,14 @@ type scoredItem struct {
 	contentID string
 	salience  float64
 	strength  float64
+	surprise  float64
 	exempt    bool
 	vbytes    int64
 	ageIngest float64
 }
+
+// BudgetBytes exposes the per-tenant vector budget (for the calibration endpoint).
+func (c *Consolidator) BudgetBytes() int64 { return dreamBudgetBytes }
 
 // RunOnce executes one shadow consolidation pass at time `now`. It writes
 // item_signals and returns the metrics; it never evicts. Idempotent (re-scores).
@@ -119,7 +123,7 @@ func (c *Consolidator) RunOnce(ctx context.Context, now time.Time) (*PassResult,
 			ContentID: s.contentID,
 			Salience:  s.salience,
 			Strength:  s.strength,
-			Surprise:  0, // Phase C
+			Surprise:  s.surprise,
 			Exempt:    s.exempt,
 			Tier:      tier,
 			ScoredAt:  now,
@@ -218,6 +222,7 @@ func (c *Consolidator) scoreAll(ctx context.Context, now time.Time, openConf map
 				contentID: it.ContentID,
 				salience:  sal,
 				strength:  retrieval.ComputeStrength(sal, sig.AccessAgeDays()),
+				surprise:  sig.Surprise,
 				exempt:    hardFlag,
 				vbytes:    vbytes[it.ContentID],
 				ageIngest: ageDaysSince(it.CreatedAt, now),

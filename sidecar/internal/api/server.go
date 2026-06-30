@@ -226,6 +226,14 @@ func (s *Server) handleConsolidationRun(w http.ResponseWriter, r *http.Request) 
 	writeError(w, http.StatusServiceUnavailable, "consolidation handler not configured")
 }
 
+func (s *Server) handleConsolidationSignals(w http.ResponseWriter, r *http.Request) {
+	if s.consolidationHandler != nil {
+		s.consolidationHandler.Signals(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "consolidation handler not configured")
+}
+
 func (s *Server) handleChronicleClose(w http.ResponseWriter, r *http.Request) {
 	if s.chronicleHandler != nil {
 		s.chronicleHandler.Close(w, r)
