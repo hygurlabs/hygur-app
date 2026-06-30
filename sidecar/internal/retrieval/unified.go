@@ -196,6 +196,9 @@ type UnifiedSearcher struct {
 	useAttentionRerank bool
 	// useSalienceRerank boosts by the composite item_signals.salience (recycle).
 	useSalienceRerank bool
+	// useEntityConsolidation triggers the entity lens deterministically (no LLM
+	// classifier) when the query names a known entity — for "about X" consolidation.
+	useEntityConsolidation bool
 
 	// P-2 imminence re-score (off by default): a small boost for items tied to an
 	// obligation due very soon. The imminent content-id set is supplied by a provider
@@ -231,6 +234,10 @@ func (us *UnifiedSearcher) SetAttentionRerank(on bool) { us.useAttentionRerank =
 // SetSalienceRerank toggles the composite-salience rerank lens — the recycle of the
 // importance signal into SAIT ranking. Off by default; no-op until items are scored.
 func (us *UnifiedSearcher) SetSalienceRerank(on bool) { us.useSalienceRerank = on }
+
+// SetEntityConsolidation toggles deterministic entity-anchored retrieval (the dormant
+// entity lens, triggered by the index instead of the LLM classifier). Off by default.
+func (us *UnifiedSearcher) SetEntityConsolidation(on bool) { us.useEntityConsolidation = on }
 
 // SetHebbianExpansion enables Phase D associative expansion (fold entity_edges
 // co-occurrence neighbours into the entity lens). Off by default; a no-op until the
@@ -299,6 +306,7 @@ type RetrievalOptions struct {
 	EntitySynonymyThreshold float64 // brick 2: min cosine (default 0.80 if <= 0)
 	HebbianExpansion        bool    // brick 3 (Phase D): fold entity_edges neighbours (default off)
 	SalienceRerank          bool    // recycle: boost results by composite item_signals.salience (default off)
+	EntityConsolidation     bool    // deterministic entity-anchored retrieval for "about X" queries (default off)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -319,6 +327,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	us.entitySynonymyThreshold = opts.EntitySynonymyThreshold
 	us.useHebbianExpansion = opts.HebbianExpansion
 	us.useSalienceRerank = opts.SalienceRerank
+	us.useEntityConsolidation = opts.EntityConsolidation
 	if us.entitySynonymyThreshold <= 0 {
 		us.entitySynonymyThreshold = 0.80
 	}
@@ -456,6 +465,17 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 	// Wait for the classifier (parallel). Worst case its 20s timeout has
 	// already elapsed; the channel close lets us continue immediately.
 	<-llmIntentDone
+
+	// Deterministic entity consolidation: when the query names a known entity and the
+	// LLM classifier didn't already route to one, anchor on it via the same entity
+	// lens — triggered by the index, NO LLM. Off by default (kill-switch).
+	if us.useEntityConsolidation && us.store != nil &&
+		(llmIntent == nil || llmIntent.Category != IntentFactualEntity) {
+		if ent, derr := detectQuerySubject(ctx, us.store, req.Query); derr == nil && ent != "" {
+			llmIntent = &QueryIntent{Category: IntentFactualEntity, Entity: ent}
+			log.Printf("[entity-consolidation] deterministic subject=%q", ent)
+		}
+	}
 
 	// Routing branch 1 — FactualEntity with a non-empty entity name.
 	// EntitySearch is a structured lookup (no similarity blending) — it's the

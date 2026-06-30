@@ -105,3 +105,34 @@ func (d *DB) EntityMentionContentIDs(ctx context.Context, norms []string, limit 
 	}
 	return out, nil
 }
+
+// EntityNormsMatching returns, among the given candidate norms, those that exist in
+// the entity index, mapped to their mention count. Used by deterministic query→entity
+// detection: more mentions = more central to the corpus, so it anchors better.
+func (d *DB) EntityNormsMatching(ctx context.Context, norms []string) (map[string]int, error) {
+	out := make(map[string]int, len(norms))
+	if len(norms) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(norms))
+	args := make([]any, len(norms))
+	for i, n := range norms {
+		ph[i] = "?"
+		args[i] = n
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT entity_norm, COUNT(*) FROM entity_mentions WHERE entity_norm IN (`+strings.Join(ph, ",")+`) GROUP BY entity_norm`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entity norms matching: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		var c int
+		if err := rows.Scan(&n, &c); err != nil {
+			return nil, err
+		}
+		out[n] = c
+	}
+	return out, rows.Err()
+}

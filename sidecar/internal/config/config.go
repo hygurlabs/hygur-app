@@ -194,6 +194,11 @@ type RetrievalConfig struct {
 	// recycle of the importance signal into ranking). Bounded, boost-only, off by
 	// default; a no-op until the consolidation pass has scored items.
 	SalienceRerank bool `mapstructure:"salience_rerank" yaml:"salience_rerank,omitempty"`
+
+	// EntityConsolidation triggers deterministic entity-anchored retrieval (the entity
+	// lens fired by an index match on the query, not the LLM classifier) for "about X"
+	// queries. Off by default; env-bindable.
+	EntityConsolidation bool `mapstructure:"entity_consolidation" yaml:"entity_consolidation,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.

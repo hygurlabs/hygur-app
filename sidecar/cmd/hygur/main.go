@@ -639,6 +639,7 @@ func main() {
 		EntitySynonymyThreshold: cfg.Retrieval.EntitySynonymyThreshold,
 		HebbianExpansion:        cfg.Retrieval.HebbianExpansion,
 		SalienceRerank:          cfg.Retrieval.SalienceRerank,
+		EntityConsolidation:     cfg.Retrieval.EntityConsolidation,
 	})
 
 	// Create search handler with unified search
