@@ -72,18 +72,21 @@ GROUP BY c.content_id`, args...)
 // conflict set, so folding it in needs a parse; it is additive and the weights are
 // shadow-tunable anyway.
 type LinkSignal struct {
-	LinkCount        int
-	StandingDecision bool
-	ActiveProject    bool
-	Pinned           bool
+	LinkCount         int
+	StandingDecision  bool
+	ActiveProject     bool
+	Pinned            bool
+	ConnectedEntities int // distinct mentioned entities that are in the Hebbian graph
 }
 
 // Exempt reports whether the item is hard-exempt from eviction (never goes cold).
 func (l LinkSignal) Exempt() bool { return l.StandingDecision || l.ActiveProject || l.Pinned }
 
 // ItemLinkSignals batch-computes per-item link and exempt signals from standing
-// decisions and active-project membership (pins ride on project_links.pin_state).
-// Items with no links are simply absent from the map (zero value).
+// decisions, active-project membership (pins ride on project_links.pin_state), and
+// entity-graph connectivity (distinct mentioned entities that recur in the Hebbian
+// co-occurrence graph). Only the first three make an item hard-exempt; connectivity
+// is a soft salience signal. Items with no links are absent from the map (zero value).
 func (d *DB) ItemLinkSignals(ctx context.Context, contentIDs []string) (map[string]LinkSignal, error) {
 	out := make(map[string]LinkSignal, len(contentIDs))
 	if len(contentIDs) == 0 {
@@ -143,8 +146,41 @@ GROUP BY pl.content_id`, args...)
 		}
 		out[cid] = s
 	}
+	if err := projRows.Err(); err != nil {
+		projRows.Close()
+		return nil, err
+	}
 	projRows.Close()
-	return out, projRows.Err()
+
+	// Entity-graph connectivity (DREAM Phase D ⇄ Phase 1): an item that mentions
+	// entities central to the corpus — those that recur in the Hebbian co-occurrence
+	// graph — is structurally important even if it was never accessed. Count each
+	// item's distinct mentioned entities that appear in entity_edges and fold that
+	// into link_count (capped naturally downstream by salLinkSat). This is what makes
+	// the otherwise-dormant cognitive map actually move salience.
+	connRows, err := d.db.QueryContext(ctx, `
+SELECT em.content_id, COUNT(DISTINCT em.entity_norm)
+FROM entity_mentions em
+WHERE em.content_id IN `+in+`
+  AND em.entity_norm IN (SELECT entity_a FROM entity_edges UNION SELECT entity_b FROM entity_edges)
+GROUP BY em.content_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	for connRows.Next() {
+		var cid string
+		var n int
+		if err := connRows.Scan(&cid, &n); err != nil {
+			connRows.Close()
+			return nil, err
+		}
+		s := out[cid]
+		s.ConnectedEntities = n
+		s.LinkCount += n
+		out[cid] = s
+	}
+	connRows.Close()
+	return out, connRows.Err()
 }
 
 // ItemSignal is one row of item_signals: the nightly consolidation scoring for an
