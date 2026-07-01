@@ -71,6 +71,7 @@ func (i *Ingestor) BackfillEntityEdges(ctx context.Context) (int, error) {
 				}
 				mentions := entityMentionsFromClaims(contradict.ClaimsFromMetadata(it.Metadata))
 				mentions = append(mentions, nerEntityMentions(it)...)
+				mentions = append(mentions, typedIdentifierMentions(it)...)
 				i.stampCoOccurrence(ctx, it, mentions)
 				processed++
 			}
