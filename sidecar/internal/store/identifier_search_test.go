@@ -43,4 +43,14 @@ func TestSearchByIdentifier(t *testing.T) {
 	if ids, _ := db.SearchByIdentifier(ctx, "11111111111", 10); len(ids) != 0 {
 		t.Errorf("absent: got %v, want []", ids)
 	}
+
+	// The paginated rebuild reindexes every item and stays searchable (idempotent).
+	if n, err := db.RebuildIdentifierIndex(ctx); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	} else if n != 3 {
+		t.Errorf("rebuild indexed %d, want 3", n)
+	}
+	if ids, _ := db.SearchByIdentifier(ctx, "12345678901", 10); len(ids) != 1 || ids[0] != "a" {
+		t.Errorf("post-rebuild lookup: got %v, want [a]", ids)
+	}
 }

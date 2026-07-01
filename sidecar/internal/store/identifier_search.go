@@ -19,32 +19,54 @@ func (d *DB) UpsertItemNorm(ctx context.Context, contentID, text string) error {
 }
 
 // RebuildIdentifierIndex repopulates item_norm from every knowledge item — the backfill for
-// existing docs (the ingest hook keeps new ones current). Returns the number indexed.
+// existing docs (the ingest hook keeps new ones current). Paginated so memory stays bounded
+// to one batch regardless of corpus size (the pod has a 1Gi cap); one transaction per batch
+// keeps it fast. Returns the number indexed.
 func (d *DB) RebuildIdentifierIndex(ctx context.Context) (int, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT content_id, title, normalized_text FROM knowledge_items`)
-	if err != nil {
-		return 0, err
-	}
-	type rec struct{ id, text string }
-	var recs []rec
-	for rows.Next() {
-		var id, title, text string
-		if err := rows.Scan(&id, &title, &text); err != nil {
-			rows.Close()
-			return 0, err
+	const batch = 500
+	const upsert = `INSERT INTO item_norm (content_id, norm) VALUES (?, ?)
+	                ON CONFLICT(content_id) DO UPDATE SET norm = excluded.norm`
+	total := 0
+	for offset := 0; ; offset += batch {
+		rows, err := d.db.QueryContext(ctx,
+			`SELECT content_id, title, normalized_text FROM knowledge_items
+			 ORDER BY content_id LIMIT ? OFFSET ?`, batch, offset)
+		if err != nil {
+			return total, err
 		}
-		recs = append(recs, rec{id, title + " " + text})
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	for i, r := range recs {
-		if err := d.UpsertItemNorm(ctx, r.id, r.text); err != nil {
-			return i, err
+		type rec struct{ id, text string }
+		var page []rec
+		for rows.Next() {
+			var id, title, text string
+			if err := rows.Scan(&id, &title, &text); err != nil {
+				rows.Close()
+				return total, err
+			}
+			page = append(page, rec{id, title + " " + text})
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return total, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		tx, err := d.db.BeginTx(ctx, nil)
+		if err != nil {
+			return total, err
+		}
+		for _, r := range page {
+			if _, err := tx.ExecContext(ctx, upsert, r.id, identifier.Normalize(r.text)); err != nil {
+				tx.Rollback()
+				return total, err
+			}
+			total++
+		}
+		if err := tx.Commit(); err != nil {
+			return total, err
 		}
 	}
-	return len(recs), nil
+	return total, nil
 }
 
 // SearchByIdentifier returns content IDs whose normalized text contains the identifier key
