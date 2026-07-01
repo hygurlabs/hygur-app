@@ -33,6 +33,10 @@ type BackfillOptions struct {
 	ProgressEvery int
 	// ProgressFn receives (processed, total stats so far). Optional.
 	ProgressFn func(processed int, stats BackfillStats)
+	// PreserveTimestamp writes only the metadata, leaving updated_at untouched. A
+	// re-extraction changes derived metadata, not content, so it must not mark every
+	// item "recently modified" (which would flood updated_at-based recency queries).
+	PreserveTimestamp bool
 }
 
 func (o *BackfillOptions) defaults() {
@@ -106,9 +110,15 @@ func Backfill(ctx context.Context, db *store.DB, llmClient *llm.Client, opts Bac
 			}
 
 			if !opts.DryRun && (tier1Changed || tier2Changed) {
-				if err := db.UpdateKnowledgeItem(ctx, item); err != nil {
+				var uerr error
+				if opts.PreserveTimestamp {
+					uerr = db.UpdateKnowledgeItemMetadata(ctx, item.ContentID, item.Metadata)
+				} else {
+					uerr = db.UpdateKnowledgeItem(ctx, item)
+				}
+				if uerr != nil {
 					stats.Errors++
-					fmt.Fprintf(os.Stderr, "store update error on content_id=%s: %v\n", item.ContentID, err)
+					fmt.Fprintf(os.Stderr, "store update error on content_id=%s: %v\n", item.ContentID, uerr)
 					continue
 				}
 			}

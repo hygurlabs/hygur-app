@@ -115,6 +115,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/reembed-missing", s.handleKnowledgeReembedMissing)
 			r.Post("/retag", s.handleKnowledgeRetag)
 			r.Post("/backfill-claims", s.handleKnowledgeBackfillClaims)
+			r.Post("/backfill-tier2", s.handleKnowledgeBackfillTier2)
 			r.Post("/backfill-entity-index", s.handleKnowledgeBackfillEntityIndex)
 			r.Post("/backfill-entity-edges", s.handleKnowledgeBackfillEntityEdges)
 			r.Post("/backfill-entity-vectors", s.handleKnowledgeBackfillEntityVectors)
@@ -501,6 +502,16 @@ func (s *Server) handleKnowledgeRetag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKnowledgeBackfillClaims(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.BackfillClaims(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillTier2 handles POST /knowledge/backfill-tier2 (re-run Tier-2
+// NER over the corpus into item metadata; updated_at preserved).
+func (s *Server) handleKnowledgeBackfillTier2(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillTier2NER(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")

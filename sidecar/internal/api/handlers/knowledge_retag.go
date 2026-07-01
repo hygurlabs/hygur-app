@@ -36,6 +36,34 @@ func (h *KnowledgeHandler) Retag(w http.ResponseWriter, r *http.Request) {
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
+// tier2InFlight guards the Tier-2 NER backfill (one LLM call per un-stamped item).
+var tier2InFlight atomic.Bool
+
+// BackfillTier2NER re-runs Tier-2 NER (persons/orgs/projects/topics) across the corpus
+// into item metadata (updated_at preserved). POST /knowledge/backfill-tier2. Runs in the
+// background; idempotent (current-version items skipped). Follow with backfill-entity-index
+// + backfill-entity-edges to fold the new entities into the index and graph.
+func (h *KnowledgeHandler) BackfillTier2NER(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if !tier2InFlight.CompareAndSwap(false, true) {
+		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer tier2InFlight.Store(false)
+		n, err := h.ingestor.BackfillTier2NER(context.Background())
+		if err != nil {
+			h.logger.Error().Err(err).Int("scanned", n).Msg("tier-2 NER backfill failed")
+			return
+		}
+		h.logger.Info().Int("scanned", n).Msg("tier-2 NER backfill complete")
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
 // claimsInFlight guards against overlapping claim-backfill runs (one main-model
 // LLM call per eligible mail/note that isn't already cached).
 var claimsInFlight atomic.Bool

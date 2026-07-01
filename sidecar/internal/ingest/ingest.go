@@ -142,6 +142,28 @@ func (i *Ingestor) tier2Client() *llm.Client {
 	return i.llmClient
 }
 
+// BackfillTier2NER re-runs Tier-2 NER (persons/orgs/projects/topics) across the corpus
+// into item metadata, using the dedicated indexing model. PreserveTimestamp: it writes
+// only metadata and never bumps updated_at, so a full-corpus pass can't make every item
+// read as "recently modified" (which would flood updated_at-based recency queries like
+// the meeting-brief tick). Idempotent — items already at the current Tier2Version are
+// skipped. Run backfill-entity-index + backfill-entity-edges afterwards to fold the new
+// NER entities into the index and graph. Returns items scanned.
+func (i *Ingestor) BackfillTier2NER(ctx context.Context) (int, error) {
+	if i.store == nil {
+		return 0, nil
+	}
+	client := i.tier2Client()
+	if client == nil {
+		return 0, nil // no LLM configured → nothing to extract
+	}
+	stats, err := extract.Backfill(ctx, i.store, client, extract.BackfillOptions{PreserveTimestamp: true})
+	if stats == nil {
+		return 0, err
+	}
+	return stats.Total, err
+}
+
 // SetBroker wires an event broker so the ingestor emits ingest_start /
 // ingest_complete around each document. Pass nil to disable emission.
 func (i *Ingestor) SetBroker(b *events.Broker) {

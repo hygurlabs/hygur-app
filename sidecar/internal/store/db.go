@@ -1085,6 +1085,22 @@ func (d *DB) UpdateKnowledgeItem(ctx context.Context, item *KnowledgeItem) error
 	return nil
 }
 
+// UpdateKnowledgeItemMetadata rewrites only an item's metadata, WITHOUT touching
+// updated_at. For derived-metadata backfills (Tier-2 NER, extraction) that must not
+// mark every item "recently modified" — a mass bump would flood updated_at-based
+// recency queries (e.g. the meeting-brief tick's ListRecentItems).
+func (d *DB) UpdateKnowledgeItemMetadata(ctx context.Context, contentID string, metadata map[string]any) error {
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+	if _, err := d.db.ExecContext(ctx,
+		`UPDATE knowledge_items SET metadata = ? WHERE content_id = ?`, string(b), contentID); err != nil {
+		return fmt.Errorf("failed to update knowledge item metadata: %w", err)
+	}
+	return nil
+}
+
 // InsertChunk inserts a new chunk into the database.
 func (d *DB) InsertChunk(ctx context.Context, chunk *Chunk) error {
 	metadata, err := json.Marshal(chunk.Metadata)
