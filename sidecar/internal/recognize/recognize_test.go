@@ -76,6 +76,19 @@ func TestRecognize(t *testing.T) {
 		t.Errorf("Recognize did not type the formatted NISS; got %+v", got)
 	}
 
+	// Same value split across runs by spaces + a newline — still typed (adjacent runs are
+	// glued and checksum-gated). This is the real-document case (grouped/wrapped values).
+	split := niss[0:2] + "." + niss[2:4] + "." + niss[4:6] + " : " + niss[6:9] + "-" + niss[9:11]
+	foundSplit := false
+	for _, r := range Recognize("Numéro national\n" + split + "\npour la personne.") {
+		if r.Type == TypeNationalNumber && r.Value == niss {
+			foundSplit = true
+		}
+	}
+	if !foundSplit {
+		t.Error("space/newline-split NISS was not glued and typed")
+	}
+
 	// An 11-digit number with a bad checksum (an act-number stand-in) must NOT be typed.
 	bad := niss[:9] + fmt.Sprintf("%02d", (mustInt(niss[9:])+1)%100)
 	for _, r := range Recognize("Acte n° " + bad + " enregistré.") {

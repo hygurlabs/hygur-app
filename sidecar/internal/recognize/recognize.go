@@ -32,43 +32,50 @@ type Typed struct {
 	End   int
 }
 
-// runRe matches an identifier-like run: a maximal token of alphanumerics with the in-value
-// separators we've seen in real documents (". - / :"). Whitespace bounds a run, so a value
-// stays whole while a label + value are separate runs.
-var runRe = regexp.MustCompile(`[0-9A-Za-z][0-9A-Za-z./:-]*`)
+// numRe matches a numeric run: a maximal span of digits with the in-value separators
+// ". - / : space" between them, bounded by letters/other. Letters (labels, words) bound a
+// run, so "numéro national: 23.02.23:347-71" yields the value's digits without the label.
+var numRe = regexp.MustCompile(`[0-9][0-9 .\-/:]*[0-9]|[0-9]`)
 
-type validator struct {
-	typ string
-	fn  func(norm string) (string, bool)
-}
+// ibanRe matches an (unspaced) IBAN: two country letters, two check digits, then the BBAN.
+var ibanRe = regexp.MustCompile(`[A-Za-z]{2}[0-9]{2}[0-9A-Za-z]{11,30}`)
 
-// Order: longest/most-specific first. Lengths are near-disjoint (NN 11, IBAN 15+, BCE 10),
-// so the first passing checksum wins cleanly.
-var validators = []validator{
-	{TypeNationalNumber, validNISS},
-	{TypeIBAN, validIBAN},
-	{TypeEnterprise, validBCE},
-}
-
-// Recognize returns every checksum-valid typed identifier in text (all occurrences, with
-// positions; the caller dedupes by (Type, Value) when injecting nodes).
+// Recognize returns every checksum-valid typed identifier in text. For the pure-digit types
+// (national number, enterprise/VAT) it slides a fixed-length checksum window WITHIN each
+// numeric run — so a value works whether it stands alone, is separator-formatted, or is
+// embedded in a longer digit sequence (real OCR'd documents do all three). The checksum is
+// the guard: an arbitrary window has ~1% chance of passing, further cut by the NISS date
+// sanity, and a spurious node barely co-occurs so NPMI dampens it downstream. Greedy within
+// a run: on a hit, skip past the consumed digits.
 func Recognize(text string) []Typed {
 	var out []Typed
-	for _, m := range runRe.FindAllStringIndex(text, -1) {
-		raw := text[m[0]:m[1]]
-		norm := identifier.Normalize(raw)
-		if len(norm) < 10 { // shorter than any v1 type
-			continue
-		}
-		for _, v := range validators {
-			if canon, ok := v.fn(norm); ok {
-				out = append(out, Typed{Type: v.typ, Value: canon, Raw: raw, Start: m[0], End: m[1]})
-				break // first matching type wins
+	for _, m := range numRe.FindAllStringIndex(text, -1) {
+		run := text[m[0]:m[1]]
+		digits := identifier.Normalize(run) // separators gone → pure digits
+		for i := 0; i+10 <= len(digits); {
+			switch {
+			case i+11 <= len(digits) && isNISS(digits[i:i+11]):
+				out = append(out, Typed{TypeNationalNumber, digits[i : i+11], run, m[0], m[1]})
+				i += 11
+			case isBCE(digits[i : i+10]):
+				out = append(out, Typed{TypeEnterprise, digits[i : i+10], run, m[0], m[1]})
+				i += 10
+			default:
+				i++
 			}
+		}
+	}
+	for _, m := range ibanRe.FindAllStringIndex(text, -1) {
+		raw := text[m[0]:m[1]]
+		if canon, ok := validIBAN(identifier.Normalize(raw)); ok {
+			out = append(out, Typed{TypeIBAN, canon, raw, m[0], m[1]})
 		}
 	}
 	return out
 }
+
+func isNISS(d string) bool { _, ok := validNISS(d); return ok }
+func isBCE(d string) bool  { _, ok := validBCE(d); return ok }
 
 func allDigits(s string) bool {
 	for i := 0; i < len(s); i++ {
