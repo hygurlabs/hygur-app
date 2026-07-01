@@ -100,57 +100,35 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 		pending = append(pending, pend{id: id, order: 1, viaW: 1})
 	}
 
-	// 2nd-order: items mentioning a neighbor, ranked by DISCRIMINATIVE weight — the
-	// edge weight divided by how many items the neighbor itself appears in (inverse
-	// frequency, IDF-style) — so a super-hub (an entity that co-occurs with almost
-	// everything, e.g. the corpus owner, who sits in every thread) doesn't flood every
-	// dossier with the same generic items. Specific neighbors surface; hubs sink.
-	type discNeighbor struct {
-		norm string
-		disc float64
-	}
-	var ranked []discNeighbor
-	if len(network) > 0 {
-		norms := make([]string, len(network))
-		for i, n := range network {
-			norms[i] = n.Norm
+	// 2nd-order: items mentioning a neighbor (not already seen), down-weighted by the
+	// neighbor's NPMI edge weight. The network is already NPMI-ranked, so a
+	// non-discriminative hub (e.g. the corpus owner) is naturally demoted — no separate
+	// hub penalty needed.
+	var maxW float64
+	for _, n := range network {
+		if n.Weight > maxW {
+			maxW = n.Weight
 		}
-		counts, err := db.EntityNormsMatching(ctx, norms)
-		if err != nil {
-			return nil, err
-		}
-		for _, n := range network {
-			m := counts[n.Norm]
-			if m < 1 {
-				m = 1
-			}
-			ranked = append(ranked, discNeighbor{n.Norm, n.Weight / float64(m)})
-		}
-		sort.Slice(ranked, func(i, j int) bool { return ranked[i].disc > ranked[j].disc })
-	}
-	var maxDisc float64
-	if len(ranked) > 0 {
-		maxDisc = ranked[0].disc
 	}
 	var second []pend
-	for i, n := range ranked {
+	for i, n := range network {
 		if i >= engramNeighbors2nd {
 			break
 		}
-		ids, err := db.EntityMentionContentIDs(ctx, []string{n.norm}, engramPerNeighbor2nd)
+		ids, err := db.EntityMentionContentIDs(ctx, []string{n.Norm}, engramPerNeighbor2nd)
 		if err != nil {
 			return nil, err
 		}
 		wn := 1.0
-		if maxDisc > 0 {
-			wn = n.disc / maxDisc
+		if maxW > 0 {
+			wn = n.Weight / maxW
 		}
 		for _, id := range ids {
 			if id == "" || seen[id] {
 				continue
 			}
 			seen[id] = true
-			second = append(second, pend{id: id, order: 2, via: n.norm, viaW: wn})
+			second = append(second, pend{id: id, order: 2, via: n.Norm, viaW: wn})
 		}
 	}
 

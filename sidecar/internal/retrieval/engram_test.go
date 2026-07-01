@@ -45,13 +45,21 @@ func TestAssembleEngram(t *testing.T) {
 		return store.EntityMention{EntityNorm: alice, EntityRaw: "Alice", Attribute: "ner_person", AssertedAt: at}
 	}
 
-	// i1 mentions Acme + Alice (wires the edge), recent, a standing decision.
+	// i1 & i2 mention Acme + Alice (they co-occur → a strong NPMI edge), i1 recent + a
+	// standing decision, i2 old.
 	mk("i1", recent, []store.EntityMention{org(recent), per(recent)})
-	// i2 mentions Acme only, old.
-	mk("i2", old, []store.EntityMention{org(old)})
+	mk("i2", old, []store.EntityMention{org(old), per(old)})
 	// i3 mentions Alice only, recent → reachable from Acme at 2nd order via Alice.
 	mk("i3", recent, []store.EntityMention{per(recent)})
+	// Filler items with unrelated entities, so Acme/Alice stay rare relative to the
+	// corpus and their co-occurrence beats chance (positive NPMI).
+	for i := 0; i < 5; i++ {
+		id := "f" + string(rune('1'+i))
+		mk(id, recent, []store.EntityMention{{EntityNorm: "filler" + string(rune('1'+i)), AssertedAt: recent}})
+	}
 
+	// Acme+Alice co-occur in i1 and i2 → co_count 2.
+	db.UpsertCoOccurrences(ctx, []string{acme, alice}, recent)
 	if err := db.UpsertCoOccurrences(ctx, []string{acme, alice}, recent); err != nil {
 		t.Fatalf("co-occurrences: %v", err)
 	}

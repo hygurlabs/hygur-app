@@ -19,9 +19,10 @@ import (
 	"github.com/hygur/sidecar/internal/store"
 )
 
-// hebbianMinWeight is the minimum recency-decayed co-occurrence weight for an
-// entity_edges neighbour to be folded into the entity lens (DREAM Phase D §3.3).
-const hebbianMinWeight = 2.0
+// hebbianMinWeight is the minimum recency-decayed NPMI association weight for an
+// entity_edges neighbour to be folded into the entity lens. NPMI ∈ [-1,1]; 0.15 keeps
+// clearly positively-associated pairs and drops weak/hub links (DREAM Phase D §3.3).
+const hebbianMinWeight = 0.15
 
 // UnifiedResult represents a single search result from the unified search.
 type UnifiedResult struct {
