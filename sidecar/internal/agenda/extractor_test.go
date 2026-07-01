@@ -20,8 +20,10 @@ func makeItem(id, title string, metadata map[string]any) store.KnowledgeItem {
 }
 
 func TestExtractsActionsFromExtractedDueDates(t *testing.T) {
+	// A future date so the today-relative deadline filter keeps it (not date-flaky).
+	due := time.Now().AddDate(0, 0, 7).Format("2006-01-02")
 	item := makeItem("doc-1", "Rapport Q2", map[string]any{
-		"extracted_due_dates": []interface{}{"2026-06-30"},
+		"extracted_due_dates": []interface{}{due},
 		"extracted_topics":    []interface{}{"finance", "reporting"},
 	})
 
@@ -36,8 +38,8 @@ func TestExtractsActionsFromExtractedDueDates(t *testing.T) {
 	if actions[0].SourceID != "doc-1" {
 		t.Errorf("expected source_id=doc-1, got %s", actions[0].SourceID)
 	}
-	if actions[0].DeadlineISO != "2026-06-30" {
-		t.Errorf("expected deadline 2026-06-30, got %s", actions[0].DeadlineISO)
+	if actions[0].DeadlineISO != due {
+		t.Errorf("expected deadline %s, got %s", due, actions[0].DeadlineISO)
 	}
 }
 
