@@ -145,13 +145,44 @@ type SubjectStat struct {
 	Mentions int    `json:"mentions"`
 }
 
-// genericSubjectNorms are salutations / forms of address that NER mislabels as people
-// ("Bonjour", "Madame", …). Normalized (lowercase, accent-free). PII-free by design —
-// no real names here. Excluded from the discovered-subjects list.
-var genericSubjectNorms = []string{
-	"bonjour", "bonsoir", "salut", "coucou", "hi", "hello", "hey", "dear",
-	"madame", "madam", "monsieur", "mademoiselle", "mesdames", "messieurs",
-	"mme", "mlle", "mr", "mrs", "ms", "miss", "sir", "cher", "chere", "chers", "cheres", "dr",
+// junkSubjectNorms are function words / greetings that must never be a subject (norms
+// are stored lowercased + accent-stripped). PII-free generics only.
+var junkSubjectNorms = map[string]bool{
+	"bonjour": true, "bonsoir": true, "salut": true, "coucou": true, "hi": true,
+	"hello": true, "hey": true, "dear": true, "madame": true, "madam": true,
+	"monsieur": true, "mademoiselle": true, "mesdames": true, "messieurs": true,
+	"mme": true, "mlle": true, "mrs": true, "miss": true, "sir": true,
+	"cher": true, "chere": true, "chers": true, "cheres": true,
+	"les": true, "des": true, "une": true, "aux": true, "cet": true, "cette": true,
+	"ces": true, "the": true, "and": true, "but": true, "our": true, "your": true,
+}
+
+// leadingDeterminers mark a generic reference when they start a multi-word norm
+// ("the report", "ce message", "le contrat").
+var leadingDeterminers = map[string]bool{
+	"the": true, "le": true, "la": true, "les": true, "l": true, "un": true,
+	"une": true, "des": true, "ce": true, "cet": true, "cette": true, "ces": true,
+}
+
+// IsJunkSubjectNorm reports whether a normalized entity norm is too generic or malformed
+// to be a real subject: too short ("le", "au"), a function word/greeting, a personal
+// email fragment ("x gmail com"), or a determiner-led generic phrase ("ce message").
+// Shared by the discovered-subjects list and the Engram network.
+func IsJunkSubjectNorm(norm string) bool {
+	norm = strings.TrimSpace(norm)
+	if len([]rune(norm)) < 3 {
+		return true
+	}
+	if junkSubjectNorms[norm] {
+		return true
+	}
+	if strings.Contains(norm, "gmail") {
+		return true
+	}
+	if first, _, ok := strings.Cut(norm, " "); ok && leadingDeterminers[first] {
+		return true
+	}
+	return false
 }
 
 // TopSubjects returns the most central real subjects (person/org/project — NOT topics,
@@ -162,32 +193,26 @@ func (d *DB) TopSubjects(ctx context.Context, limit int, exclude []string) ([]Su
 	if limit <= 0 {
 		limit = 50
 	}
-	// Combine the generic salutation stoplist with the owner's own norms, deduped.
+	// Exclude the owner's own norms (already normalized) in SQL; generic junk is filtered
+	// in Go via IsJunkSubjectNorm.
 	seen := make(map[string]bool)
-	var stop []string
-	for _, n := range genericSubjectNorms {
-		if !seen[n] {
-			seen[n] = true
-			stop = append(stop, n)
-		}
-	}
+	args := make([]any, 0, len(exclude)+1)
+	var ph []string
 	for _, n := range exclude {
 		if n != "" && !seen[n] {
 			seen[n] = true
-			stop = append(stop, n)
+			ph = append(ph, "?")
+			args = append(args, n)
 		}
 	}
-	args := make([]any, 0, len(stop)+1)
-	ph := make([]string, len(stop))
-	for i, n := range stop {
-		ph[i] = "?"
-		args = append(args, n)
+	notIn := ""
+	if len(ph) > 0 {
+		notIn = " AND entity_norm NOT IN (" + strings.Join(ph, ",") + ")"
 	}
-	args = append(args, limit*2) // buffer: some rows pass the WHERE but are topic-dominant, filtered below
+	args = append(args, limit*3) // buffer: junk + topic-dominant rows are filtered below
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT entity_norm, COUNT(DISTINCT content_id) AS c FROM entity_mentions
-		 WHERE attribute IN ('ner_person', 'ner_org', 'ner_project')
-		   AND entity_norm NOT IN (`+strings.Join(ph, ",")+`)
+		 WHERE attribute IN ('ner_person', 'ner_org', 'ner_project')`+notIn+`
 		 GROUP BY entity_norm ORDER BY c DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("top subjects: %w", err)
@@ -210,10 +235,13 @@ func (d *DB) TopSubjects(ctx context.Context, limit int, exclude []string) ([]Su
 	if err != nil {
 		return nil, err
 	}
-	// Keep only entities whose DOMINANT type is a real subject kind: an entity with a
-	// stray person/org tag but mostly a topic is still a topic. Then cap to limit.
+	// Keep entities that are (a) not generic junk and (b) whose DOMINANT type is a real
+	// subject kind (a stray person/org tag on a mostly-topic entity is still a topic).
 	filtered := out[:0]
 	for i := range out {
+		if IsJunkSubjectNorm(out[i].Norm) {
+			continue
+		}
 		switch types[out[i].Norm] {
 		case "person", "org", "project":
 			out[i].Type = types[out[i].Norm]

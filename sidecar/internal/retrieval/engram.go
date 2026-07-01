@@ -62,22 +62,6 @@ func neighborRank(n EngramNeighbor) float64 {
 	return n.Weight
 }
 
-// engramArticles are leading determiners that mark a generic reference ("the author",
-// "le contrat") rather than a named entity. Normalized (lowercase, accents stripped).
-var engramArticles = map[string]bool{
-	"the": true, "le": true, "la": true, "les": true, "l": true,
-	"un": true, "une": true, "des": true,
-}
-
-// hasLeadingArticle reports whether a normalized norm starts with a generic determiner.
-func hasLeadingArticle(norm string) bool {
-	first, _, ok := strings.Cut(strings.TrimSpace(norm), " ")
-	if !ok {
-		return false
-	}
-	return engramArticles[first]
-}
-
 // Engram is a subject's consolidated dossier.
 type Engram struct {
 	Subject        EngramSubject    `json:"subject"`
@@ -148,11 +132,10 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	}
 	network := make([]EngramNeighbor, 0, len(rawNetwork))
 	for _, n := range rawNetwork {
-		t := nTypes[n.Norm]
-		if t == "" && hasLeadingArticle(n.Norm) {
-			continue // generic claim reference, not a named entity
+		if store.IsJunkSubjectNorm(n.Norm) {
+			continue // too short / function word / email fragment / determiner-led
 		}
-		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: t})
+		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: nTypes[n.Norm]})
 	}
 	sort.SliceStable(network, func(i, j int) bool {
 		return neighborRank(network[i]) > neighborRank(network[j])

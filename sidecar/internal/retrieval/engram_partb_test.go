@@ -2,21 +2,9 @@ package retrieval
 
 import "testing"
 
-// Part B network shaping: generic article-led claim references are recognised, named
-// entities are preferred over claims of comparable association but not over much
-// stronger ones.
+// Part B network shaping: a named entity is preferred over a claim of comparable
+// association, but not over a much stronger one.
 func TestEngramNeighborPartB(t *testing.T) {
-	for _, s := range []string{"the author", "le contrat", "la mission", "les documents", "des factures", "l accord"} {
-		if !hasLeadingArticle(s) {
-			t.Errorf("%q should be flagged as an article-led generic reference", s)
-		}
-	}
-	for _, s := range []string{"tara gaming ltd", "vincent boiteau", "novaquark", "aaa project", "contractor agreement", ""} {
-		if hasLeadingArticle(s) {
-			t.Errorf("%q should NOT be flagged as article-led", s)
-		}
-	}
-
 	named := EngramNeighbor{Norm: "x", Weight: 0.30, Type: "org"}
 	claimSame := EngramNeighbor{Norm: "y", Weight: 0.30}
 	claimStrong := EngramNeighbor{Norm: "z", Weight: 0.90}

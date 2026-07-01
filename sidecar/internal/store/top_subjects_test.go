@@ -61,3 +61,21 @@ func TestTopSubjects(t *testing.T) {
 		t.Errorf("second = %+v, want {bob person 2}", subs[1])
 	}
 }
+
+func TestIsJunkSubjectNorm(t *testing.T) {
+	for _, n := range []string{
+		"le", "au", "ce", "les", "the", "une", "madame", "bonjour",
+		"ce message", "the report", "le contrat", "dpetit gmail com", "x gmail com",
+	} {
+		if !IsJunkSubjectNorm(n) {
+			t.Errorf("%q should be junk", n)
+		}
+	}
+	for _, n := range []string{
+		"chargemap", "anne durand", "novaquark", "nrb", "tara gaming ltd", "raphael moreau",
+	} {
+		if IsJunkSubjectNorm(n) {
+			t.Errorf("%q should NOT be junk", n)
+		}
+	}
+}
