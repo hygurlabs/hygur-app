@@ -41,6 +41,9 @@ type BackfillOptions struct {
 	// Concurrency bounds parallel Tier-2 (LLM) extractions per batch. Default 1
 	// (sequential). The LLM calls run in parallel; store writes + stats are serialized.
 	Concurrency int
+	// Force re-runs Tier 2 even on items already stamped with the current version —
+	// used to re-extract the whole corpus with a different (better) model.
+	Force bool
 }
 
 func (o *BackfillOptions) defaults() {
@@ -128,7 +131,7 @@ func processBackfillItem(ctx context.Context, db *store.DB, llmClient *llm.Clien
 	// Tier 2 (LLM) — outside the lock so extractions run in parallel.
 	tier2Changed, tier2Skipped := false, false
 	var tier2Err error
-	if !opts.SkipTier2 && !hasCurrentTier2(item.Metadata) {
+	if !opts.SkipTier2 && (opts.Force || !hasCurrentTier2(item.Metadata)) {
 		tier2, err := ExtractTier2(ctx, llmClient, item.NormalizedText)
 		if err != nil {
 			tier2Err = err

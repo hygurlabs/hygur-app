@@ -149,15 +149,22 @@ func (i *Ingestor) tier2Client() *llm.Client {
 // the meeting-brief tick). Idempotent — items already at the current Tier2Version are
 // skipped. Run backfill-entity-index + backfill-entity-edges afterwards to fold the new
 // NER entities into the index and graph. Returns items scanned.
-func (i *Ingestor) BackfillTier2NER(ctx context.Context) (int, error) {
+// useMainModel runs the extraction on the larger generation model (higher-quality NER)
+// instead of the small indexing model; force re-extracts even already-stamped items.
+func (i *Ingestor) BackfillTier2NER(ctx context.Context, useMainModel, force bool) (int, error) {
 	if i.store == nil {
 		return 0, nil
 	}
 	client := i.tier2Client()
+	if useMainModel && i.llmClient != nil {
+		client = i.llmClient
+	}
 	if client == nil {
 		return 0, nil // no LLM configured → nothing to extract
 	}
-	stats, err := extract.Backfill(ctx, i.store, client, extract.BackfillOptions{PreserveTimestamp: true, Concurrency: 4})
+	stats, err := extract.Backfill(ctx, i.store, client, extract.BackfillOptions{
+		PreserveTimestamp: true, Concurrency: 4, Force: force,
+	})
 	if stats == nil {
 		return 0, err
 	}

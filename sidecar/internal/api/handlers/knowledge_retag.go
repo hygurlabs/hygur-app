@@ -52,14 +52,18 @@ func (h *KnowledgeHandler) BackfillTier2NER(w http.ResponseWriter, r *http.Reque
 		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
 		return
 	}
+	// ?model=main uses the larger generation model (better NER); ?force=1 re-extracts
+	// even already-stamped items (to re-run the whole corpus with a different model).
+	useMain := r.URL.Query().Get("model") == "main"
+	force := r.URL.Query().Get("force") == "1"
 	go func() {
 		defer tier2InFlight.Store(false)
-		n, err := h.ingestor.BackfillTier2NER(context.Background())
+		n, err := h.ingestor.BackfillTier2NER(context.Background(), useMain, force)
 		if err != nil {
 			h.logger.Error().Err(err).Int("scanned", n).Msg("tier-2 NER backfill failed")
 			return
 		}
-		h.logger.Info().Int("scanned", n).Msg("tier-2 NER backfill complete")
+		h.logger.Info().Int("scanned", n).Bool("main_model", useMain).Bool("force", force).Msg("tier-2 NER backfill complete")
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
