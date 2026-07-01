@@ -8,10 +8,33 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/fact"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
 )
+
+// IdentifierLookup handles GET /engrams/lookup?entity=X&type=national_number — the
+// deterministic (entity, identifier-type) → value lookup with a confidence tier + sources.
+func (h *EngramHandler) IdentifierLookup(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	entity := strings.TrimSpace(r.URL.Query().Get("entity"))
+	idType := strings.TrimSpace(r.URL.Query().Get("type"))
+	if entity == "" || idType == "" {
+		writeKnowledgeError(w, http.StatusBadRequest, "BAD_REQUEST", "entity and type are required")
+		return
+	}
+	res, err := fact.LookupIdentifier(r.Context(), h.store, contradict.NormKey(entity), idType, time.Now())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("identifier lookup failed")
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
+		return
+	}
+	writeKnowledgeJSON(w, http.StatusOK, res)
+}
 
 // EngramHandler serves the Engram dossier — a subject's consolidated memory (network,
 // strength-ordered timeline, live/dead decisions/contradictions), assembled

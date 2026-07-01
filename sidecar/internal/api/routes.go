@@ -204,6 +204,7 @@ func (s *Server) setupRoutes() {
 		// timeline + live/dead decisions/contradictions). Deterministic read; no LLM.
 		r.Route("/engrams", func(r chi.Router) {
 			r.Get("/", s.handleEngramList)
+			r.Get("/lookup", s.handleIdentifierLookup) // static before {norm}
 			r.Get("/{norm}", s.handleEngramDossier)
 		})
 
