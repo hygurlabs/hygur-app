@@ -920,14 +920,6 @@ func (s *Server) handleGetTokenUsage(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "usage handler not configured")
 }
 
-func (s *Server) handleResetTokenUsage(w http.ResponseWriter, r *http.Request) {
-	if s.usageHandler != nil {
-		s.usageHandler.Reset(w, r)
-		return
-	}
-	writeError(w, http.StatusServiceUnavailable, "usage handler not configured")
-}
-
 func (s *Server) handleSetTokenPricing(w http.ResponseWriter, r *http.Request) {
 	if s.usageHandler != nil {
 		s.usageHandler.SetPricing(w, r)

@@ -305,7 +305,6 @@ func (s *Server) setupRoutes() {
 		// Token usage + cost. Pricing lives in the DB, not config.yaml, so
 		// saving it never restarts the sidecar.
 		r.Get("/usage/tokens", s.handleGetTokenUsage)
-		r.Post("/usage/reset", s.handleResetTokenUsage)
 		r.Put("/usage/pricing", s.handleSetTokenPricing)
 
 		// Phase 1 (pair mode) — append-only interaction signals + learning gauge.

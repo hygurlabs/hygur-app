@@ -312,6 +312,27 @@ func DumpTokenUsage(ctx context.Context, path, key, startDay string) ([]DayCateg
 	return days, pricing, nil
 }
 
+// ResetTokenUsageAt opens the DB at path (keyed) and clears all recorded token usage —
+// the operator's reset of a tenant's running daily/monthly totals. Invoked in-pod via
+// `hygur usage reset` (kubectl exec), never exposed on the tenant API, so a tenant can't
+// lift the operator's cap itself. Mirrors DumpTokenUsage's keyed open, but writable.
+func ResetTokenUsageAt(ctx context.Context, path, key string) (int64, error) {
+	dsn := "file:" + path + "?_foreign_keys=off&_busy_timeout=30000"
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return 0, fmt.Errorf("usage reset open: %w", err)
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1)
+	if err := conn.PingContext(ctx); err != nil {
+		return 0, fmt.Errorf("usage reset open (wrong key?): %w", err)
+	}
+	return (&DB{db: conn}).ResetTokenUsage(ctx)
+}
+
 // MailboxStat is one row of the mail-by-mailbox breakdown (the purge dry-run).
 type MailboxStat struct {
 	Mailbox   string `json:"mailbox"`
