@@ -157,7 +157,7 @@ func (i *Ingestor) BackfillTier2NER(ctx context.Context) (int, error) {
 	if client == nil {
 		return 0, nil // no LLM configured → nothing to extract
 	}
-	stats, err := extract.Backfill(ctx, i.store, client, extract.BackfillOptions{PreserveTimestamp: true})
+	stats, err := extract.Backfill(ctx, i.store, client, extract.BackfillOptions{PreserveTimestamp: true, Concurrency: 4})
 	if stats == nil {
 		return 0, err
 	}

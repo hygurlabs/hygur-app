@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/hygur/sidecar/internal/llm"
@@ -37,11 +38,17 @@ type BackfillOptions struct {
 	// re-extraction changes derived metadata, not content, so it must not mark every
 	// item "recently modified" (which would flood updated_at-based recency queries).
 	PreserveTimestamp bool
+	// Concurrency bounds parallel Tier-2 (LLM) extractions per batch. Default 1
+	// (sequential). The LLM calls run in parallel; store writes + stats are serialized.
+	Concurrency int
 }
 
 func (o *BackfillOptions) defaults() {
 	if o.BatchSize <= 0 {
 		o.BatchSize = 100
+	}
+	if o.Concurrency <= 0 {
+		o.Concurrency = 1
 	}
 }
 
@@ -60,6 +67,7 @@ func Backfill(ctx context.Context, db *store.DB, llmClient *llm.Client, opts Bac
 	}
 
 	stats := &BackfillStats{}
+	var mu sync.Mutex // serializes stats + store writes (SQLite is single-writer)
 	offset := 0
 
 	for {
@@ -75,63 +83,25 @@ func Backfill(ctx context.Context, db *store.DB, llmClient *llm.Client, opts Bac
 			break
 		}
 
+		// Process a batch with a bounded worker pool: the Tier-2 LLM calls run in
+		// parallel, while stats + store writes are serialized under mu.
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, opts.Concurrency)
 		for _, item := range items {
-			if err := ctx.Err(); err != nil {
-				return stats, err
+			if ctx.Err() != nil {
+				break
 			}
-			stats.Total++
-
-			if item.Metadata == nil {
-				item.Metadata = map[string]any{}
-			}
-
-			// Tier 1: cheap, always re-run. The result is deterministic so
-			// re-running on already-enriched items is harmless.
-			before := snapshotTier1Keys(item.Metadata)
-			EnrichMetadataWithTier1(item.Metadata, item.NormalizedText)
-			tier1Changed := snapshotTier1Keys(item.Metadata) != before
-
-			// Tier 2: skip if already at current version.
-			tier2Changed := false
-			if !opts.SkipTier2 && !hasCurrentTier2(item.Metadata) {
-				tier2, err := ExtractTier2(ctx, llmClient, item.NormalizedText)
-				if err != nil {
-					stats.Errors++
-					fmt.Fprintf(os.Stderr, "tier2 error on content_id=%s: %v\n", item.ContentID, err)
-					if opts.ProgressFn != nil && opts.ProgressEvery > 0 && stats.Total%opts.ProgressEvery == 0 {
-						opts.ProgressFn(stats.Total, *stats)
-					}
-					continue
-				}
-				MergeTier2IntoMetadata(item.Metadata, tier2)
-				tier2Changed = true
-			} else if !opts.SkipTier2 {
-				stats.SkippedV2++
-			}
-
-			if !opts.DryRun && (tier1Changed || tier2Changed) {
-				var uerr error
-				if opts.PreserveTimestamp {
-					uerr = db.UpdateKnowledgeItemMetadata(ctx, item.ContentID, item.Metadata)
-				} else {
-					uerr = db.UpdateKnowledgeItem(ctx, item)
-				}
-				if uerr != nil {
-					stats.Errors++
-					fmt.Fprintf(os.Stderr, "store update error on content_id=%s: %v\n", item.ContentID, uerr)
-					continue
-				}
-			}
-			if tier1Changed {
-				stats.UpdatedTier1++
-			}
-			if tier2Changed {
-				stats.UpdatedTier2++
-			}
-
-			if opts.ProgressFn != nil && opts.ProgressEvery > 0 && stats.Total%opts.ProgressEvery == 0 {
-				opts.ProgressFn(stats.Total, *stats)
-			}
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(item *store.KnowledgeItem) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				processBackfillItem(ctx, db, llmClient, opts, item, stats, &mu)
+			}(item)
+		}
+		wg.Wait()
+		if err := ctx.Err(); err != nil {
+			return stats, err
 		}
 
 		if len(items) < opts.BatchSize {
@@ -141,6 +111,74 @@ func Backfill(ctx context.Context, db *store.DB, llmClient *llm.Client, opts Bac
 	}
 
 	return stats, nil
+}
+
+// processBackfillItem runs Tier-1 (regex) + Tier-2 (LLM) for one item and persists the
+// result. The LLM call runs lock-free (parallel across items); stats and the store
+// write happen under mu so they stay consistent and SQLite sees one writer at a time.
+func processBackfillItem(ctx context.Context, db *store.DB, llmClient *llm.Client, opts BackfillOptions, item *store.KnowledgeItem, stats *BackfillStats, mu *sync.Mutex) {
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	// Tier 1: cheap, deterministic, always re-run (harmless on enriched items).
+	before := snapshotTier1Keys(item.Metadata)
+	EnrichMetadataWithTier1(item.Metadata, item.NormalizedText)
+	tier1Changed := snapshotTier1Keys(item.Metadata) != before
+
+	// Tier 2 (LLM) — outside the lock so extractions run in parallel.
+	tier2Changed, tier2Skipped := false, false
+	var tier2Err error
+	if !opts.SkipTier2 && !hasCurrentTier2(item.Metadata) {
+		tier2, err := ExtractTier2(ctx, llmClient, item.NormalizedText)
+		if err != nil {
+			tier2Err = err
+		} else {
+			MergeTier2IntoMetadata(item.Metadata, tier2)
+			tier2Changed = true
+		}
+	} else if !opts.SkipTier2 {
+		tier2Skipped = true
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	stats.Total++
+	if tier2Err != nil {
+		stats.Errors++
+		fmt.Fprintf(os.Stderr, "tier2 error on content_id=%s: %v\n", item.ContentID, tier2Err)
+		reportProgress(opts, stats)
+		return
+	}
+	if tier2Skipped {
+		stats.SkippedV2++
+	}
+	if !opts.DryRun && (tier1Changed || tier2Changed) {
+		var uerr error
+		if opts.PreserveTimestamp {
+			uerr = db.UpdateKnowledgeItemMetadata(ctx, item.ContentID, item.Metadata)
+		} else {
+			uerr = db.UpdateKnowledgeItem(ctx, item)
+		}
+		if uerr != nil {
+			stats.Errors++
+			fmt.Fprintf(os.Stderr, "store update error on content_id=%s: %v\n", item.ContentID, uerr)
+			return
+		}
+	}
+	if tier1Changed {
+		stats.UpdatedTier1++
+	}
+	if tier2Changed {
+		stats.UpdatedTier2++
+	}
+	reportProgress(opts, stats)
+}
+
+// reportProgress fires the progress callback on the cadence. Caller holds mu.
+func reportProgress(opts BackfillOptions, stats *BackfillStats) {
+	if opts.ProgressFn != nil && opts.ProgressEvery > 0 && stats.Total%opts.ProgressEvery == 0 {
+		opts.ProgressFn(stats.Total, *stats)
+	}
 }
 
 // hasCurrentTier2 returns true if the item has been processed by the current
