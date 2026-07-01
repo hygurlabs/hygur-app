@@ -716,6 +716,9 @@ func main() {
 	// surfaces logged decisions (which are NOT pre-injected into the turn).
 	toolRegistry.MustRegister(memorySearchTool)
 	toolRegistry.MustRegister(tools.NewFindDecisionsTool(db))
+	// lookup_identifier: deterministic (entity, type) → value from the typed-identifier graph
+	// + proximity, with a confidence tier the model must voice as-is (never a memorised guess).
+	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db))
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is
