@@ -164,23 +164,73 @@ var leadingDeterminers = map[string]bool{
 	"une": true, "des": true, "ce": true, "cet": true, "cette": true, "ces": true,
 }
 
+// monthWords are month names (FR/EN, accent-free) — a norm containing one is a date,
+// not a subject ("jeudi 21 mai 2026").
+var monthWords = map[string]bool{
+	"janvier": true, "fevrier": true, "mars": true, "avril": true, "mai": true, "juin": true,
+	"juillet": true, "aout": true, "septembre": true, "octobre": true, "novembre": true, "decembre": true,
+	"january": true, "february": true, "march": true, "april": true, "may": true, "june": true,
+	"july": true, "august": true, "september": true, "october": true, "november": true, "december": true,
+}
+
+// isJunkToken reports whether a single word looks like a date year or a hex/UUID token
+// (not part of an entity name).
+func isJunkToken(w string) bool {
+	if monthWords[w] {
+		return true
+	}
+	if len(w) == 4 && (strings.HasPrefix(w, "19") || strings.HasPrefix(w, "20")) {
+		allDigit := true
+		for _, r := range w {
+			if r < '0' || r > '9' {
+				allDigit = false
+				break
+			}
+		}
+		if allDigit {
+			return true // a year
+		}
+	}
+	if len(w) >= 8 { // long hex run → UUID / token fragment
+		hex := true
+		for _, r := range w {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+				hex = false
+				break
+			}
+		}
+		if hex {
+			return true
+		}
+	}
+	return false
+}
+
 // IsJunkSubjectNorm reports whether a normalized entity norm is too generic or malformed
-// to be a real subject: too short ("le", "au"), a function word/greeting, a personal
-// email fragment ("x gmail com"), or a determiner-led generic phrase ("ce message").
-// Shared by the discovered-subjects list and the Engram network.
+// to be a real subject: too short ("le"), a function word/greeting (also as the leading
+// word — "bonjour x"), a personal email fragment ("x gmail com"), a determiner-led phrase
+// ("ce message"), a date, a hex/UUID token, or an over-long sentence fragment. Shared by
+// the discovered-subjects list and the Engram network. NER (the small model) mislabels
+// all of these as people/orgs, so they must never surface as subjects.
 func IsJunkSubjectNorm(norm string) bool {
 	norm = strings.TrimSpace(norm)
 	if len([]rune(norm)) < 3 {
 		return true
 	}
-	if junkSubjectNorms[norm] {
+	if junkSubjectNorms[norm] || strings.Contains(norm, "gmail") {
 		return true
 	}
-	if strings.Contains(norm, "gmail") {
+	fields := strings.Fields(norm)
+	if len(fields) > 6 { // sentence fragment, not an entity name
 		return true
 	}
-	if first, _, ok := strings.Cut(norm, " "); ok && leadingDeterminers[first] {
-		return true
+	if len(fields) > 0 && (junkSubjectNorms[fields[0]] || leadingDeterminers[fields[0]]) {
+		return true // greeting/function-word/determiner-led ("bonjour x", "ce message")
+	}
+	for _, f := range fields {
+		if isJunkToken(f) {
+			return true // contains a date year, month, or hex/UUID token
+		}
 	}
 	return false
 }

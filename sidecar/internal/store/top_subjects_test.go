@@ -66,6 +66,8 @@ func TestIsJunkSubjectNorm(t *testing.T) {
 	for _, n := range []string{
 		"le", "au", "ce", "les", "the", "une", "madame", "bonjour",
 		"ce message", "the report", "le contrat", "dpetit gmail com", "x gmail com",
+		"jeudi le 21 mai 2026", "reunion 2026", "bonjour tsirel cheri",
+		"chargemap pass session 069fe56b dade", "un deux trois quatre cinq six sept",
 	} {
 		if !IsJunkSubjectNorm(n) {
 			t.Errorf("%q should be junk", n)
@@ -73,6 +75,7 @@ func TestIsJunkSubjectNorm(t *testing.T) {
 	}
 	for _, n := range []string{
 		"chargemap", "anne durand", "novaquark", "nrb", "tara gaming ltd", "raphael moreau",
+		"linkedin ireland unlimited company", "fiduciaire de la cense association",
 	} {
 		if IsJunkSubjectNorm(n) {
 			t.Errorf("%q should NOT be junk", n)
