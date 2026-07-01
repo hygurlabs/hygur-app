@@ -28,18 +28,27 @@ func TestTopSubjects(t *testing.T) {
 			t.Fatalf("mentions %s: %v", cid, err)
 		}
 	}
-	// acme (org) in 3 items, bob (person) in 2, "the report" (claim-only) in 3.
-	add("i1", EntityMention{EntityNorm: "acme", Attribute: "ner_org"}, EntityMention{EntityNorm: "bob", Attribute: "ner_person"}, EntityMention{EntityNorm: "the report", Attribute: "about"})
-	add("i2", EntityMention{EntityNorm: "acme", Attribute: "ner_org"}, EntityMention{EntityNorm: "bob", Attribute: "ner_person"}, EntityMention{EntityNorm: "the report", Attribute: "about"})
-	add("i3", EntityMention{EntityNorm: "acme", Attribute: "ner_org"}, EntityMention{EntityNorm: "the report", Attribute: "about"})
+	// acme (org) in 3 items, bob (person) in 2, "the report" (claim-only) in 3, plus
+	// noise that must be excluded: "facturation" (topic, in 3) and "monsieur" (greeting
+	// mislabelled person, in 3) — both would outrank bob if not filtered.
+	full := []EntityMention{
+		{EntityNorm: "acme", Attribute: "ner_org"},
+		{EntityNorm: "bob", Attribute: "ner_person"},
+		{EntityNorm: "the report", Attribute: "about"},
+		{EntityNorm: "facturation", Attribute: "ner_topic"},
+		{EntityNorm: "monsieur", Attribute: "ner_person"},
+	}
+	add("i1", full...)
+	add("i2", full...)
+	add("i3", EntityMention{EntityNorm: "acme", Attribute: "ner_org"}, EntityMention{EntityNorm: "the report", Attribute: "about"}, EntityMention{EntityNorm: "facturation", Attribute: "ner_topic"}, EntityMention{EntityNorm: "monsieur", Attribute: "ner_person"})
 
 	subs, err := db.TopSubjects(ctx, 10)
 	if err != nil {
 		t.Fatalf("TopSubjects: %v", err)
 	}
-	// "the report" (claim-only) excluded; acme (3) before bob (2); typed.
+	// Topic + greeting + claim-only all excluded; only acme (3) then bob (2) remain.
 	if len(subs) != 2 {
-		t.Fatalf("want 2 named subjects, got %d: %+v", len(subs), subs)
+		t.Fatalf("want 2 clean subjects, got %d: %+v", len(subs), subs)
 	}
 	if subs[0].Norm != "acme" || subs[0].Type != "org" || subs[0].Mentions != 3 {
 		t.Errorf("top = %+v, want {acme org 3}", subs[0])

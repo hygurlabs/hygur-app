@@ -145,16 +145,34 @@ type SubjectStat struct {
 	Mentions int    `json:"mentions"`
 }
 
-// TopSubjects returns the most central NAMED subjects (person/org/project/topic) by the
-// number of distinct items mentioning them — the discovered-subjects list for the Engram
-// index. Named-only (attribute LIKE 'ner_%'), so generic claim entities are excluded.
+// genericSubjectNorms are salutations / forms of address that NER mislabels as people
+// ("Bonjour", "Madame", …). Normalized (lowercase, accent-free). PII-free by design —
+// no real names here. Excluded from the discovered-subjects list.
+var genericSubjectNorms = []string{
+	"bonjour", "bonsoir", "salut", "coucou", "hi", "hello", "hey", "dear",
+	"madame", "madam", "monsieur", "mademoiselle", "mesdames", "messieurs",
+	"mme", "mlle", "mr", "mrs", "ms", "miss", "sir", "cher", "chere", "chers", "cheres", "dr",
+}
+
+// TopSubjects returns the most central real subjects (person/org/project — NOT topics,
+// which are broad tags) by the number of distinct items mentioning them, minus generic
+// salutations NER mislabels as people. The discovered-subjects list for the Engram index.
 func (d *DB) TopSubjects(ctx context.Context, limit int) ([]SubjectStat, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	args := make([]any, 0, len(genericSubjectNorms)+1)
+	ph := make([]string, len(genericSubjectNorms))
+	for i, n := range genericSubjectNorms {
+		ph[i] = "?"
+		args = append(args, n)
+	}
+	args = append(args, limit*2) // buffer: some rows pass the WHERE but are topic-dominant, filtered below
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT entity_norm, COUNT(DISTINCT content_id) AS c FROM entity_mentions
-		 WHERE attribute LIKE 'ner_%' GROUP BY entity_norm ORDER BY c DESC LIMIT ?`, limit)
+		 WHERE attribute IN ('ner_person', 'ner_org', 'ner_project')
+		   AND entity_norm NOT IN (`+strings.Join(ph, ",")+`)
+		 GROUP BY entity_norm ORDER BY c DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("top subjects: %w", err)
 	}
@@ -176,10 +194,20 @@ func (d *DB) TopSubjects(ctx context.Context, limit int) ([]SubjectStat, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Keep only entities whose DOMINANT type is a real subject kind: an entity with a
+	// stray person/org tag but mostly a topic is still a topic. Then cap to limit.
+	filtered := out[:0]
 	for i := range out {
-		out[i].Type = types[out[i].Norm]
+		switch types[out[i].Norm] {
+		case "person", "org", "project":
+			out[i].Type = types[out[i].Norm]
+			filtered = append(filtered, out[i])
+		}
+		if len(filtered) >= limit {
+			break
+		}
 	}
-	return out, nil
+	return filtered, nil
 }
 
 // EntityDominantTypes returns, for each given norm, its dominant NER type
