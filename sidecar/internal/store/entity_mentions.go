@@ -329,7 +329,7 @@ func (d *DB) EntityDominantTypes(ctx context.Context, norms []string) (map[strin
 	}
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT entity_norm, attribute, COUNT(*) FROM entity_mentions
-		 WHERE entity_norm IN (`+strings.Join(ph, ",")+`) AND attribute LIKE 'ner_%'
+		 WHERE entity_norm IN (`+strings.Join(ph, ",")+`) AND (attribute LIKE 'ner_%' OR attribute LIKE 'id_%')
 		 GROUP BY entity_norm, attribute`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity dominant types: %w", err)
