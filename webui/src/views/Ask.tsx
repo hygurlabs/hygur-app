@@ -25,6 +25,7 @@ import {
   FileAudio,
   Upload,
   Search,
+  Globe,
 } from "lucide-react";
 import { streamChat, api } from "../lib/api";
 import { native } from "../lib/native";
@@ -53,6 +54,9 @@ interface Turn {
   content: string;
   sources?: RagSource[];
   activity?: string;
+  // True when the current activity reaches the internet (web_search / fetch_url) — the UI
+  // marks it distinctly because data is leaving the machine.
+  activityWeb?: boolean;
   error?: string;
   // Set when the inference backend was down and only retrieved sources are shown
   // (no AI synthesis). The deterministic layer still answered with the facts.
@@ -60,6 +64,27 @@ interface Turn {
   // Attachments carried on a user turn so they persist across the conversation
   // (F1): follow-up questions about an attached image keep its context.
   attachments?: AttachmentRef[];
+}
+
+// Friendly, human-readable status for each tool the agent may call (the LLM sees the raw
+// snake_case name; the user should not). Unknown tools fall back to a generic label.
+const TOOL_LABELS: Record<string, string> = {
+  search_knowledge_base: "Searching your knowledge base…",
+  lookup_identifier: "Looking up the exact value…",
+  web_search: "Searching the web…",
+  fetch_url: "Reading a web page…",
+  summarize_thread: "Summarizing the thread…",
+  list_attachments: "Listing attachments…",
+  recall_memory: "Recalling from memory…",
+  find_decisions: "Reviewing logged decisions…",
+  create_note: "Creating a note…",
+  create_calendar_event: "Creating a calendar event…",
+};
+// Tools that reach the internet — flagged distinctly so the user always knows when data
+// leaves the machine.
+const WEB_TOOLS = new Set(["web_search", "fetch_url"]);
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] ?? `Running ${name}…`;
 }
 
 interface ProjectFocus {
@@ -579,15 +604,14 @@ export function Ask() {
               ...t,
               sources,
               activity: `Reading ${sources.length} source${sources.length === 1 ? "" : "s"}…`,
+              activityWeb: false,
             }));
           },
           onTool: (name) =>
             patchLast((t) => ({
               ...t,
-              activity:
-                name === "search_knowledge_base"
-                  ? "Searching your knowledge base…"
-                  : `Running ${name}…`,
+              activity: toolLabel(name),
+              activityWeb: WEB_TOOLS.has(name),
             })),
           onDelta: (delta) => {
             // The answer is now streaming — retract the ephemeral context panel.
@@ -1459,8 +1483,16 @@ function AssistantTurn({
   return (
     <div className="group">
       {turn.activity && (
-        <div className="mb-2 flex items-center gap-2 text-[13px] text-muted">
-          <span className="size-1.5 animate-pulse rounded-full bg-accent" />
+        <div
+          className={`mb-2 flex items-center gap-2 text-[13px] ${
+            turn.activityWeb ? "text-amber-600" : "text-muted"
+          }`}
+        >
+          {turn.activityWeb ? (
+            <Globe size={13} strokeWidth={2.2} className="shrink-0 text-amber-500" />
+          ) : (
+            <span className="size-1.5 animate-pulse rounded-full bg-accent" />
+          )}
           {turn.activity}
         </div>
       )}
