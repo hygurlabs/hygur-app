@@ -52,3 +52,19 @@ func TestClosedNegative(t *testing.T) {
 		t.Errorf("latest rejection should close as of 2026-06-01, got ok=%v when=%q", ok, when)
 	}
 }
+
+func TestThreadKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"Re: TechSquare Opportunity - RESA":           "techsquare opportunity - resa",
+		"RE: RE: Fwd:  TechSquare Opportunity - RESA": "techsquare opportunity - resa",
+		"TR: Facture": "facture",
+		"Devis 2026":  "devis 2026",
+	} {
+		if got := ThreadKey(in); got != want {
+			t.Errorf("ThreadKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if ThreadKey("Re: Projet X") != ThreadKey("RE: Projet X") {
+		t.Error("replies to the same subject should share a thread key")
+	}
+}

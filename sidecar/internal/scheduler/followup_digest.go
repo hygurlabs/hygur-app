@@ -229,6 +229,20 @@ func (d *DailyBrief) dropClosedItems(ctx context.Context, items []*store.Knowled
 	if err != nil {
 		return items
 	}
+	// A3 (thread-level): group messages by normalized subject and close a whole thread
+	// when its LATEST status claim (across all its messages) is terminal-negative — so a
+	// rejected thread is excluded entirely, not just the message that carried the refusal.
+	byThread := map[string][]contradict.Claim{}
+	for _, it := range items {
+		k := contradict.ThreadKey(it.Title)
+		byThread[k] = append(byThread[k], contradict.ClaimsFromMetadata(it.Metadata)...)
+	}
+	closedThreads := make(map[string]bool, len(byThread))
+	for k, claims := range byThread {
+		if closed, _ := contradict.ClosedNegative(claims); closed {
+			closedThreads[k] = true
+		}
+	}
 	out := items[:0]
 	for _, it := range items {
 		if decStatus[it.ContentID] == store.DecisionSuperseded {
@@ -237,9 +251,7 @@ func (d *DailyBrief) dropClosedItems(ctx context.Context, items []*store.Knowled
 		if _, closed := contra[it.ContentID]; closed {
 			continue
 		}
-		// A3: a thread whose latest status claim is a terminal-negative outcome
-		// (rejection/cancellation/…) is closed — never a "chase this" follow-up.
-		if closed, _ := contradict.ClosedNegative(contradict.ClaimsFromMetadata(it.Metadata)); closed {
+		if closedThreads[contradict.ThreadKey(it.Title)] {
 			continue
 		}
 		out = append(out, it)

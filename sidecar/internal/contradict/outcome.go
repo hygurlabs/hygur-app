@@ -1,11 +1,31 @@
 package contradict
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
 )
+
+// replyPrefix matches a leading reply/forward marker on a normalized (folded) subject.
+var replyPrefix = regexp.MustCompile(`^\s*(re|ref|rep|fwd|fw|tr|aw|wg)\s*:\s*`)
+
+// ThreadKey normalizes a message subject into a stable thread key: it strips repeated
+// reply/forward prefixes (Re:, Fwd:, TR:, …), lowercases + strips accents, and collapses
+// whitespace, so the messages of one conversation share a key. Deterministic — a coarse
+// grouping when no thread id is available in the mail metadata.
+func ThreadKey(title string) string {
+	s := foldOutcome(title)
+	for {
+		t := replyPrefix.ReplaceAllString(s, "")
+		if t == s {
+			break
+		}
+		s = t
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
 
 // Thread-outcome detection (docs/PSYCHE_GROUNDING_PLAN.md §11). Purely deterministic:
 // no LLM. It reads the status/outcome CLAIMS already extracted for an item and decides
