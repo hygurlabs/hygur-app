@@ -90,6 +90,18 @@ func LoadWithOptions(opts *LoadOptions) (*Config, error) {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
 
+	// Viper doesn't split comma-separated env vars into slices; do it here so
+	// HYGUR_IDENTITY_OWNER_NAMES works (config.yaml YAML lists unmarshal natively).
+	if env := strings.TrimSpace(os.Getenv("HYGUR_IDENTITY_OWNER_NAMES")); env != "" {
+		var names []string
+		for _, n := range strings.Split(env, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				names = append(names, n)
+			}
+		}
+		cfg.Identity.OwnerNames = names
+	}
+
 	if err := validate(&cfg); err != nil {
 		return nil, err
 	}
@@ -184,6 +196,9 @@ func setDefaults(v *viper.Viper) {
 
 	// Prose cleanup (Couche B) is default-on; HYGUR_PROSE_TIDY=false disables it.
 	v.SetDefault("prose.tidy", true)
+
+	// Empty default so the key is known (owner identity; excluded from subjects).
+	v.SetDefault("identity.owner_names", []string{})
 }
 
 // SaveConnectorsConfig persiste la map des ConnectorSettings dans config.yaml

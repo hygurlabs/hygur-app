@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -17,13 +18,21 @@ import (
 // deterministically from the entity index + Hebbian graph + consolidation signals.
 // Read-only; no LLM.
 type EngramHandler struct {
-	store  *store.DB
-	logger zerolog.Logger
+	store        *store.DB
+	ownerExclude []string // normalized owner-identity norms, excluded from the subject list
+	logger       zerolog.Logger
 }
 
 // NewEngramHandler builds the handler. store may be nil (the endpoint then returns 503).
-func NewEngramHandler(db *store.DB, logger zerolog.Logger) *EngramHandler {
-	return &EngramHandler{store: db, logger: logger.With().Str("handler", "engram").Logger()}
+// ownerNames are the owner's own name/email variants (excluded from the subject list).
+func NewEngramHandler(db *store.DB, ownerNames []string, logger zerolog.Logger) *EngramHandler {
+	ex := make([]string, 0, len(ownerNames))
+	for _, n := range ownerNames {
+		if k := contradict.NormKey(n); k != "" {
+			ex = append(ex, k)
+		}
+	}
+	return &EngramHandler{store: db, ownerExclude: ex, logger: logger.With().Str("handler", "engram").Logger()}
 }
 
 // Dossier handles GET /engrams/{norm} — the consolidated dossier for one subject. The
@@ -64,7 +73,7 @@ func (h *EngramHandler) List(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	subjects, err := h.store.TopSubjects(r.Context(), limit)
+	subjects, err := h.store.TopSubjects(r.Context(), limit, h.ownerExclude)
 	if err != nil {
 		h.logger.Warn().Err(err).Msg("top subjects failed")
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "top subjects failed")

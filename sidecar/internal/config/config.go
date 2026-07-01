@@ -47,6 +47,18 @@ type Config struct {
 	// Prose configures the deterministic prose-cleanup pass applied to
 	// user-facing outputs (mail drafts, chronicle, positions, follow-up report).
 	Prose ProseConfig `mapstructure:"prose" yaml:"prose,omitempty"`
+
+	// Identity declares who the owner is, so the psyché can tell self from others.
+	Identity IdentityConfig `mapstructure:"identity" yaml:"identity,omitempty"`
+}
+
+// IdentityConfig declares the owner's own identity.
+type IdentityConfig struct {
+	// OwnerNames are the owner's own name/email variants (e.g. "Daniel Petit",
+	// "dle@example.com"). Excluded from the discovered-subjects list — you are not a
+	// subject to explore. Set in config.yaml as a YAML list, or via
+	// HYGUR_IDENTITY_OWNER_NAMES (comma-separated).
+	OwnerNames []string `mapstructure:"owner_names" yaml:"owner_names,omitempty"`
 }
 
 // ProseConfig configures the deterministic prose-cleanup pass (internal/prose).

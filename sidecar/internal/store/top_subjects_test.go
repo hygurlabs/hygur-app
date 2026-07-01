@@ -42,13 +42,17 @@ func TestTopSubjects(t *testing.T) {
 	add("i2", full...)
 	add("i3", EntityMention{EntityNorm: "acme", Attribute: "ner_org"}, EntityMention{EntityNorm: "the report", Attribute: "about"}, EntityMention{EntityNorm: "facturation", Attribute: "ner_topic"}, EntityMention{EntityNorm: "monsieur", Attribute: "ner_person"})
 
-	subs, err := db.TopSubjects(ctx, 10)
+	subs, err := db.TopSubjects(ctx, 10, nil)
 	if err != nil {
 		t.Fatalf("TopSubjects: %v", err)
 	}
 	// Topic + greeting + claim-only all excluded; only acme (3) then bob (2) remain.
 	if len(subs) != 2 {
 		t.Fatalf("want 2 clean subjects, got %d: %+v", len(subs), subs)
+	}
+	// Owner exclusion: excluding "bob" leaves only acme.
+	if only, _ := db.TopSubjects(ctx, 10, []string{"bob"}); len(only) != 1 || only[0].Norm != "acme" {
+		t.Errorf("exclude bob → want [acme], got %+v", only)
 	}
 	if subs[0].Norm != "acme" || subs[0].Type != "org" || subs[0].Mentions != 3 {
 		t.Errorf("top = %+v, want {acme org 3}", subs[0])

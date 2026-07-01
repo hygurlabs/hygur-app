@@ -156,14 +156,30 @@ var genericSubjectNorms = []string{
 
 // TopSubjects returns the most central real subjects (person/org/project — NOT topics,
 // which are broad tags) by the number of distinct items mentioning them, minus generic
-// salutations NER mislabels as people. The discovered-subjects list for the Engram index.
-func (d *DB) TopSubjects(ctx context.Context, limit int) ([]SubjectStat, error) {
+// salutations NER mislabels as people and the caller-supplied `exclude` norms (already
+// normalized — the owner's own identity). The discovered-subjects list for the Engram.
+func (d *DB) TopSubjects(ctx context.Context, limit int, exclude []string) ([]SubjectStat, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	args := make([]any, 0, len(genericSubjectNorms)+1)
-	ph := make([]string, len(genericSubjectNorms))
-	for i, n := range genericSubjectNorms {
+	// Combine the generic salutation stoplist with the owner's own norms, deduped.
+	seen := make(map[string]bool)
+	var stop []string
+	for _, n := range genericSubjectNorms {
+		if !seen[n] {
+			seen[n] = true
+			stop = append(stop, n)
+		}
+	}
+	for _, n := range exclude {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			stop = append(stop, n)
+		}
+	}
+	args := make([]any, 0, len(stop)+1)
+	ph := make([]string, len(stop))
+	for i, n := range stop {
 		ph[i] = "?"
 		args = append(args, n)
 	}
