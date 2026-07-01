@@ -604,6 +604,22 @@ export interface ChatOptions {
   focusScope?: FocusScope;
 }
 
+/** onopen guard for SSE streams: if the server answered with an error (usually a JSON
+ *  body — quota reached, auth, 5xx) instead of the event stream, surface its message
+ *  cleanly instead of the opaque "Expected content-type text/event-stream" throw. */
+async function sseOnOpen(response: Response): Promise<void> {
+  const ct = response.headers.get("content-type") || "";
+  if (response.ok && ct.includes("text/event-stream")) return;
+  let msg = `Request failed (${response.status}).`;
+  try {
+    const b = await response.json();
+    msg = b?.error?.message || b?.error || b?.message || msg;
+  } catch {
+    /* non-JSON body — keep the status message */
+  }
+  throw new Error(msg); // onerror surfaces this + disables retry
+}
+
 /** Streams the grounded Follow-up report (3-paragraph prose) over SSE so the UI
  *  can render it as it's written. One-shot: throwing in onerror disables retry. */
 export async function streamFollowupReport(
@@ -623,6 +639,7 @@ export async function streamFollowupReport(
     headers: authHeaders(),
     signal,
     openWhenHidden: true,
+    onopen: sseOnOpen,
     onmessage(msg) {
       const data = msg.data;
       if (!data) return;
@@ -672,6 +689,7 @@ export async function streamChat(
     }),
     signal,
     openWhenHidden: true,
+    onopen: sseOnOpen,
     onmessage(msg) {
       const data = msg.data;
       if (!data) return;
