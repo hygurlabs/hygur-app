@@ -119,7 +119,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       >
         {data && (
           <>
-            <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+            <div className="flex items-start gap-3 border-b border-border px-5 pb-4 pt-[calc(1rem_+_env(safe-area-inset-top))]">
               <div className="min-w-0 flex-1">
                 <h2 className="font-display text-[18px] font-medium leading-snug">
                   {data.title || "(untitled)"}
