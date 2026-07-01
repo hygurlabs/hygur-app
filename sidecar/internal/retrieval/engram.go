@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -25,7 +26,31 @@ const (
 	engramPerNeighbor2nd  = 12   // items pulled per expanded neighbor
 	engramSecondCap       = 15   // hard cap on 2nd-order items (noise control)
 	engramNeutralSalience = 0.30 // salience assumed when an item was never scored by the dream
+
+	// FSRS/DSR forgetting curve for the dossier timeline (see docs/PSYCHE_GROUNDING_PLAN.md,
+	// A2). R(t,S) = (1 + FACTOR·t/S)^DECAY is a POWER law: unlike the exponential
+	// Ebbinghaus curve (ComputeStrength, right for eviction), its tail stays meaningful,
+	// so a months-old item keeps a real retrievability and the subject's history stays
+	// visible recent→old instead of collapsing to ~0. Stability (days) is derived from
+	// salience — a salient memory decays slower.
+	fsrsFactor           = 19.0 / 81.0 // ≈0.2346 → R = 0.9 exactly at age = stability
+	fsrsDecay            = -0.5
+	engramStabilityBase  = 30.0 // days — base stability at zero salience
+	engramStabilityBoost = 4.0  // salience 0→1 stretches stability ×1→×5
 )
+
+// engramRetrievability is the FSRS power-law retention R(t,S) used to order a dossier
+// timeline. Stability S = base·(1 + boost·salience); higher salience ⇒ slower decay.
+func engramRetrievability(ageDays, salience float64) float64 {
+	if ageDays < 0 {
+		ageDays = 0
+	}
+	s := engramStabilityBase * (1 + salClamp(salience)*engramStabilityBoost)
+	if s <= 0 {
+		return 1
+	}
+	return math.Pow(1+fsrsFactor*ageDays/s, fsrsDecay)
+}
 
 // Engram is a subject's consolidated dossier.
 type Engram struct {
@@ -51,7 +76,7 @@ type EngramItem struct {
 	SourceType     string  `json:"source_type"`
 	Date           string  `json:"date,omitempty"`         // canonical content date (RFC3339)
 	DateMissing    bool    `json:"date_missing,omitempty"` // ingestion gap — no canonical date
-	Strength       float64 `json:"strength"`               // Ebbinghaus retention (recency × salience)
+	Strength       float64 `json:"strength"`               // FSRS power-law retention (recency × salience)
 	Surprise       float64 `json:"surprise,omitempty"`     // von Restorff novelty [0,1]
 	Order          int     `json:"order"`                  // 1 = mentions the subject, 2 = via a neighbor
 	ViaNeighbor    string  `json:"via_neighbor,omitempty"` // the neighbor norm, for order 2
@@ -178,7 +203,7 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 			}
 			surprise = s.Surprise
 		}
-		strength := ComputeStrength(sal, ageDays)
+		strength := engramRetrievability(ageDays, sal)
 		ei := &EngramItem{
 			ContentID:      p.id,
 			Title:          it.Title,

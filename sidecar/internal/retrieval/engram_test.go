@@ -116,6 +116,12 @@ func TestAssembleEngram(t *testing.T) {
 	if byID["i2"].DateMissing || byID["i2"].Date == "" {
 		t.Errorf("i2 should carry its canonical date, got %+v", byID["i2"])
 	}
+	// A2: the FSRS power-law tail keeps a 300-day-old item's strength meaningful
+	// (~0.77 here), where the exponential Ebbinghaus curve would have collapsed it to
+	// ~0.01 and flattened the whole history.
+	if byID["i2"].Strength < 0.5 {
+		t.Errorf("old item strength collapsed (%.3f); FSRS power-law tail should keep it meaningful", byID["i2"].Strength)
+	}
 	// Live/dead compartment: i1 is a standing decision.
 	if len(eng.Decisions) != 1 || eng.Decisions[0].ContentID != "i1" || eng.Decisions[0].DecisionStatus != "standing" {
 		t.Errorf("decisions compartment = %+v, want [i1 standing]", eng.Decisions)
