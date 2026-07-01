@@ -118,10 +118,10 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	if err != nil {
 		return nil, err
 	}
-	// Part B: prefer named entities. Type each neighbor (dominant ner_ tag), drop generic
-	// claim references (article-prefixed, e.g. "the author"), and give named entities a
-	// small bonus so a real person/org leads when NPMI associations are comparable — a
-	// much-stronger claim association still wins.
+	// Part B: named entities only. Type each neighbor (dominant ner_ tag) and keep only
+	// real named entities (person/org/project/topic) — dropping junk (dates, email
+	// fragments, function words) and claim-only generics ("montant", "invoice payment"),
+	// so the network shows who/what the subject connects to, not stray claim phrases.
 	netNorms := make([]string, len(rawNetwork))
 	for i, n := range rawNetwork {
 		netNorms[i] = n.Norm
@@ -132,10 +132,11 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	}
 	network := make([]EngramNeighbor, 0, len(rawNetwork))
 	for _, n := range rawNetwork {
-		if store.IsJunkSubjectNorm(n.Norm) {
-			continue // too short / function word / email fragment / determiner-led
+		t := nTypes[n.Norm]
+		if t == "" || store.IsJunkSubjectNorm(n.Norm) {
+			continue // claim-only generic, or junk (date/email/function word)
 		}
-		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: nTypes[n.Norm]})
+		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: t})
 	}
 	sort.SliceStable(network, func(i, j int) bool {
 		return neighborRank(network[i]) > neighborRank(network[j])
