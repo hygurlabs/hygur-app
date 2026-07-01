@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -149,6 +150,9 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	// topics) in alongside the claim-derived ones, so people are first-class in the
 	// index and the graph — not just claim subjects.
 	mentions = append(mentions, nerEntityMentions(item)...)
+	// Checksum-typed identifiers (national number, VAT, IBAN…) as first-class nodes, so a
+	// person links to their identifier through the Hebbian graph — deterministic, no LLM.
+	mentions = append(mentions, typedIdentifierMentions(item)...)
 	// Surprise/novelty (DREAM Phase C): compute BEFORE writing the new mentions, so
 	// the item's own entities still read as "new". Best-effort — never blocks ingest.
 	i.stampSurprise(ctx, item.ContentID, mentions)
@@ -241,6 +245,30 @@ func nerEntityMentions(item *store.KnowledgeItem) []store.EntityMention {
 	return out
 }
 
+// typedIdentifierMentions extracts checksum-typed identifiers (national number, VAT, IBAN…)
+// from the item's text (recognize.Recognize — deterministic, no LLM) and folds them into
+// entity_mentions as first-class nodes: node key = canonical value, attribute = "id_<type>".
+// So the existing Hebbian graph + NPMI link a person to their identifier by co-occurrence.
+func typedIdentifierMentions(item *store.KnowledgeItem) []store.EntityMention {
+	if item == nil {
+		return nil
+	}
+	at := ""
+	if !item.CreatedAt.IsZero() {
+		at = item.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if d := store.GetCanonicalDate(item); !d.IsZero() {
+		at = d.UTC().Format(time.RFC3339)
+	}
+	var out []store.EntityMention
+	for _, t := range recognize.Recognize(item.Title + " " + item.NormalizedText) {
+		out = append(out, store.EntityMention{
+			EntityNorm: t.Value, EntityRaw: t.Raw, Attribute: "id_" + t.Type, AssertedAt: at,
+		})
+	}
+	return out
+}
+
 // BackfillClaims extracts + caches claims across all eligible mail + notes,
 // reusing already-cached categories (run RetagItems first so eligibility reads
 // cached cats without an extra LLM call). Extraction runs up to retagConcurrency
@@ -315,6 +343,7 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 				}
 				mentions := entityMentionsFromClaims(contradict.ClaimsFromMetadata(it.Metadata))
 				mentions = append(mentions, nerEntityMentions(it)...)
+				mentions = append(mentions, typedIdentifierMentions(it)...)
 				if rerr := i.store.ReplaceEntityMentions(ctx, it.ContentID, mentions); rerr != nil {
 					log.Printf("[ingest] entity-index backfill failed for %s: %v", it.ContentID, rerr)
 				}
