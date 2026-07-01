@@ -13,6 +13,7 @@ import { Library } from "./views/Library";
 import { Notes } from "./views/Notes";
 import { Projects } from "./views/Projects";
 import { Briefings } from "./views/Briefings";
+import { Engrams } from "./views/Engrams";
 import { Connectors } from "./views/Connectors";
 import { Settings } from "./views/Settings";
 import { Tags } from "./views/Tags";
@@ -105,6 +106,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/follow-up" element={<FollowUp />} />
                 <Route path="/mind" element={<Mind />} />
+                <Route path="/engrams" element={<Engrams />} />
                 <Route path="/contradictions" element={<Contradictions />} />
                 <Route path="/decisions" element={<Decisions />} />
                 <Route path="/chronicle" element={<Chronicle />} />

@@ -13,6 +13,7 @@ import {
   GitCompareArrows,
   Newspaper,
   Brain,
+  Network,
   Plug,
   LogOut,
   Settings as SettingsIcon,
@@ -44,6 +45,8 @@ const NAV: NavItem[] = [
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
   // Mind — the consolidated psyché hub (Decisions, Contradictions, Memory, Chronicle).
   { to: "/mind", label: "Mind", icon: Brain },
+  // Engrams — the discovered-subject dossiers (network + timeline + live/dead).
+  { to: "/engrams", label: "Engrams", icon: Network },
 ];
 
 // Pinned to the bottom, just above the health indicator. Settings joins this

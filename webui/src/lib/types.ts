@@ -394,6 +394,45 @@ export interface Briefing {
   created_at: string;
 }
 
+/** A discovered subject in the Engram index (GET /engrams). */
+export interface SubjectStat {
+  norm: string;
+  type?: string; // person | org | project | topic
+  mentions: number;
+}
+
+/** One node of a subject's Engram network. */
+export interface EngramNeighbor {
+  norm: string;
+  weight: number;
+  type?: string;
+}
+
+/** One memory in a subject's Engram timeline. */
+export interface EngramItem {
+  content_id: string;
+  title: string;
+  source_type: string;
+  date?: string;
+  date_missing?: boolean;
+  strength: number;
+  surprise?: number;
+  order: number; // 1 = direct, 2 = via a neighbor
+  via_neighbor?: string;
+  decision_status?: string;
+  contradicted?: boolean;
+  closed?: boolean;
+}
+
+/** A subject's consolidated Engram dossier (GET /engrams/{norm}). */
+export interface Engram {
+  subject: { norm: string; type: string };
+  network: EngramNeighbor[];
+  timeline: EngramItem[];
+  decisions: EngramItem[];
+  contradictions: EngramItem[];
+}
+
 export interface ConnectorHealth {
   status?: string; // "ok" | "degraded" | "down" | "unknown"
   message?: string;
