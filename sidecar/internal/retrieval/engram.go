@@ -116,6 +116,7 @@ type EngramItem struct {
 	ViaNeighbor    string  `json:"via_neighbor,omitempty"` // the neighbor norm, for order 2
 	DecisionStatus string  `json:"decision_status,omitempty"`
 	Contradicted   bool    `json:"contradicted,omitempty"`
+	Closed         bool    `json:"closed,omitempty"` // latest status claim is terminal-negative
 	score          float64 // internal rank score (not serialized)
 }
 
@@ -276,6 +277,11 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 		}
 		if _, ok := contra[p.id]; ok {
 			ei.Contradicted = true
+		}
+		// A3: mark items whose latest status claim is a terminal-negative outcome
+		// (the live/dead compartment).
+		if closed, _ := contradict.ClosedNegative(contradict.ClaimsFromMetadata(it.Metadata)); closed {
+			ei.Closed = true
 		}
 		return ei
 	}

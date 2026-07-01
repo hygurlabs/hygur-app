@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/store"
@@ -234,6 +235,11 @@ func (d *DailyBrief) dropClosedItems(ctx context.Context, items []*store.Knowled
 			continue
 		}
 		if _, closed := contra[it.ContentID]; closed {
+			continue
+		}
+		// A3: a thread whose latest status claim is a terminal-negative outcome
+		// (rejection/cancellation/…) is closed — never a "chase this" follow-up.
+		if closed, _ := contradict.ClosedNegative(contradict.ClaimsFromMetadata(it.Metadata)); closed {
 			continue
 		}
 		out = append(out, it)
