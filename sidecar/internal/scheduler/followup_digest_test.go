@@ -1,11 +1,53 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/hygur/sidecar/internal/store"
 )
+
+// The follow-up read must never surface a matter the deterministic layer marks closed
+// or in conflict — a superseded decision, or an item in an open contradiction — so it
+// can't recommend chasing a thread that already ended (e.g. in a refusal).
+func TestDropClosedItemsGate(t *testing.T) {
+	db, err := store.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	for _, id := range []string{"i1", "i2", "i3"} {
+		if err := db.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
+			ContentID: id, SourceType: store.SourceTypeNote, Title: id,
+			NormalizedText: "x", VersionID: "v1", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	if err := db.UpsertDecisionAttrs(ctx, "i1", store.DecisionSuperseded, "2026-01-01", nil, ""); err != nil {
+		t.Fatalf("decision: %v", err)
+	}
+	conflicts := `[{"members":[{"source_id":"i2"},{"source_id":"other"}],"verdict":{"kind":"conflict"}}]`
+	if err := db.PutContradictionCache(ctx, "", conflicts, 1); err != nil {
+		t.Fatalf("contradiction cache: %v", err)
+	}
+
+	d := &DailyBrief{store: db}
+	items := []*store.KnowledgeItem{{ContentID: "i1"}, {ContentID: "i2"}, {ContentID: "i3"}}
+	got := d.dropClosedItems(ctx, items)
+	if len(got) != 1 || got[0].ContentID != "i3" {
+		var ids []string
+		for _, it := range got {
+			ids = append(ids, it.ContentID)
+		}
+		t.Fatalf("want [i3] (superseded i1 + contradicted i2 dropped), got %v", ids)
+	}
+}
 
 func digestItems() []*store.KnowledgeItem {
 	mk := func(id, title, from string, day int) *store.KnowledgeItem {

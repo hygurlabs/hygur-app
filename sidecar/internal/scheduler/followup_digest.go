@@ -166,10 +166,7 @@ func (d *DailyBrief) gatherFollowupItems(ctx context.Context, projectID string) 
 		sort.Slice(items, func(i, j int) bool {
 			return itemDate(items[i]).After(itemDate(items[j]))
 		})
-		if len(items) > followupMaxItems {
-			items = items[:followupMaxItems]
-		}
-		return items, nil
+		return d.gateAndCap(ctx, items)
 	}
 	since := time.Now().Add(-followupWindowDays * 24 * time.Hour)
 	var all []*store.KnowledgeItem
@@ -195,10 +192,53 @@ func (d *DailyBrief) gatherFollowupItems(ctx context.Context, projectID string) 
 	sort.Slice(recent, func(i, j int) bool {
 		return recencyDate(recent[i]).After(recencyDate(recent[j]))
 	})
-	if len(recent) > followupMaxItems {
-		recent = recent[:followupMaxItems]
+	return d.gateAndCap(ctx, recent)
+}
+
+// gateAndCap applies the deterministic live/dead gate, then caps the list. The gate
+// uses the same signals as the Engram compartment — a superseded decision or an item
+// caught in an open contradiction — so a matter that is already closed or in conflict
+// (e.g. a thread that ended in a refusal) never resurfaces as a "follow up / chase
+// this" item. Filtering before the cap means the cap keeps live items, not dead ones.
+func (d *DailyBrief) gateAndCap(ctx context.Context, items []*store.KnowledgeItem) ([]*store.KnowledgeItem, error) {
+	items = d.dropClosedItems(ctx, items)
+	if len(items) > followupMaxItems {
+		items = items[:followupMaxItems]
 	}
-	return recent, nil
+	return items, nil
+}
+
+// dropClosedItems removes items the deterministic layer marks closed or in conflict
+// (superseded decision, or member of an open contradiction). Best-effort: a status
+// lookup error leaves the items unfiltered rather than losing the whole read. The LLM
+// only narrates what survives the gate — it never judges "is this closed" itself.
+func (d *DailyBrief) dropClosedItems(ctx context.Context, items []*store.KnowledgeItem) []*store.KnowledgeItem {
+	if len(items) == 0 {
+		return items
+	}
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ContentID)
+	}
+	decStatus, err := d.store.DecisionStatuses(ctx, ids)
+	if err != nil {
+		return items
+	}
+	contra, err := d.store.OpenContradictionContentIDs(ctx)
+	if err != nil {
+		return items
+	}
+	out := items[:0]
+	for _, it := range items {
+		if decStatus[it.ContentID] == store.DecisionSuperseded {
+			continue
+		}
+		if _, closed := contra[it.ContentID]; closed {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 // numberedItemsContext renders the items as a numbered list the model can cite
