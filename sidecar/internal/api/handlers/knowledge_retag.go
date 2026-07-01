@@ -125,6 +125,34 @@ func (h *KnowledgeHandler) BackfillEntityIndex(w http.ResponseWriter, r *http.Re
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
+// identifierIndexInFlight guards the identifier-index backfill (one run at a time).
+var identifierIndexInFlight atomic.Bool
+
+// BackfillIdentifiers (re)builds the materialized identifier index (item_norm) across the
+// corpus. POST /knowledge/backfill-identifiers. Deterministic (no LLM); runs in the
+// background. Run once after deploying the exact-identifier lookup; the ingest hook keeps
+// new items current thereafter.
+func (h *KnowledgeHandler) BackfillIdentifiers(w http.ResponseWriter, r *http.Request) {
+	if h.ingestor == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
+		return
+	}
+	if !identifierIndexInFlight.CompareAndSwap(false, true) {
+		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer identifierIndexInFlight.Store(false)
+		n, err := h.ingestor.BackfillIdentifierIndex(context.Background())
+		if err != nil {
+			h.logger.Error().Err(err).Int("indexed", n).Msg("identifier-index backfill failed")
+			return
+		}
+		h.logger.Info().Int("indexed", n).Msg("identifier-index backfill complete")
+	}()
+	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
 // entityEdgesInFlight guards the Hebbian-edge backfill (one run at a time).
 var entityEdgesInFlight atomic.Bool
 

@@ -473,6 +473,10 @@ func (d *DB) InsertKnowledgeItem(ctx context.Context, item *KnowledgeItem) error
 		return fmt.Errorf("failed to insert knowledge item: %w", err)
 	}
 
+	// Keep the materialized identifier index in sync (fail-soft: a miss only means this
+	// item isn't exact-identifier searchable until the next backfill).
+	_ = d.UpsertItemNorm(ctx, item.ContentID, item.Title+" "+item.NormalizedText)
+
 	return nil
 }
 

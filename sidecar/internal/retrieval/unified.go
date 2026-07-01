@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/identifier"
 	"github.com/hygur/sidecar/internal/intent"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/store"
@@ -348,6 +349,20 @@ func (us *UnifiedSearcher) Search(ctx context.Context, req UnifiedSearchRequest)
 
 	if req.TopK <= 0 {
 		req.TopK = DefaultTopK
+	}
+
+	// Exact-identifier lane: a query carrying a formatted identifier (national number,
+	// VAT, IBAN, invoice/reference number…) is a deterministic lookup, not a semantic one.
+	// Short-circuit the fusion — return the exact substring matches, or an HONEST EMPTY
+	// result when the identifier is absent, instead of semantically-similar noise.
+	if key, ok := identifier.ExtractQuery(req.Query); ok && us.store != nil {
+		if ids, err := us.store.SearchByIdentifier(ctx, key, req.TopK); err != nil {
+			log.Printf("[UnifiedSearch] identifier lookup failed (fail-soft to semantic): %v", err)
+		} else {
+			results, _ := us.FetchByContentIDs(ctx, ids)
+			log.Printf("[UnifiedSearch] identifier lane key=%q hits=%d", key, len(results))
+			return us.buildEntityResponse(results, nil, startTime), nil
+		}
 	}
 
 	log.Printf("[UnifiedSearch] query=%q topK=%d", req.Query, req.TopK)

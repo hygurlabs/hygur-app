@@ -560,6 +560,20 @@ CREATE INDEX IF NOT EXISTS idx_entity_edges_a ON entity_edges(entity_a);
 CREATE INDEX IF NOT EXISTS idx_entity_edges_b ON entity_edges(entity_b);
 `,
 	},
+	{
+		Version: 30,
+		Name:    "item_norm",
+		// Materialized identifier index: one alnum-only, lowercased copy of each item's
+		// text (identifier.Normalize), so an exact-identifier query matches a formatted
+		// value (e.g. "23.02.23:347-71") deterministically via LIKE. Derived + rebuildable;
+		// kept in sync by a Go upsert on ingest (triggers can't run the Go normalizer).
+		SQL: `
+CREATE TABLE IF NOT EXISTS item_norm (
+    content_id TEXT PRIMARY KEY,
+    norm       TEXT NOT NULL DEFAULT ''
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

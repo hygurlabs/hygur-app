@@ -171,6 +171,16 @@ func (i *Ingestor) BackfillTier2NER(ctx context.Context, useMainModel, force boo
 	return stats.Total, err
 }
 
+// BackfillIdentifierIndex (re)builds the materialized identifier index (item_norm) across
+// the whole corpus — deterministic, no LLM. Run once after deploying the feature; the
+// ingest hook keeps new items current. Returns items indexed.
+func (i *Ingestor) BackfillIdentifierIndex(ctx context.Context) (int, error) {
+	if i.store == nil {
+		return 0, nil
+	}
+	return i.store.RebuildIdentifierIndex(ctx)
+}
+
 // SetBroker wires an event broker so the ingestor emits ingest_start /
 // ingest_complete around each document. Pass nil to disable emission.
 func (i *Ingestor) SetBroker(b *events.Broker) {

@@ -119,6 +119,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/backfill-entity-index", s.handleKnowledgeBackfillEntityIndex)
 			r.Post("/backfill-entity-edges", s.handleKnowledgeBackfillEntityEdges)
 			r.Post("/backfill-entity-vectors", s.handleKnowledgeBackfillEntityVectors)
+			r.Post("/backfill-identifiers", s.handleKnowledgeBackfillIdentifiers)
 			// Deletion reconciliation: the edge agent posts the full set of refs
 			// currently present on the server; items no longer present are recycled.
 			r.Post("/reconcile", s.handleKnowledgeReconcile)
@@ -523,6 +524,16 @@ func (s *Server) handleKnowledgeBackfillTier2(w http.ResponseWriter, r *http.Req
 func (s *Server) handleKnowledgeBackfillEntityIndex(w http.ResponseWriter, r *http.Request) {
 	if s.knowledgeHandler != nil {
 		s.knowledgeHandler.BackfillEntityIndex(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
+}
+
+// handleKnowledgeBackfillIdentifiers handles POST /knowledge/backfill-identifiers
+// (rebuild the materialized exact-identifier index item_norm from every item).
+func (s *Server) handleKnowledgeBackfillIdentifiers(w http.ResponseWriter, r *http.Request) {
+	if s.knowledgeHandler != nil {
+		s.knowledgeHandler.BackfillIdentifiers(w, r)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "knowledge handler not configured")
