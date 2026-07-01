@@ -31,11 +31,11 @@ type MeetingInput struct {
 
 // MeetingResult is returned to the HTTP caller (and used internally).
 type MeetingResult struct {
-	Relevant  bool   `json:"relevant"`
-	ContentID string `json:"content_id,omitempty"`
-	Brief     string `json:"brief,omitempty"`
+	Relevant  bool     `json:"relevant"`
+	ContentID string   `json:"content_id,omitempty"`
+	Brief     string   `json:"brief,omitempty"`
 	Bullets   []string `json:"bullets,omitempty"`
-	Sources   int    `json:"sources"`
+	Sources   int      `json:"sources"`
 }
 
 // MeetingBriefer generates a short RAG briefing for an event/deadline, persists
@@ -220,10 +220,18 @@ func buildMeetingPrompt(in MeetingInput, results []retrieval.UnifiedResult) stri
 	return sb.String()
 }
 
-// meetingContentID derives a stable id so re-briefing the same event overwrites
-// rather than duplicates.
+// meetingContentID derives a stable id so re-briefing the same event/deadline
+// overwrites (persist deletes-then-inserts) rather than piling up duplicates. The
+// mail path must NOT fold in the wall-clock time: its When is set to now on every
+// tick, so hashing it would mint a fresh id each run and accumulate a new brief every
+// cycle. Keying mail on (Kind, Key=source content_id) makes a re-brief overwrite.
+// Calendar keeps When (the event start) so distinct occurrences stay distinct.
 func meetingContentID(in MeetingInput) string {
-	h := sha256.Sum256([]byte(in.Kind + "|" + in.Key + "|" + in.When.Format(time.RFC3339)))
+	key := in.Kind + "|" + in.Key
+	if in.Kind != "mail" {
+		key += "|" + in.When.Format(time.RFC3339)
+	}
+	h := sha256.Sum256([]byte(key))
 	return "meeting_brief:" + in.Kind + ":" + hex.EncodeToString(h[:])[:16]
 }
 
@@ -343,7 +351,17 @@ func (s *MeetingBriefScheduler) tick(ctx context.Context) {
 		s.logger.Debug().Err(err).Msg("meeting brief tick: list items failed")
 		return
 	}
-	actions, err := s.extractor.ExtractActions(ctx, items)
+	// Feed the deadline extractor only real inbound content (mail + notes), never the
+	// scheduler's own generated briefs. ListRecentItems has no source-type filter, so
+	// it also returns the meeting_brief items this loop just wrote; extracting a
+	// deadline from a brief and briefing it again is a self-amplifying loop.
+	real := items[:0]
+	for _, it := range items {
+		if store.IsMailSourceType(it.SourceType) || it.SourceType == store.SourceTypeNote {
+			real = append(real, it)
+		}
+	}
+	actions, err := s.extractor.ExtractActions(ctx, real)
 	if err != nil {
 		s.logger.Debug().Err(err).Msg("meeting brief tick: extract failed")
 		return
