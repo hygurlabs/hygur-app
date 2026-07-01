@@ -8,21 +8,18 @@ import (
 	"github.com/hygur/sidecar/internal/store"
 )
 
-const (
-	// proxWindow bounds how far (chars) a person mention may be from an identifier to count
-	// as proximate at all.
-	proxWindow = 300
-	// proxMarginRatio is the "clear winner" margin: the runner-up same-type identifier near
-	// the person must be at least this many times farther than the winner.
-	proxMarginRatio = 2
-)
+// proxWindow bounds how far (chars) a person mention may be from an identifier to be its
+// owner at all.
+const proxWindow = 300
 
-// identifierProximityLinks emits a (person ↔ typed identifier) link for a document ONLY when
-// the pairing is unambiguous there: the identifier is the same-type nearest to that person,
-// the person is the identifier's nearest, and the runner-up same-type identifier is clearly
-// farther. Otherwise nothing (the lookup falls back to NPMI). Deterministic — the guard that
-// makes proximity trustworthy for the multi-person case (each family member's number sits on
-// their own row).
+// identifierProximityLinks emits a (person ↔ typed identifier) link for a document only when
+// the pairing is unambiguous there. It locates each person by their RAREST name token (a
+// distinctive first name like "elric", not a shared surname the NER's reconstructed full
+// name may not even match verbatim in the OCR), assigns every identifier to its nearest
+// person within the window, and emits a link only when a person is the unique claimant of a
+// single same-type identifier. This fires for a family member whose number sits on their own
+// row and correctly declines when one name is flanked by two numbers of the same type.
+// Deterministic.
 func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink {
 	if item == nil {
 		return nil
@@ -34,67 +31,78 @@ func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink 
 	}
 	lower := strings.ToLower(text)
 
-	// Person occurrences: each extracted_persons name located in the text.
-	type occ struct {
+	// Locate each person by their rarest (most distinctive) name token.
+	type person struct {
 		norm string
-		pos  int
+		pos  []int
 	}
-	var people []occ
+	var people []person
 	for _, raw := range metaStrings(item.Metadata, "extracted_persons") {
 		norm := contradict.NormKey(raw)
-		needle := strings.ToLower(strings.TrimSpace(raw))
-		if norm == "" || len([]rune(needle)) < 3 {
+		if norm == "" {
 			continue
 		}
+		rare, rareCount := "", 1<<30
+		for _, tok := range strings.Fields(strings.ToLower(raw)) {
+			if len([]rune(tok)) < 3 {
+				continue
+			}
+			if c := strings.Count(lower, tok); c > 0 && c < rareCount {
+				rare, rareCount = tok, c
+			}
+		}
+		if rare == "" {
+			continue
+		}
+		var pos []int
 		for i := 0; ; {
-			j := strings.Index(lower[i:], needle)
+			j := strings.Index(lower[i:], rare)
 			if j < 0 {
 				break
 			}
-			people = append(people, occ{norm, i + j})
-			i += j + len(needle)
+			pos = append(pos, i+j)
+			i += j + len(rare)
+		}
+		if len(pos) > 0 {
+			people = append(people, person{norm, pos})
 		}
 	}
 	if len(people) == 0 {
 		return nil
 	}
 
-	mid := func(t recognize.Typed) int { return (t.Start + t.End) / 2 }
-	var out []store.IdentifierLink
-	seen := map[string]bool{}
+	// Assign each identifier to its nearest person (within the window); collect the distinct
+	// identifier values claimed per (type, person).
+	claims := map[string]map[string]bool{} // "type\x1fperson" -> set of id values
 	for _, t := range typed {
-		idPos := mid(t)
-		// The person occurrence nearest to this identifier.
-		pNorm, pPos, pd := "", 0, 1<<30
+		idPos := (t.Start + t.End) / 2
+		bestNorm, bestD := "", 1<<30
 		for _, p := range people {
-			if d := abs(p.pos - idPos); d < pd {
-				pd, pNorm, pPos = d, p.norm, p.pos
+			for _, pp := range p.pos {
+				if d := abs(pp - idPos); d < bestD {
+					bestD, bestNorm = d, p.norm
+				}
 			}
 		}
-		if pNorm == "" || pd > proxWindow {
+		if bestNorm == "" || bestD > proxWindow {
 			continue
 		}
-		// Among same-type identifiers, the nearest + runner-up to that person occurrence.
-		n1, n2 := 1<<30, 1<<30
-		nearestVal := ""
-		for _, u := range typed {
-			if u.Type != t.Type {
-				continue
-			}
-			d := abs(mid(u) - pPos)
-			if d < n1 {
-				n2, n1, nearestVal = n1, d, u.Value
-			} else if d < n2 {
-				n2 = d
-			}
+		key := t.Type + "\x1f" + bestNorm
+		if claims[key] == nil {
+			claims[key] = map[string]bool{}
 		}
-		// Guard: this identifier is the same-type nearest, and any runner-up is clearly farther.
-		if nearestVal != t.Value || n2 < proxMarginRatio*max(n1, 1) {
-			continue
+		claims[key][t.Value] = true
+	}
+
+	// Emit only unique claims: a person who is the sole nearest to exactly one same-type value.
+	var out []store.IdentifierLink
+	for key, vals := range claims {
+		if len(vals) != 1 {
+			continue // 0 or ≥2 → ambiguous
 		}
-		if key := pNorm + "\x1f" + t.Value; !seen[key] {
-			seen[key] = true
-			out = append(out, store.IdentifierLink{PersonNorm: pNorm, IDNorm: t.Value, IDType: t.Type, Prox: 1.0})
+		typ, pnorm, _ := strings.Cut(key, "\x1f")
+		for v := range vals {
+			out = append(out, store.IdentifierLink{PersonNorm: pnorm, IDNorm: v, IDType: typ, Prox: 1.0})
 		}
 	}
 	return out
