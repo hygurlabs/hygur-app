@@ -574,6 +574,26 @@ CREATE TABLE IF NOT EXISTS item_norm (
 );
 `,
 	},
+	{
+		Version: 31,
+		Name:    "entity_identifier_link",
+		// Proximity links (entity ↔ typed identifier) emitted only when the pairing is
+		// unambiguous in a document (nearest same-type, clear runner-up margin, mutual). A
+		// per-doc confidence signal the lookup aggregates on top of NPMI to break the
+		// family-member tie that doc-level co-occurrence cannot.
+		SQL: `
+CREATE TABLE IF NOT EXISTS entity_identifier_link (
+    content_id  TEXT NOT NULL,
+    person_norm TEXT NOT NULL,
+    id_norm     TEXT NOT NULL,
+    id_type     TEXT NOT NULL DEFAULT '',
+    prox        REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (content_id, person_norm, id_norm)
+);
+CREATE INDEX IF NOT EXISTS idx_eil_person ON entity_identifier_link(person_norm);
+CREATE INDEX IF NOT EXISTS idx_eil_id ON entity_identifier_link(id_norm);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

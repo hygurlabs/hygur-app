@@ -162,6 +162,11 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	if rerr := i.store.ReplaceEntityMentions(ctx, item.ContentID, mentions); rerr != nil {
 		log.Printf("[ingest] entity-index sync failed for %s: %v", item.ContentID, rerr)
 	}
+	// Proximity links (person ↔ typed identifier) — the per-doc signal the lookup uses to
+	// break the family-member tie. Best-effort.
+	if lerr := i.store.ReplaceIdentifierLinks(ctx, item.ContentID, identifierProximityLinks(item)); lerr != nil {
+		log.Printf("[ingest] identifier-link sync failed for %s: %v", item.ContentID, lerr)
+	}
 }
 
 // entityMentionsFromClaims derives the distinct (entity, attribute) index rows
@@ -347,6 +352,7 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 				if rerr := i.store.ReplaceEntityMentions(ctx, it.ContentID, mentions); rerr != nil {
 					log.Printf("[ingest] entity-index backfill failed for %s: %v", it.ContentID, rerr)
 				}
+				_ = i.store.ReplaceIdentifierLinks(ctx, it.ContentID, identifierProximityLinks(it))
 				processed++
 			}
 			if len(page) < batch {
