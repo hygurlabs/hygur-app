@@ -122,7 +122,10 @@ func (i *Ingestor) extractClaimsForItem(ctx context.Context, item *store.Knowled
 
 // applyItemClaims caches claims (+ version) in the item metadata. DB write — in a
 // concurrent backfill the caller must serialize these (SQLite is single-writer).
-func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeItem, claims []contradict.Claim, fresh bool) {
+// preserveTimestamp writes only the metadata (no updated_at bump) — a full-corpus
+// claim backfill must not mark every item "recently modified" (it changes derived
+// metadata, not content), which would flood updated_at-based recency queries.
+func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeItem, claims []contradict.Claim, fresh, preserveTimestamp bool) {
 	if !fresh || item == nil {
 		return
 	}
@@ -131,7 +134,13 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	}
 	item.Metadata["extracted_claims"] = claims
 	item.Metadata["extracted_claims_version"] = extractedClaimsVersion
-	if uerr := i.store.UpdateKnowledgeItem(ctx, item); uerr != nil {
+	var uerr error
+	if preserveTimestamp {
+		uerr = i.store.UpdateKnowledgeItemMetadata(ctx, item.ContentID, item.Metadata)
+	} else {
+		uerr = i.store.UpdateKnowledgeItem(ctx, item)
+	}
+	if uerr != nil {
 		log.Printf("[ingest] claims metadata update failed for %s: %v", item.ContentID, uerr)
 	}
 	// Keep the associative entity index in step with the freshly-cached claims.
@@ -274,7 +283,7 @@ func (i *Ingestor) BackfillClaims(ctx context.Context) (int, error) {
 			cats, _ := i.classifyItem(ctx, it) // cached → no LLM when retag ran first
 			claims, fresh := i.extractClaimsForItem(ctx, it, cats)
 			mu.Lock()
-			i.applyItemClaims(ctx, it, claims, fresh)
+			i.applyItemClaims(ctx, it, claims, fresh, true) // backfill: preserve updated_at
 			processed++
 			mu.Unlock()
 		}(it)

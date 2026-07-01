@@ -626,7 +626,7 @@ func (i *Ingestor) TagItem(ctx context.Context, item *store.KnowledgeItem, prune
 	i.applyItemTags(ctx, item, cats, fresh)
 	// W6: extract + cache semantic claims (skips junk senders / Notifications).
 	claims, cfresh := i.extractClaimsForItem(ctx, item, cats)
-	i.applyItemClaims(ctx, item, claims, cfresh)
+	i.applyItemClaims(ctx, item, claims, cfresh, false) // live ingestion: normal timestamp
 	// Inline project suggestion (W4): cache the best-matching project so the
 	// detail panel can offer "Add to <project>".
 	if projects := i.activeProjects(ctx); len(projects) > 0 {
