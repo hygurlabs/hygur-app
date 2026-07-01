@@ -388,6 +388,7 @@ export interface Briefing {
   content_id: string;
   title: string;
   kind: string; // "brief" | "meeting_brief"
+  sub_kind?: string; // meeting_brief origin: "mail" (deadline) | "calendar"
   content: string;
   when?: string;
   created_at: string;

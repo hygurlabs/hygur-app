@@ -111,7 +111,8 @@ func (h *BriefHandler) RunNow(w http.ResponseWriter, r *http.Request) {
 type BriefingDTO struct {
 	ContentID string `json:"content_id"`
 	Title     string `json:"title"`
-	Kind      string `json:"kind"` // "brief" | "meeting_brief"
+	Kind      string `json:"kind"`               // "brief" | "meeting_brief"
+	SubKind   string `json:"sub_kind,omitempty"` // meeting_brief origin: "mail" (deadline) | "calendar"
 	Content   string `json:"content"`
 	When      string `json:"when,omitempty"`
 	CreatedAt string `json:"created_at"`
@@ -154,6 +155,11 @@ func (h *BriefHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		if when, ok := it.Metadata["when"].(string); ok {
 			dto.When = when
+		}
+		// A meeting_brief is either a calendar meeting or a mail deadline; the badge
+		// must reflect which (a deadline is not a "meeting"). Carried in metadata.kind.
+		if k, ok := it.Metadata["kind"].(string); ok {
+			dto.SubKind = k
 		}
 		out = append(out, dto)
 	}

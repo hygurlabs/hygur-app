@@ -39,22 +39,24 @@ export function Briefings() {
   });
 
   const briefings = data?.briefings ?? [];
-  const rows: RecordRow[] = briefings.map((b) => ({
-    id: b.content_id,
-    title: b.title,
-    badge: b.kind === "meeting_brief" ? "meeting" : "daily",
-    meta: fmtDateTime(b.when || b.created_at),
-    excerpt: b.content.replace(/[#*`>_]/g, "").slice(0, 180),
-    onClick: () =>
-      openDetail({
-        title: b.title,
-        meta: [
-          b.kind === "meeting_brief" ? "meeting brief" : "daily brief",
-          fmtDateTime(b.when || b.created_at),
-        ],
-        body: b.content,
-      }),
-  }));
+  const rows: RecordRow[] = briefings.map((b) => {
+    // A meeting_brief from a mail deadline is not a "meeting" — label it accordingly.
+    const label =
+      b.kind !== "meeting_brief" ? "daily" : b.sub_kind === "mail" ? "deadline" : "meeting";
+    return {
+      id: b.content_id,
+      title: b.title,
+      badge: label,
+      meta: fmtDateTime(b.when || b.created_at),
+      excerpt: b.content.replace(/[#*`>_]/g, "").slice(0, 180),
+      onClick: () =>
+        openDetail({
+          title: b.title,
+          meta: [`${label} brief`, fmtDateTime(b.when || b.created_at)],
+          body: b.content,
+        }),
+    };
+  });
 
   return (
     <Page>
