@@ -137,6 +137,52 @@ func (d *DB) EntityNormsMatching(ctx context.Context, norms []string) (map[strin
 	return out, rows.Err()
 }
 
+// EntityDominantTypes returns, for each given norm, its dominant NER type
+// (person/org/project/topic — the ner_* attribute with the most mentions, prefix
+// stripped) or "" when the norm is only seen through claims (no ner_* attribute).
+// Batch form used to type Engram network neighbors so named entities can be preferred.
+func (d *DB) EntityDominantTypes(ctx context.Context, norms []string) (map[string]string, error) {
+	out := make(map[string]string)
+	clean := make([]string, 0, len(norms))
+	seen := make(map[string]bool, len(norms))
+	for _, n := range norms {
+		if strings.TrimSpace(n) != "" && !seen[n] {
+			seen[n] = true
+			clean = append(clean, n)
+		}
+	}
+	if len(clean) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(clean))
+	args := make([]any, len(clean))
+	for i, n := range clean {
+		ph[i] = "?"
+		args[i] = n
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT entity_norm, attribute, COUNT(*) FROM entity_mentions
+		 WHERE entity_norm IN (`+strings.Join(ph, ",")+`) AND attribute LIKE 'ner_%'
+		 GROUP BY entity_norm, attribute`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entity dominant types: %w", err)
+	}
+	defer rows.Close()
+	best := make(map[string]int, len(clean))
+	for rows.Next() {
+		var norm, attr string
+		var c int
+		if err := rows.Scan(&norm, &attr, &c); err != nil {
+			return nil, err
+		}
+		if c > best[norm] {
+			best[norm] = c
+			out[norm] = strings.TrimPrefix(attr, "ner_")
+		}
+	}
+	return out, rows.Err()
+}
+
 // EntityAttributeCounts returns the attribute → mention-count distribution for one
 // entity norm. Used to label a subject by its dominant NER tag (person/org/project/
 // topic) in an Engram dossier; a norm seen only via claims has no ner_* attribute.

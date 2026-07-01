@@ -85,15 +85,19 @@ func TestAssembleEngram(t *testing.T) {
 	if eng.Subject.Norm != acme || eng.Subject.Type != "org" {
 		t.Errorf("subject = %+v, want {%s org}", eng.Subject, acme)
 	}
-	// Network: Alice is a neighbor.
-	var hasAlice bool
+	// Network: Alice is a neighbor, typed as a person (Part B).
+	var aliceType string
+	found := false
 	for _, n := range eng.Network {
 		if n.Norm == alice {
-			hasAlice = true
+			found, aliceType = true, n.Type
 		}
 	}
-	if !hasAlice {
+	if !found {
 		t.Errorf("network %v missing neighbor %s", eng.Network, alice)
+	}
+	if aliceType != "person" {
+		t.Errorf("Alice neighbor type = %q, want person", aliceType)
 	}
 	// Timeline order + tagging: i1/i2 direct (order 1), i3 via Alice (order 2).
 	byID := map[string]EngramItem{}

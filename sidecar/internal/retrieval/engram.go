@@ -26,6 +26,7 @@ const (
 	engramPerNeighbor2nd  = 12   // items pulled per expanded neighbor
 	engramSecondCap       = 15   // hard cap on 2nd-order items (noise control)
 	engramNeutralSalience = 0.30 // salience assumed when an item was never scored by the dream
+	engramNamedBonus      = 0.10 // NPMI-equivalent lift for a named (ner_) neighbor over a claim
 
 	// FSRS/DSR forgetting curve for the dossier timeline (see docs/PSYCHE_GROUNDING_PLAN.md,
 	// A2). R(t,S) = (1 + FACTOR·t/S)^DECAY is a POWER law: unlike the exponential
@@ -52,10 +53,35 @@ func engramRetrievability(ageDays, salience float64) float64 {
 	return math.Pow(1+fsrsFactor*ageDays/s, fsrsDecay)
 }
 
+// neighborRank orders network neighbors: NPMI weight, plus a small bonus for a named
+// (ner_) entity so it leads a claim-only neighbor of comparable association.
+func neighborRank(n EngramNeighbor) float64 {
+	if n.Type != "" {
+		return n.Weight + engramNamedBonus
+	}
+	return n.Weight
+}
+
+// engramArticles are leading determiners that mark a generic reference ("the author",
+// "le contrat") rather than a named entity. Normalized (lowercase, accents stripped).
+var engramArticles = map[string]bool{
+	"the": true, "le": true, "la": true, "les": true, "l": true,
+	"un": true, "une": true, "des": true,
+}
+
+// hasLeadingArticle reports whether a normalized norm starts with a generic determiner.
+func hasLeadingArticle(norm string) bool {
+	first, _, ok := strings.Cut(strings.TrimSpace(norm), " ")
+	if !ok {
+		return false
+	}
+	return engramArticles[first]
+}
+
 // Engram is a subject's consolidated dossier.
 type Engram struct {
 	Subject        EngramSubject    `json:"subject"`
-	Network        []store.Neighbor `json:"network"`
+	Network        []EngramNeighbor `json:"network"`
 	Timeline       []EngramItem     `json:"timeline"`
 	Decisions      []EngramItem     `json:"decisions"`      // standing/superseded decisions in the set
 	Contradictions []EngramItem     `json:"contradictions"` // items carrying an open contradiction
@@ -65,6 +91,14 @@ type Engram struct {
 type EngramSubject struct {
 	Norm string `json:"norm"`
 	Type string `json:"type"` // person|org|project|topic|claim
+}
+
+// EngramNeighbor is one node of the subject's network: its NPMI association weight and
+// its kind (person/org/project/topic, or "" for a claim-only entity).
+type EngramNeighbor struct {
+	Norm   string  `json:"norm"`
+	Weight float64 `json:"weight"`
+	Type   string  `json:"type,omitempty"`
 }
 
 // EngramItem is one memory in a subject's timeline, annotated with what makes it
@@ -95,10 +129,33 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	}
 
 	// Network: the subject's Hebbian neighbors with weights (the ramifications).
-	network, err := db.HebbianNeighborsWeighted(ctx, norm, now, 0, engramNetworkMax)
+	rawNetwork, err := db.HebbianNeighborsWeighted(ctx, norm, now, 0, engramNetworkMax)
 	if err != nil {
 		return nil, err
 	}
+	// Part B: prefer named entities. Type each neighbor (dominant ner_ tag), drop generic
+	// claim references (article-prefixed, e.g. "the author"), and give named entities a
+	// small bonus so a real person/org leads when NPMI associations are comparable — a
+	// much-stronger claim association still wins.
+	netNorms := make([]string, len(rawNetwork))
+	for i, n := range rawNetwork {
+		netNorms[i] = n.Norm
+	}
+	nTypes, err := db.EntityDominantTypes(ctx, netNorms)
+	if err != nil {
+		return nil, err
+	}
+	network := make([]EngramNeighbor, 0, len(rawNetwork))
+	for _, n := range rawNetwork {
+		t := nTypes[n.Norm]
+		if t == "" && hasLeadingArticle(n.Norm) {
+			continue // generic claim reference, not a named entity
+		}
+		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: t})
+	}
+	sort.SliceStable(network, func(i, j int) bool {
+		return neighborRank(network[i]) > neighborRank(network[j])
+	})
 
 	// 1st-order: items that mention the subject directly.
 	directIDs, err := db.EntityMentionContentIDs(ctx, []string{norm}, engramFirstCap)
