@@ -16,6 +16,7 @@ func TestClosedNegative(t *testing.T) {
 		{mk("status", "démission de manière inattendue", "2026-06-01")},
 		{mk("outcome", "unsuccessful", "2026-06-01")},
 		{mk("decision", "profil non retenu", "2026-06-01")},
+		{mk("status", "réponse négative (Tarif trop élevé)", "2026-06-01")},
 	} {
 		if ok, _ := ClosedNegative(cs); !ok {
 			t.Errorf("expected CLOSED for %q", cs[0].Value)

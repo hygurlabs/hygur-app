@@ -20,6 +20,7 @@ var terminalNegativeRoots = []string{
 	"refus", "rejet", "reject", "declin", "decline", "annul", "cancel", "resili",
 	"perdu", "lost", "cloture", "closed", "abandon", "demission", "withdrawn", "retire",
 	"dropped", "sans suite", "sans traitement", "non retenu", "unsuccessful", "not retained",
+	"negativ", // "réponse négative" / negative response — a rejection
 }
 
 // isOutcomeAttribute reports whether a claim attribute carries a thread's outcome —
