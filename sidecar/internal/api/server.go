@@ -264,6 +264,14 @@ func (s *Server) handleEngramDossier(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "engram handler not configured")
 }
 
+func (s *Server) handleEngramList(w http.ResponseWriter, r *http.Request) {
+	if s.engramHandler != nil {
+		s.engramHandler.List(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "engram handler not configured")
+}
+
 func (s *Server) handleChronicleClose(w http.ResponseWriter, r *http.Request) {
 	if s.chronicleHandler != nil {
 		s.chronicleHandler.Close(w, r)

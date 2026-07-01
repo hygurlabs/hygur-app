@@ -202,6 +202,7 @@ func (s *Server) setupRoutes() {
 		// Engrams — per-subject consolidated dossier (Hebbian network + strength-ordered
 		// timeline + live/dead decisions/contradictions). Deterministic read; no LLM.
 		r.Route("/engrams", func(r chi.Router) {
+			r.Get("/", s.handleEngramList)
 			r.Get("/{norm}", s.handleEngramDossier)
 		})
 

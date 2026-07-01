@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,4 +49,26 @@ func (h *EngramHandler) Dossier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeKnowledgeJSON(w, http.StatusOK, eng)
+}
+
+// List handles GET /engrams — the discovered named subjects ranked by centrality
+// (?limit=, default 50). Read-only.
+func (h *EngramHandler) List(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeKnowledgeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store not configured")
+		return
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	subjects, err := h.store.TopSubjects(r.Context(), limit)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("top subjects failed")
+		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "top subjects failed")
+		return
+	}
+	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"subjects": subjects})
 }

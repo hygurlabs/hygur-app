@@ -137,6 +137,51 @@ func (d *DB) EntityNormsMatching(ctx context.Context, norms []string) (map[strin
 	return out, rows.Err()
 }
 
+// SubjectStat is one discovered subject: its norm, dominant NER type, and how many
+// distinct items mention it (its centrality).
+type SubjectStat struct {
+	Norm     string `json:"norm"`
+	Type     string `json:"type,omitempty"`
+	Mentions int    `json:"mentions"`
+}
+
+// TopSubjects returns the most central NAMED subjects (person/org/project/topic) by the
+// number of distinct items mentioning them — the discovered-subjects list for the Engram
+// index. Named-only (attribute LIKE 'ner_%'), so generic claim entities are excluded.
+func (d *DB) TopSubjects(ctx context.Context, limit int) ([]SubjectStat, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT entity_norm, COUNT(DISTINCT content_id) AS c FROM entity_mentions
+		 WHERE attribute LIKE 'ner_%' GROUP BY entity_norm ORDER BY c DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("top subjects: %w", err)
+	}
+	defer rows.Close()
+	var out []SubjectStat
+	var norms []string
+	for rows.Next() {
+		var s SubjectStat
+		if err := rows.Scan(&s.Norm, &s.Mentions); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+		norms = append(norms, s.Norm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	types, err := d.EntityDominantTypes(ctx, norms)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Type = types[out[i].Norm]
+	}
+	return out, nil
+}
+
 // EntityDominantTypes returns, for each given norm, its dominant NER type
 // (person/org/project/topic — the ner_* attribute with the most mentions, prefix
 // stripped) or "" when the norm is only seen through claims (no ner_* attribute).
