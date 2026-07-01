@@ -52,6 +52,7 @@ type Result struct {
 
 // Store is the slice of *store.DB this package needs (kept narrow for testability).
 type Store interface {
+	ResolvePersonNorms(ctx context.Context, query string, limit int) ([]string, error)
 	HebbianNeighborsWeighted(ctx context.Context, norm string, now time.Time, minWeight float64, max int) ([]store.Neighbor, error)
 	EntityDominantTypes(ctx context.Context, norms []string) (map[string]string, error)
 	IdentifierLinksForID(ctx context.Context, idNorm string) ([]store.IdentifierLink, error)
@@ -59,42 +60,69 @@ type Store interface {
 	GetKnowledgeItem(ctx context.Context, contentID string) (*store.KnowledgeItem, error)
 }
 
-// LookupIdentifier returns the best typed-identifier value for (personNorm, idType), scored
-// deterministically. attribute is the entity_mentions tag ("id_" + idType).
-func LookupIdentifier(ctx context.Context, s Store, personNorm, idType string, now time.Time) (Result, error) {
+// LookupIdentifier returns the best typed-identifier value for (query, idType), scored
+// deterministically. The query name is resolved to the graph's full-name person entities
+// first; candidates are their typed-identifier neighbors of the requested type, pooled.
+func LookupIdentifier(ctx context.Context, s Store, query, idType string, now time.Time) (Result, error) {
 	res := Result{Type: idType, Tier: TierNone}
 	attr := "id_" + idType
 
-	neighbors, err := s.HebbianNeighborsWeighted(ctx, personNorm, now, 0, 50)
-	if err != nil {
-		return res, err
-	}
-	if len(neighbors) == 0 {
-		return res, nil
-	}
-	norms := make([]string, len(neighbors))
-	for i, n := range neighbors {
-		norms[i] = n.Norm
-	}
-	types, err := s.EntityDominantTypes(ctx, norms)
-	if err != nil {
-		return res, err
-	}
+	// Resolve the name to the graph's person entities (full names), plus the exact query.
+	norms, _ := s.ResolvePersonNorms(ctx, query, 20)
+	norms = append(norms, query)
 
-	// Candidates: the neighbors that are typed identifiers of the requested type.
-	type cand struct {
-		norm   string
+	type cinfo struct {
 		weight float64
+		prox   bool
 	}
-	var cands []cand
+	cands := map[string]*cinfo{} // id_norm → pooled info across all resolved persons
 	maxW := 0.0
-	for _, n := range neighbors {
-		if types[n.Norm] != attr {
+	seenNorm := map[string]bool{}
+	for _, pn := range norms {
+		if pn == "" || seenNorm[pn] {
 			continue
 		}
-		cands = append(cands, cand{n.Norm, n.Weight})
-		if n.Weight > maxW {
-			maxW = n.Weight
+		seenNorm[pn] = true
+		neighbors, err := s.HebbianNeighborsWeighted(ctx, pn, now, 0, 50)
+		if err != nil {
+			return res, err
+		}
+		if len(neighbors) == 0 {
+			continue
+		}
+		nn := make([]string, len(neighbors))
+		for i, n := range neighbors {
+			nn[i] = n.Norm
+		}
+		types, err := s.EntityDominantTypes(ctx, nn)
+		if err != nil {
+			return res, err
+		}
+		for _, n := range neighbors {
+			if types[n.Norm] != attr {
+				continue
+			}
+			ci := cands[n.Norm]
+			if ci == nil {
+				ci = &cinfo{}
+				cands[n.Norm] = ci
+			}
+			if n.Weight > ci.weight {
+				ci.weight = n.Weight
+			}
+			if n.Weight > maxW {
+				maxW = n.Weight
+			}
+			if !ci.prox {
+				if links, e := s.IdentifierLinksForID(ctx, n.Norm); e == nil {
+					for _, l := range links {
+						if l.PersonNorm == pn {
+							ci.prox = true
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 	res.Candidates = len(cands)
@@ -103,32 +131,23 @@ func LookupIdentifier(ctx context.Context, s Store, personNorm, idType string, n
 	}
 
 	bestScore, bestNorm, bestDocs := -1.0, "", []string(nil)
-	for _, c := range cands {
-		// Proximity: is there an unambiguous (person, id) pairing in any document?
-		proxCount := 0
-		if links, e := s.IdentifierLinksForID(ctx, c.norm); e == nil {
-			for _, l := range links {
-				if l.PersonNorm == personNorm {
-					proxCount++
-				}
-			}
-		}
+	for idNorm, ci := range cands {
 		prox := 0.0
-		if proxCount > 0 {
+		if ci.prox {
 			prox = 1.0
 		}
 		npmiRel := 0.0
 		if maxW > 0 {
-			npmiRel = c.weight / maxW
+			npmiRel = ci.weight / maxW
 		}
-		docs, _ := s.SearchByIdentifier(ctx, c.norm, 20)
+		docs, _ := s.SearchByIdentifier(ctx, idNorm, 20)
 		corrob := float64(len(docs)) / 3.0
 		if corrob > 1 {
 			corrob = 1
 		}
 		score := clamp01(wProx*prox + wNPMI*npmiRel + wCorrob*corrob)
 		if score > bestScore {
-			bestScore, bestNorm, bestDocs = score, c.norm, docs
+			bestScore, bestNorm, bestDocs = score, idNorm, docs
 		}
 	}
 

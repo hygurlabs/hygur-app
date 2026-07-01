@@ -15,6 +15,9 @@ type fakeStore struct {
 	docs      map[string][]string
 }
 
+func (f *fakeStore) ResolvePersonNorms(_ context.Context, _ string, _ int) ([]string, error) {
+	return nil, nil // the appended exact query drives the test
+}
 func (f *fakeStore) HebbianNeighborsWeighted(_ context.Context, _ string, _ time.Time, _ float64, _ int) ([]store.Neighbor, error) {
 	return f.neighbors, nil
 }

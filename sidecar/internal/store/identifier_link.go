@@ -1,6 +1,40 @@
 package store
 
-import "context"
+import (
+	"context"
+	"strings"
+)
+
+// ResolvePersonNorms maps a name query to the person entity norms that contain it — the
+// graph indexes people by full name ("elric petit"), so a bare "elric" must resolve to
+// them before a lookup can find their identifier neighbors. Returns distinct ner_person
+// norms containing the (lowercased) query.
+func (d *DB) ResolvePersonNorms(ctx context.Context, query string, limit int) ([]string, error) {
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT entity_norm FROM entity_mentions
+		 WHERE attribute = 'ner_person' AND entity_norm LIKE '%' || ? || '%'
+		 LIMIT ?`, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
 
 // IdentifierLink is a proximity-confident (person ↔ typed identifier) association found in
 // one document — emitted only when the pairing is unambiguous there (nearest same-type,
