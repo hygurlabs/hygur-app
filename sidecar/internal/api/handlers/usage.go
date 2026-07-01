@@ -20,6 +20,20 @@ func NewUsageHandler(db *store.DB, logger zerolog.Logger) *UsageHandler {
 	return &UsageHandler{db: db, logger: logger}
 }
 
+// Reset clears all recorded token usage — the running daily/monthly totals. POST
+// /usage/reset. Lifts a self-inflicted quota block (e.g. after a heavy backfill).
+func (h *UsageHandler) Reset(w http.ResponseWriter, r *http.Request) {
+	n, err := h.db.ResetTokenUsage(r.Context())
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("reset token usage failed")
+		http.Error(w, `{"error":"reset failed"}`, http.StatusInternalServerError)
+		return
+	}
+	h.logger.Info().Int64("deleted", n).Msg("token usage reset")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"reset": true, "deleted": n})
+}
+
 // periodUsage is the per-period token breakdown returned to the UI. Chat keeps
 // IN/OUT separate (priced per direction); embeddings and indexing are reported
 // as total tokens each (they share one ingest price).
