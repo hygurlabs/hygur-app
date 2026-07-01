@@ -7,6 +7,7 @@ package fact
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/hygur/sidecar/internal/store"
@@ -130,7 +131,13 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 		return res, nil
 	}
 
-	bestScore, bestNorm, bestDocs := -1.0, "", []string(nil)
+	type scored struct {
+		norm  string
+		score float64
+		prox  bool
+		docs  []string
+	}
+	all := make([]scored, 0, len(cands))
 	for idNorm, ci := range cands {
 		prox := 0.0
 		if ci.prox {
@@ -145,24 +152,30 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 		if corrob > 1 {
 			corrob = 1
 		}
-		score := clamp01(wProx*prox + wNPMI*npmiRel + wCorrob*corrob)
-		if score > bestScore {
-			bestScore, bestNorm, bestDocs = score, idNorm, docs
-		}
+		all = append(all, scored{idNorm, clamp01(wProx*prox + wNPMI*npmiRel + wCorrob*corrob), ci.prox, docs})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].score > all[j].score })
+	best := all[0]
+
+	// Tier. Proximity is a trustworthy name↔number pairing → affirm/hedge on the value.
+	// WITHOUT proximity, doc-level NPMI CANNOT tell whose number it is once there are
+	// competing candidates: a parent's number co-occurs with a child more than the child's
+	// own does (the parent is on all the child's documents). So with multiple candidates and
+	// no proximity we DECLINE, not hedge on a confident-sounding wrong guess. A lone
+	// candidate (no competition) may still hedge. Sources are always returned for the human.
+	switch {
+	case best.prox && best.score >= thetaHigh:
+		res.Tier = TierHigh
+	case best.prox:
+		res.Tier = TierMed
+	case len(all) == 1 && best.score >= thetaLow:
+		res.Tier = TierMed // single candidate, nothing to confuse it with → hedge
+	default:
+		res.Tier = TierNone // ambiguous (multi-candidate, no proximity) or weak → decline
 	}
 
-	res.Value = bestNorm
-	res.Raw = bestNorm
-	res.Confidence = bestScore
-	switch {
-	case bestScore >= thetaHigh:
-		res.Tier = TierHigh
-	case bestScore >= thetaLow:
-		res.Tier = TierMed
-	default:
-		res.Tier = TierNone
-	}
-	for _, id := range bestDocs {
+	res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score
+	for _, id := range best.docs {
 		if it, e := s.GetKnowledgeItem(ctx, id); e == nil && it != nil {
 			res.Sources = append(res.Sources, Source{ContentID: id, Title: it.Title})
 		}
