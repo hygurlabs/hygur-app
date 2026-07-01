@@ -744,6 +744,9 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var roundContent strings.Builder
 		var roundFinishReason string
 		assembler := llm.NewToolCallAssembler()
+		// Strip Harmony control framing (e.g. a leaked "<|channel|>final<|message|>") from
+		// the streamed answer so it never reaches the UI. One filter per completion.
+		harmony := &llm.HarmonyFilter{}
 
 		err := h.llmClient.StreamChatRich(r.Context(), llmReq, func(evt llm.StreamEvent) error {
 			// NOTE: do NOT stop the keepalive here. This callback first fires on
@@ -775,14 +778,22 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if evt.Delta != "" {
-				roundContent.WriteString(evt.Delta)
-				assistantBuf.WriteString(evt.Delta)
-				if err := writeSSE(map[string]any{"delta": evt.Delta, "done": false}); err != nil {
-					return err
+				clean := harmony.Feed(evt.Delta)
+				if clean != "" {
+					roundContent.WriteString(clean)
+					assistantBuf.WriteString(clean)
+					if err := writeSSE(map[string]any{"delta": clean, "done": false}); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
 		})
+		if tail := harmony.Flush(); tail != "" {
+			roundContent.WriteString(tail)
+			assistantBuf.WriteString(tail)
+			_ = writeSSE(map[string]any{"delta": tail, "done": false})
+		}
 
 		if err != nil {
 			streamErr = err
