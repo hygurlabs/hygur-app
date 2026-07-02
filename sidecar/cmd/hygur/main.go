@@ -648,6 +648,7 @@ func main() {
 		HebbianExpansion:        cfg.Retrieval.HebbianExpansion,
 		SalienceRerank:          cfg.Retrieval.SalienceRerank,
 		EntityConsolidation:     cfg.Retrieval.EntityConsolidation,
+		LLMRerankFallback:       cfg.Retrieval.LLMRerankFallback,
 	})
 
 	// Create search handler with unified search

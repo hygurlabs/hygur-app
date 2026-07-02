@@ -227,6 +227,12 @@ type UnifiedSearcher struct {
 	// neighbours. Requires useEntityIndex; a no-op until the graph is populated.
 	// Kill-switched: OFF leaves retrieval byte-identical.
 	useHebbianExpansion bool
+
+	// LLM-as-judge rerank fallback (off by default): when no dedicated /rerank
+	// endpoint is configured, Rerank fires an uncapped LLM chat call per query.
+	// Gated so it only runs when explicitly enabled (cost/DoS guard); OFF returns
+	// the original relevance order with no LLM call.
+	useLLMRerankFallback bool
 }
 
 // SetAttentionRerank enables the P-2 attention re-score (boost often/recently-cited
@@ -245,6 +251,11 @@ func (us *UnifiedSearcher) SetEntityConsolidation(on bool) { us.useEntityConsoli
 // co-occurrence neighbours into the entity lens). Off by default; a no-op until the
 // graph is populated. OFF ⇒ retrieval is byte-identical to before.
 func (us *UnifiedSearcher) SetHebbianExpansion(on bool) { us.useHebbianExpansion = on }
+
+// SetLLMRerankFallback enables the uncapped LLM-as-judge rerank fallback used when
+// no dedicated /rerank endpoint is configured. Off by default (cost/DoS guard);
+// OFF ⇒ Rerank returns the original order without an LLM call.
+func (us *UnifiedSearcher) SetLLMRerankFallback(on bool) { us.useLLMRerankFallback = on }
 
 // SetImminenceRerank enables the P-2 imminence re-score (boost items tied to a soon-due
 // obligation). Off by default; a no-op until an imminent-ids provider is wired and
@@ -309,6 +320,7 @@ type RetrievalOptions struct {
 	HebbianExpansion        bool    // brick 3 (Phase D): fold entity_edges neighbours (default off)
 	SalienceRerank          bool    // recycle: boost results by composite item_signals.salience (default off)
 	EntityConsolidation     bool    // deterministic entity-anchored retrieval for "about X" queries (default off)
+	LLMRerankFallback       bool    // uncapped LLM-as-judge rerank fallback when no /rerank endpoint (default off)
 }
 
 // SetRetrievalOptions installs LLM-driven retrieval flags. Pass values from
@@ -330,6 +342,7 @@ func (us *UnifiedSearcher) SetRetrievalOptions(opts RetrievalOptions) {
 	us.useHebbianExpansion = opts.HebbianExpansion
 	us.useSalienceRerank = opts.SalienceRerank
 	us.useEntityConsolidation = opts.EntityConsolidation
+	us.useLLMRerankFallback = opts.LLMRerankFallback
 	if us.entitySynonymyThreshold <= 0 {
 		us.entitySynonymyThreshold = 0.80
 	}

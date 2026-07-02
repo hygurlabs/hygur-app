@@ -128,21 +128,22 @@ const contradictionInjectionMax = 5
 
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
-	llmClient       *llm.Client
-	unifiedSearcher *retrieval.UnifiedSearcher
-	sessionStore    *session.Store
-	memoryStore     *tools.MemoryStoreTool
-	memorySearch    *tools.MemorySearchTool
-	agendaExtractor *agenda.Extractor
-	agendaStore     *store.DB
-	chatStore       *store.DB
-	toolRegistry    *tools.Registry
-	chatTokenCap    int           // monthly chat-token cap; 0 = unlimited (local default)
-	chatTokenCapDay int           // daily chat-token cap; 0 = unlimited (the fast fuse)
-	rpmLimiter      *rateLimiter  // per-tenant request-rate fuse; nil = off
-	chatSem         chan struct{} // per-tenant concurrency cap; nil = off
-	config          RAGConfig
-	logger          zerolog.Logger
+	llmClient        *llm.Client
+	unifiedSearcher  *retrieval.UnifiedSearcher
+	sessionStore     *session.Store
+	memoryStore      *tools.MemoryStoreTool
+	memorySearch     *tools.MemorySearchTool
+	agendaExtractor  *agenda.Extractor
+	agendaStore      *store.DB
+	chatStore        *store.DB
+	toolRegistry     *tools.Registry
+	chatTokenCap     int           // monthly chat-token cap; 0 = unlimited (local default)
+	chatTokenCapDay  int           // daily chat-token cap; 0 = unlimited (the fast fuse)
+	rpmLimiter       *rateLimiter  // per-tenant request-rate fuse; nil = off
+	chatSem          chan struct{} // per-tenant concurrency cap; nil = off
+	maxTokensCeiling int           // server-side ceiling on client-supplied MaxTokens
+	config           RAGConfig
+	logger           zerolog.Logger
 }
 
 // NewRAGChatHandler creates a new RAGChatHandler. sessionStore may be nil to
@@ -155,11 +156,12 @@ func NewRAGChatHandler(
 	logger zerolog.Logger,
 ) *RAGChatHandler {
 	return &RAGChatHandler{
-		llmClient:       llmClient,
-		unifiedSearcher: unifiedSearcher,
-		sessionStore:    sessionStore,
-		config:          config.Validate(),
-		logger:          logger.With().Str("handler", "rag_chat").Logger(),
+		llmClient:        llmClient,
+		unifiedSearcher:  unifiedSearcher,
+		sessionStore:     sessionStore,
+		maxTokensCeiling: resolveChatMaxTokensCeiling(),
+		config:           config.Validate(),
+		logger:           logger.With().Str("handler", "rag_chat").Logger(),
 	}
 }
 
@@ -633,6 +635,10 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		messages = injectBrainContext(messages, decisions, positions, synopsis, time.Now().UTC().Format("2006-01-02"), contradictions)
 	}
+
+	// Server-side ceiling on client-supplied MaxTokens: clip only pathological
+	// requests. 0 (backend default) and normal values pass through untouched.
+	req.MaxTokens = clampMaxTokens(req.MaxTokens, h.maxTokensCeiling)
 
 	// Build the LLM request
 	llmReq := llm.ChatRequest{

@@ -16,6 +16,58 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// TestClampMaxTokens verifies the server-side MaxTokens ceiling: an absurd
+// request is clipped, while 0 (backend default) and a normal value pass through
+// untouched. The ceiling must never force a value onto an unset (<=0) request.
+func TestClampMaxTokens(t *testing.T) {
+	const ceiling = 8192 // defaultChatMaxTokensCeiling
+
+	tests := []struct {
+		name      string
+		maxTokens int
+		want      int
+	}{
+		{"pathological request is capped", 999999, ceiling},
+		{"unset (0) is left as backend default", 0, 0},
+		{"negative is left untouched", -5, -5},
+		{"normal value is untouched", 500, 500},
+		{"exactly at ceiling is untouched", ceiling, ceiling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clampMaxTokens(tt.maxTokens, ceiling); got != tt.want {
+				t.Errorf("clampMaxTokens(%d, %d) = %d, want %d", tt.maxTokens, ceiling, got, tt.want)
+			}
+		})
+	}
+
+	// ceiling <= 0 disables clamping entirely (never clip).
+	if got := clampMaxTokens(999999, 0); got != 999999 {
+		t.Errorf("clampMaxTokens with ceiling 0 should not clip; got %d", got)
+	}
+
+	// resolveChatMaxTokensCeiling: empty/invalid env falls back to the generous
+	// default; a valid override is honoured.
+	t.Run("env empty -> default", func(t *testing.T) {
+		t.Setenv("HYGUR_CHAT_MAX_TOKENS_CEILING", "")
+		if got := resolveChatMaxTokensCeiling(); got != defaultChatMaxTokensCeiling {
+			t.Errorf("empty env should yield default %d; got %d", defaultChatMaxTokensCeiling, got)
+		}
+	})
+	t.Run("env invalid -> default", func(t *testing.T) {
+		t.Setenv("HYGUR_CHAT_MAX_TOKENS_CEILING", "not-a-number")
+		if got := resolveChatMaxTokensCeiling(); got != defaultChatMaxTokensCeiling {
+			t.Errorf("invalid env should yield default %d; got %d", defaultChatMaxTokensCeiling, got)
+		}
+	})
+	t.Run("env override honoured", func(t *testing.T) {
+		t.Setenv("HYGUR_CHAT_MAX_TOKENS_CEILING", "4096")
+		if got := resolveChatMaxTokensCeiling(); got != 4096 {
+			t.Errorf("valid env should override to 4096; got %d", got)
+		}
+	})
+}
+
 // createMockLLMServer creates a mock LM Studio server for testing.
 func createMockLLMServer(t *testing.T, chunks []string, usage *llm.Usage) *httptest.Server {
 	t.Helper()

@@ -5,10 +5,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/rs/zerolog"
 )
+
+// defaultChatMaxTokensCeiling caps a client-supplied MaxTokens on the chat
+// paths. Generous by design — it only clips pathological requests; normal
+// answers and MaxTokens<=0 (0 = backend default) pass through untouched.
+// Overridable via HYGUR_CHAT_MAX_TOKENS_CEILING.
+const defaultChatMaxTokensCeiling = 8192
+
+// resolveChatMaxTokensCeiling reads HYGUR_CHAT_MAX_TOKENS_CEILING, falling back
+// to defaultChatMaxTokensCeiling when unset or invalid. Fail-closed: a bad value
+// keeps the (bounded) default rather than disabling the guard.
+func resolveChatMaxTokensCeiling() int {
+	if v := strings.TrimSpace(os.Getenv("HYGUR_CHAT_MAX_TOKENS_CEILING")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultChatMaxTokensCeiling
+}
+
+// clampMaxTokens caps a client-supplied MaxTokens at ceiling. A non-positive
+// value (0 = backend default) is left untouched — the ceiling never forces a
+// value onto an unset request. ceiling <= 0 disables clamping entirely.
+func clampMaxTokens(maxTokens, ceiling int) int {
+	if ceiling > 0 && maxTokens > ceiling {
+		return ceiling
+	}
+	return maxTokens
+}
 
 // ChatRequest represents a request to the /chat endpoint.
 type ChatRequest struct {
@@ -21,15 +52,17 @@ type ChatRequest struct {
 
 // ChatHandler handles the /chat endpoint with SSE streaming.
 type ChatHandler struct {
-	llmClient *llm.Client
-	logger    zerolog.Logger
+	llmClient        *llm.Client
+	logger           zerolog.Logger
+	maxTokensCeiling int // server-side ceiling on client-supplied MaxTokens
 }
 
 // NewChatHandler creates a new ChatHandler.
 func NewChatHandler(llmClient *llm.Client, logger zerolog.Logger) *ChatHandler {
 	return &ChatHandler{
-		llmClient: llmClient,
-		logger:    logger.With().Str("handler", "chat").Logger(),
+		llmClient:        llmClient,
+		logger:           logger.With().Str("handler", "chat").Logger(),
+		maxTokensCeiling: resolveChatMaxTokensCeiling(),
 	}
 }
 
@@ -75,6 +108,10 @@ func (h *ChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSSEError(w, "INTERNAL_ERROR", "Streaming not supported")
 		return
 	}
+
+	// Server-side ceiling on client-supplied MaxTokens: clip only pathological
+	// requests. 0 (backend default) and normal values pass through untouched.
+	req.MaxTokens = clampMaxTokens(req.MaxTokens, h.maxTokensCeiling)
 
 	// Build the LLM request
 	llmReq := llm.ChatRequest{

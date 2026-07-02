@@ -87,6 +87,11 @@ func (t *SummarizeThreadTool) summarize(ctx context.Context, thread *mail.Thread
 	if err != nil {
 		return nil, fmt.Errorf("failed to normalize thread: %w", err)
 	}
+	// Cost/DoS guard: a pathologically long thread is truncated head+tail so both
+	// the opening and the most-recent messages survive (a pure prefix cut would
+	// drop the latest, usually most relevant, replies). Healthy threads are well
+	// under the cap and pass through unchanged.
+	normalizedText = truncateMiddle(normalizedText, maxSummaryInputRunes)
 	prompt := buildSummaryPrompt(thread, normalizedText)
 	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
 		Model: model,
@@ -97,6 +102,7 @@ func (t *SummarizeThreadTool) summarize(ctx context.Context, thread *mail.Thread
 		Temperature: llm.Temp(0),
 		TopP:        llm.Temp(1),
 		Seed:        llm.SeedOf(42),
+		MaxTokens:   700,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to call LLM: %w", err)
@@ -248,6 +254,34 @@ func extractJSON(content string) string {
 	}
 
 	return ""
+}
+
+// maxSummaryInputRunes caps the normalized thread text fed to the summarizer.
+// Pure cost/DoS guard: a healthy thread is far under this; only an abusive one
+// is clipped. Measured in runes so multibyte content isn't cut mid-character.
+const maxSummaryInputRunes = 12000
+
+// summaryTruncationMarker is inserted between the retained head and tail of a
+// truncated thread so the model (and any reader) can see the middle was elided.
+const summaryTruncationMarker = " […truncated…] "
+
+// truncateMiddle returns s unchanged when it fits within maxRunes; otherwise it
+// keeps the head and tail (splitting the budget evenly) with a marker in the
+// middle, so both ends of the thread survive. The result is at most maxRunes.
+func truncateMiddle(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	marker := []rune(summaryTruncationMarker)
+	if maxRunes <= len(marker) {
+		// Degenerate budget — no room for both ends; hard-cut the head.
+		return string(r[:maxRunes])
+	}
+	keep := maxRunes - len(marker)
+	head := keep / 2
+	tail := keep - head
+	return string(r[:head]) + summaryTruncationMarker + string(r[len(r)-tail:])
 }
 
 // truncateForError truncates a string for inclusion in error messages.

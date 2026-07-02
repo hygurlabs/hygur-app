@@ -240,6 +240,12 @@ type RetrievalConfig struct {
 	// lens fired by an index match on the query, not the LLM classifier) for "about X"
 	// queries. Off by default; env-bindable.
 	EntityConsolidation bool `mapstructure:"entity_consolidation" yaml:"entity_consolidation,omitempty"`
+
+	// LLMRerankFallback enables the LLM-as-judge rerank fallback — an uncapped chat
+	// completion per query, fired only when no dedicated /rerank endpoint is
+	// configured. Off by default: a pure cost/DoS guard. Kill-switch stays OFF
+	// unless explicitly enabled. Env: HYGUR_RETRIEVAL_LLM_RERANK_FALLBACK=true.
+	LLMRerankFallback bool `mapstructure:"llm_rerank_fallback" yaml:"llm_rerank_fallback,omitempty"`
 }
 
 // ConnectorInstanceConfig réglages persistés d'une instance dynamique de connecteur.

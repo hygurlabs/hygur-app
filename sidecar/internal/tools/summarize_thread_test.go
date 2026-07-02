@@ -159,6 +159,42 @@ func TestSummarizeThreadTool_Run(t *testing.T) {
 	}
 }
 
+func TestTruncateMiddle(t *testing.T) {
+	// Short input passes through unchanged.
+	short := "a short thread that fits well under the cap"
+	if got := truncateMiddle(short, maxSummaryInputRunes); got != short {
+		t.Errorf("short input should be unchanged; got %q", got)
+	}
+
+	// A >12000-rune input is truncated to <= ~12000 runes, with the middle marker
+	// present and BOTH the head and the tail retained.
+	head := strings.Repeat("H", 8000)
+	tail := strings.Repeat("T", 8000)
+	long := head + tail // 16000 runes, well over the cap
+	got := truncateMiddle(long, maxSummaryInputRunes)
+
+	gotRunes := len([]rune(got))
+	if gotRunes > maxSummaryInputRunes {
+		t.Errorf("truncated length = %d runes, want <= %d", gotRunes, maxSummaryInputRunes)
+	}
+	if !strings.Contains(got, "[…truncated…]") {
+		t.Errorf("truncated output should contain the middle marker; got prefix %q", got[:min(60, len(got))])
+	}
+	if !strings.HasPrefix(got, "H") {
+		t.Error("truncated output should retain the head of the thread")
+	}
+	if !strings.HasSuffix(got, "T") {
+		t.Error("truncated output should retain the tail of the thread")
+	}
+	// Both ends must genuinely survive (not just a single boundary rune).
+	if !strings.HasPrefix(got, strings.Repeat("H", 100)) {
+		t.Error("truncated output should retain a substantial head")
+	}
+	if !strings.HasSuffix(got, strings.Repeat("T", 100)) {
+		t.Error("truncated output should retain a substantial tail")
+	}
+}
+
 func TestParseSummaryResponse_ValidJSON(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -72,6 +72,23 @@ func (us *UnifiedSearcher) Rerank(ctx context.Context, query string, results []U
 		return us.rerankDedicated(ctx, query, docChunks)
 	}
 
+	// LLM-as-judge fallback: no dedicated /rerank endpoint is configured, so the
+	// only way to rerank is an uncapped LLM chat call per query — a cost/DoS risk.
+	// Gated OFF by default (retrieval.llm_rerank_fallback); when disabled we skip
+	// the LLM entirely and return the documents in their original relevance order.
+	if !us.useLLMRerankFallback {
+		seen := make(map[string]bool)
+		var orderedContentIDs []string
+		for _, r := range results {
+			if _, kept := docChunks[r.ContentID]; !kept || seen[r.ContentID] {
+				continue
+			}
+			seen[r.ContentID] = true
+			orderedContentIDs = append(orderedContentIDs, r.ContentID)
+		}
+		return orderedContentIDs, nil
+	}
+
 	var sb strings.Builder
 	sb.WriteString("You are a relevance ranking assistant. You will receive a query and several text chunks. Rank them by relevance to the query.\n\n")
 	fmt.Fprintf(&sb, "Query: %s\n\n", query)
