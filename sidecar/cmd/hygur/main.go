@@ -32,6 +32,7 @@ import (
 	"github.com/hygur/sidecar/internal/edge"
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/health"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/ingest/parsers"
 	"github.com/hygur/sidecar/internal/interactions"
@@ -722,7 +723,9 @@ func main() {
 	toolRegistry.MustRegister(tools.NewFindDecisionsTool(db))
 	// lookup_identifier: deterministic (entity, type) → value from the typed-identifier graph
 	// + proximity, with a confidence tier the model must voice as-is (never a memorised guess).
-	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db))
+	// The owner matcher lets the owner's OWN identifiers resolve (owner anchor + dominance).
+	ownerMatcher := identity.NewMatcher(cfg.Identity.OwnerNames)
+	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db, ownerMatcher))
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is

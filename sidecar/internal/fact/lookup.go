@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -67,12 +68,19 @@ type Store interface {
 	IdentifierLinksForID(ctx context.Context, idNorm string) ([]store.IdentifierLink, error)
 	SearchByIdentifier(ctx context.Context, key string, limit int) ([]string, error)
 	GetKnowledgeItem(ctx context.Context, contentID string) (*store.KnowledgeItem, error)
+	NationalNumbersByPersons(ctx context.Context, norms []string) (map[string][]string, error)
+	PersonNormsContainingTokens(ctx context.Context, tokens []string) ([]string, error)
 }
 
 // LookupIdentifier returns the best typed-identifier value for (query, idType), scored
 // deterministically. The query name is resolved to the graph's full-name person entities
 // first; candidates are their typed-identifier neighbors of the requested type, pooled.
-func LookupIdentifier(ctx context.Context, s Store, query, idType string, now time.Time) (Result, error) {
+// owner (may be nil) is the first-class owner matcher: it collapses the owner's name variants
+// into ONE person for the ambiguity/owner counts, pools ALL his variants so a query to any of
+// them finds an identifier linked to a different variant (surname-first vs given-first), and —
+// combined with dominant-owner plurality — affirms the owner's OWN reference number even when
+// institutions reprint it across his correspondence.
+func LookupIdentifier(ctx context.Context, s Store, query, idType string, now time.Time, owner *identity.Matcher) (Result, error) {
 	res := Result{Type: idType, Tier: TierNone}
 	attr := "id_" + idType
 
@@ -84,9 +92,36 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	// person's own variants stay ONE subject (resolve), while a bare surname or first name shared
 	// by genuinely distinct people (≥2 maximal, non-subset norms) stays ambiguous.
 	resolved, _ := s.ResolvePersonNorms(ctx, query, 20)
-	ambiguous := store.DistinctPeople(resolved) > 1
+
+	// Is the queried subject the owner? (query itself, or any norm it resolved to).
+	queryIsOwner := owner.IsOwnerNorm(query)
+	for _, r := range resolved {
+		if owner.IsOwnerNorm(r) {
+			queryIsOwner = true
+			break
+		}
+	}
+
+	// Ambiguity is judged over the RESOLVED set only, with the owner's variants collapsed to one
+	// person: a query that resolves to the founder's many spellings ("denis l", "petit denis",
+	// "denis gérard petit" — not mutually token-subset) is ONE person, not several.
+	ambiguous := distinctPeopleOwnerAware(ctx, s, resolved, owner) > 1
+
 	// Pool the resolved norms plus the exact query.
 	norms := append(resolved, query)
+	// Owner anchor — pool EVERY owner variant norm present in the graph, so a query to a variant
+	// that carries no id link (e.g. given-first "denis petit") still finds his number, linked
+	// to another variant (surname-first "petit denis"). Gated to owner queries; the strict
+	// matcher keeps family members out of the pool.
+	if queryIsOwner {
+		if cands, e := s.PersonNormsContainingTokens(ctx, owner.Tokens()); e == nil {
+			for _, c := range cands {
+				if owner.IsOwnerNorm(c) {
+					norms = append(norms, c)
+				}
+			}
+		}
+	}
 
 	type cinfo struct {
 		weight float64
@@ -133,7 +168,12 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 			if !ci.prox {
 				if links, e := s.IdentifierLinksForID(ctx, n.Norm); e == nil {
 					for _, l := range links {
-						if l.PersonNorm == pn {
+						// Proximity to the queried subject: an exact link to the pooled norm, OR —
+						// for an owner query — a link to ANY owner name-variant, since the owner is
+						// ONE unified subject. This is what lets a value that neighbors one variant
+						// (given-first) but is proximity-linked under another (surname-first) still
+						// count as the owner's own, proximity-confident pairing.
+						if l.PersonNorm == pn || (queryIsOwner && owner.IsOwnerNorm(l.PersonNorm)) {
 							ci.prox = true
 							break
 						}
@@ -161,7 +201,7 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 				proxVal = norm
 			}
 		}
-		if !idTypeAllowsVariantCollapse(idType) || proxCount != 1 || ownerCount(ctx, s, proxVal) < 2 {
+		if !idTypeAllowsVariantCollapse(idType) || proxCount != 1 || ownerCount(ctx, s, proxVal, owner) < 2 {
 			res.Tier = TierNone
 			res.Reason = ReasonAmbiguousSubject
 			res.Candidates = len(resolved)
@@ -206,16 +246,26 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	// the queried subject. Decline (fail closed), never assert or even hedge a contested value.
 	// Skipped in the collapse case (ambiguous): there the several owners ARE the resolved
 	// same-entity variants that share this one value, which we already accepted above.
-	if !ambiguous && ownerCount(ctx, s, best.norm) > 1 {
-		res.Tier = TierNone
-		res.Reason = ReasonAmbiguousOwner
-		res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score
-		for _, id := range best.docs {
-			if it, e := s.GetKnowledgeItem(ctx, id); e == nil && it != nil {
-				res.Sources = append(res.Sources, Source{ContentID: id, Title: it.Title})
+	//
+	// OWNER ANCHOR + DOMINANCE exception: the founder's own reference number is reprinted by
+	// institutions as their "client ref", so it looks contested (owner + a scatter of
+	// institutional contacts). When the queried subject IS the owner AND the owner is the
+	// DECISIVE-plurality holder of the value across his own correspondence (≥3 docs and ≥2× the
+	// runner-up), resolve to him — his own number is not truly shared. This is NOT an
+	// attribute-to-owner-by-default: a non-dominant contested value still declines, and a
+	// non-owner query never gets an owner's number.
+	if !ambiguous && ownerCount(ctx, s, best.norm, owner) > 1 {
+		if !(queryIsOwner && ownerIsDominant(ctx, s, best.norm, owner)) {
+			res.Tier = TierNone
+			res.Reason = ReasonAmbiguousOwner
+			res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score
+			for _, id := range best.docs {
+				if it, e := s.GetKnowledgeItem(ctx, id); e == nil && it != nil {
+					res.Sources = append(res.Sources, Source{ContentID: id, Title: it.Title})
+				}
 			}
+			return res, nil
 		}
-		return res, nil
 	}
 
 	// Tier. Proximity is a trustworthy name↔number pairing → affirm/hedge on the value.
@@ -247,25 +297,83 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 // ownerCount is the number of DISTINCT persons proximity-linked to an identifier value —
 // the read-time half of the uniqueness invariant. >1 means the value's ownership is
 // contested across documents (the latent O2 case), so it must not be asserted for anyone.
-// The owner NORMS are clustered by token-subset (store.DistinctPeople) so a person's own
-// name-variant norms count as ONE owner (their number is not "contested" with themselves),
-// while genuinely distinct people each with the value still count as ≥2 → contested.
-func ownerCount(ctx context.Context, s Store, idNorm string) int {
+// The owner NORMS are clustered by token-subset (store.DistinctPeople, with the father/son
+// NISS guard) so a person's own name-variant norms count as ONE owner, while genuinely
+// distinct people each with the value count as ≥2 → contested. The corpus OWNER's many
+// variants collapse to ONE owner too, so his number is not "contested with himself".
+func ownerCount(ctx context.Context, s Store, idNorm string, owner *identity.Matcher) int {
 	links, err := s.IdentifierLinksForID(ctx, idNorm)
 	if err != nil {
 		return 0
 	}
-	owners := map[string]bool{}
+	seen := map[string]bool{}
+	norms := make([]string, 0, len(links))
 	for _, l := range links {
-		if l.PersonNorm != "" {
-			owners[l.PersonNorm] = true
+		if l.PersonNorm != "" && !seen[l.PersonNorm] {
+			seen[l.PersonNorm] = true
+			norms = append(norms, l.PersonNorm)
 		}
 	}
-	norms := make([]string, 0, len(owners))
-	for n := range owners {
-		norms = append(norms, n)
+	return distinctPeopleOwnerAware(ctx, s, norms, owner)
+}
+
+// distinctPeopleOwnerAware counts distinct people among norms, collapsing ALL of the owner's
+// variant norms into ONE person and applying the father/son NISS guard to the rest.
+func distinctPeopleOwnerAware(ctx context.Context, s Store, norms []string, owner *identity.Matcher) int {
+	ownerSeen := false
+	other := make([]string, 0, len(norms))
+	for _, n := range norms {
+		if n == "" {
+			continue
+		}
+		if owner.IsOwnerNorm(n) {
+			ownerSeen = true
+			continue
+		}
+		other = append(other, n)
 	}
-	return store.DistinctPeople(norms)
+	nat, _ := s.NationalNumbersByPersons(ctx, other)
+	c := store.DistinctPeopleGuarded(other, nat)
+	if ownerSeen {
+		c++
+	}
+	return c
+}
+
+// ownerIsDominant reports whether the OWNER holds a decisive plurality of the proximity-link
+// DOCS for a contested value: ≥3 distinct owner documents AND ≥2× the runner-up (the highest
+// distinct-doc count among any single non-owner person). Owner variants collapse to one
+// bucket; non-owner norms are counted per distinct norm (never merged across norms, so a
+// non-owner is never inflated to look dominant). This is the plurality gate that turns the
+// owner's own reprinted reference number from "ambiguous_owner" into an affirmed answer.
+func ownerIsDominant(ctx context.Context, s Store, idNorm string, owner *identity.Matcher) bool {
+	links, err := s.IdentifierLinksForID(ctx, idNorm)
+	if err != nil {
+		return false
+	}
+	ownerDocs := map[string]bool{}
+	otherDocs := map[string]map[string]bool{}
+	for _, l := range links {
+		if l.ContentID == "" || l.PersonNorm == "" {
+			continue
+		}
+		if owner.IsOwnerNorm(l.PersonNorm) {
+			ownerDocs[l.ContentID] = true
+			continue
+		}
+		if otherDocs[l.PersonNorm] == nil {
+			otherDocs[l.PersonNorm] = map[string]bool{}
+		}
+		otherDocs[l.PersonNorm][l.ContentID] = true
+	}
+	ownerN := len(ownerDocs)
+	runnerUp := 0
+	for _, ds := range otherDocs {
+		if len(ds) > runnerUp {
+			runnerUp = len(ds)
+		}
+	}
+	return ownerN >= 3 && ownerN >= 2*runnerUp
 }
 
 // idTypeAllowsVariantCollapse reports whether an identifier type may legitimately be shared

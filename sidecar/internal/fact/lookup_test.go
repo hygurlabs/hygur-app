@@ -5,15 +5,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 )
 
 type fakeStore struct {
-	resolve   []string // persons the query resolves to (nil → the appended exact query drives it)
-	neighbors []store.Neighbor
-	types     map[string]string
-	links     map[string][]store.IdentifierLink
-	docs      map[string][]string
+	resolve     []string // persons the query resolves to (nil → the appended exact query drives it)
+	neighbors   []store.Neighbor
+	types       map[string]string
+	links       map[string][]store.IdentifierLink
+	docs        map[string][]string
+	natNums     map[string][]string // person norm → its own national_number values (father/son guard)
+	personNorms []string            // owner-variant candidates returned by PersonNormsContainingTokens
 }
 
 func (f *fakeStore) ResolvePersonNorms(_ context.Context, _ string, _ int) ([]string, error) {
@@ -33,6 +36,18 @@ func (f *fakeStore) SearchByIdentifier(_ context.Context, key string, _ int) ([]
 }
 func (f *fakeStore) GetKnowledgeItem(_ context.Context, id string) (*store.KnowledgeItem, error) {
 	return &store.KnowledgeItem{ContentID: id, Title: "doc " + id}, nil
+}
+func (f *fakeStore) NationalNumbersByPersons(_ context.Context, norms []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, n := range norms {
+		if v := f.natNums[n]; len(v) > 0 {
+			out[n] = v
+		}
+	}
+	return out, nil
+}
+func (f *fakeStore) PersonNormsContainingTokens(_ context.Context, _ []string) ([]string, error) {
+	return f.personNorms, nil
 }
 
 func TestLookupIdentifier(t *testing.T) {
@@ -58,7 +73,7 @@ func TestLookupIdentifier(t *testing.T) {
 			"nnchild": {"d1", "d2", "d3", "d4"}, "nnparent": {"d5", "d6"},
 		},
 	}
-	r, err := LookupIdentifier(ctx, f, "elric", "national_number", now)
+	r, err := LookupIdentifier(ctx, f, "elric", "national_number", now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,13 +91,13 @@ func TestLookupIdentifier(t *testing.T) {
 	f.links = map[string][]store.IdentifierLink{}
 	f.neighbors = []store.Neighbor{{Norm: "nnparent", Weight: 0.025}}
 	f.docs = map[string][]string{"nnparent": {"d5"}}
-	if r, _ := LookupIdentifier(ctx, f, "elric", "national_number", now); r.Tier == TierHigh {
+	if r, _ := LookupIdentifier(ctx, f, "elric", "national_number", now, nil); r.Tier == TierHigh {
 		t.Errorf("no-proximity lone candidate should not affirm; got tier=%q conf=%.2f", r.Tier, r.Confidence)
 	}
 
 	// No typed-identifier neighbor at all → decline.
 	f.types = map[string]string{"nnparent": "ner_person"}
-	if r, _ := LookupIdentifier(ctx, f, "elric", "national_number", now); r.Tier != TierNone || r.Value != "" {
+	if r, _ := LookupIdentifier(ctx, f, "elric", "national_number", now, nil); r.Tier != TierNone || r.Value != "" {
 		t.Errorf("no candidate should decline; got %+v", r)
 	}
 }
@@ -107,7 +122,7 @@ func TestLookupIdentifier_AmbiguousSubject(t *testing.T) {
 		},
 		docs: map[string][]string{"nnalice": {"d1", "d2", "d3"}, "nnbob": {"d4", "d5"}},
 	}
-	r, err := LookupIdentifier(ctx, f, "bernard", "national_number", now)
+	r, err := LookupIdentifier(ctx, f, "bernard", "national_number", now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +151,7 @@ func TestLookupIdentifier_MonoPersonStillHigh(t *testing.T) {
 		links:     map[string][]store.IdentifierLink{"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}}},
 		docs:      map[string][]string{"nnalice": {"d1", "d2", "d3"}},
 	}
-	r, err := LookupIdentifier(ctx, f, "alice bernard", "national_number", now)
+	r, err := LookupIdentifier(ctx, f, "alice bernard", "national_number", now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,7 @@ func TestLookupIdentifier_PersonVariantsResolve(t *testing.T) {
 		}},
 		docs: map[string][]string{"nnown": {"d1", "d2", "d3"}},
 	}
-	r, err := LookupIdentifier(ctx, f, "alice marie bernard", "national_number", now)
+	r, err := LookupIdentifier(ctx, f, "alice marie bernard", "national_number", now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +216,7 @@ func TestLookupIdentifier_ContestedValueNotHigh(t *testing.T) {
 		}
 	}
 	for _, who := range []string{"alice bernard", "bob bernard"} {
-		r, err := LookupIdentifier(ctx, base(who), who, "national_number", now)
+		r, err := LookupIdentifier(ctx, base(who), who, "national_number", now, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +247,7 @@ func TestLookupIdentifier_CollapseSharedID(t *testing.T) {
 		}},
 		docs: map[string][]string{"en0": {"d1", "d2", "d3"}},
 	}
-	r, err := LookupIdentifier(ctx, shared, "acme", "enterprise_number", now)
+	r, err := LookupIdentifier(ctx, shared, "acme", "enterprise_number", now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +270,7 @@ func TestLookupIdentifier_CollapseSharedID(t *testing.T) {
 		},
 		docs: map[string][]string{"en0": {"d1"}, "en1": {"d2"}},
 	}
-	if r, _ := LookupIdentifier(ctx, distinct, "acme", "enterprise_number", now); r.Tier != TierNone || r.Reason != ReasonAmbiguousSubject {
+	if r, _ := LookupIdentifier(ctx, distinct, "acme", "enterprise_number", now, nil); r.Tier != TierNone || r.Reason != ReasonAmbiguousSubject {
 		t.Errorf("distinct orgs must decline as ambiguous_subject; got tier=%q reason=%q", r.Tier, r.Reason)
 	}
 
@@ -269,7 +284,135 @@ func TestLookupIdentifier_CollapseSharedID(t *testing.T) {
 		links:     map[string][]store.IdentifierLink{"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}}},
 		docs:      map[string][]string{"nnalice": {"d1", "d2", "d3"}, "nnbob": {"d4"}},
 	}
-	if r, _ := LookupIdentifier(ctx, lone, "bernard", "national_number", now); r.Tier != TierNone || r.Reason != ReasonAmbiguousSubject {
+	if r, _ := LookupIdentifier(ctx, lone, "bernard", "national_number", now, nil); r.Tier != TierNone || r.Reason != ReasonAmbiguousSubject {
 		t.Errorf("single-owner value in a distinct-people pool must decline; got tier=%q reason=%q", r.Tier, r.Reason)
+	}
+}
+
+// ownerMatcher is the fictional corpus owner "Alex Martin" used by the dominance tests.
+// Same shape as the real config: two ambiguous bare variants + discriminative names + email.
+func ownerMatcher() *identity.Matcher {
+	return identity.NewMatcher([]string{"Alex Martin", "Alex", "Alex M", "Martin", "am@example.com"})
+}
+
+// dominanceStore builds a store where the owner "alex martin" and one institution "acme sa"
+// are both proximity-linked to ONE value across the given per-holder document counts.
+func dominanceStore(ownerDocs, instDocs int) *fakeStore {
+	var links []store.IdentifierLink
+	docIDs := []string{}
+	d := 0
+	for i := 0; i < ownerDocs; i++ {
+		id := "o" + string(rune('a'+d))
+		d++
+		links = append(links, store.IdentifierLink{ContentID: id, PersonNorm: "alex martin", IDNorm: "nnval", Prox: 1})
+		docIDs = append(docIDs, id)
+	}
+	for i := 0; i < instDocs; i++ {
+		id := "i" + string(rune('a'+d))
+		d++
+		links = append(links, store.IdentifierLink{ContentID: id, PersonNorm: "acme sa", IDNorm: "nnval", Prox: 1})
+		docIDs = append(docIDs, id)
+	}
+	return &fakeStore{
+		resolve:   []string{"alex martin"},
+		neighbors: []store.Neighbor{{Norm: "nnval", Weight: 0.030}},
+		types:     map[string]string{"nnval": "id_national_number"},
+		links:     map[string][]store.IdentifierLink{"nnval": links},
+		docs:      map[string][]string{"nnval": docIDs},
+	}
+}
+
+// TestLookupIdentifier_OwnerDominanceResolves — the owner's OWN reference number, reprinted by
+// an institution, looks contested (2 distinct owners) yet the owner holds a decisive plurality
+// of the proximity docs (5 vs 1). Owner anchor + dominance → affirm, not ambiguous_owner.
+func TestLookupIdentifier_OwnerDominanceResolves(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	f := dominanceStore(5, 1)
+	r, err := LookupIdentifier(ctx, f, "alex martin", "national_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("owner dominant 5-vs-1: tier=%q (conf %.2f, reason %q), want high", r.Tier, r.Confidence, r.Reason)
+	}
+	if r.Value != "nnval" {
+		t.Errorf("value = %q, want nnval", r.Value)
+	}
+}
+
+// TestLookupIdentifier_OwnerDominanceDeclines — an EVEN 2-vs-2 split and a non-decisive 3-vs-2
+// (fails the ≥2× margin) are NOT a plurality: keep declining ambiguous_owner (fail closed).
+func TestLookupIdentifier_OwnerDominanceDeclines(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	for _, tc := range []struct {
+		name        string
+		owner, inst int
+	}{
+		{"even 2-vs-2", 2, 2},
+		{"no decisive margin 3-vs-2", 3, 2},
+	} {
+		f := dominanceStore(tc.owner, tc.inst)
+		r, err := LookupIdentifier(ctx, f, "alex martin", "national_number", now, ownerMatcher())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Tier == TierHigh {
+			t.Errorf("%s: tier=high, want NOT high", tc.name)
+		}
+		if r.Reason != ReasonAmbiguousOwner {
+			t.Errorf("%s: reason=%q, want %q", tc.name, r.Reason, ReasonAmbiguousOwner)
+		}
+	}
+}
+
+// TestLookupIdentifier_NonOwnerNeverGetsOwnerValue — the mis-attribution guard. Querying the
+// institution (a non-owner) for a value the OWNER dominates must NOT hand back the owner's
+// number: dominance only resolves when the queried subject IS the dominant owner.
+func TestLookupIdentifier_NonOwnerNeverGetsOwnerValue(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	f := dominanceStore(5, 1)
+	f.resolve = []string{"acme sa"} // the institution asks
+	r, err := LookupIdentifier(ctx, f, "acme sa", "national_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier == TierHigh {
+		t.Errorf("non-owner query: tier=high, want NOT high (no mis-attribution)")
+	}
+	if r.Reason != ReasonAmbiguousOwner {
+		t.Errorf("non-owner query: reason=%q, want %q", r.Reason, ReasonAmbiguousOwner)
+	}
+}
+
+// TestLookupIdentifier_OwnerCrossVariantProximity — the owner anchor's proximity half. The
+// value neighbors the given-first variant ("alex martin") but is proximity-linked under the
+// surname-first variant ("martin alex"), which the query did not resolve to. Because the owner
+// is ONE unified subject, that cross-variant link still counts as proximity to him → affirm.
+func TestLookupIdentifier_OwnerCrossVariantProximity(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	var links []store.IdentifierLink
+	docs := []string{}
+	for i := 0; i < 5; i++ {
+		id := "cv" + string(rune('a'+i))
+		links = append(links, store.IdentifierLink{ContentID: id, PersonNorm: "martin alex", IDNorm: "nnval", Prox: 1})
+		docs = append(docs, id)
+	}
+	links = append(links, store.IdentifierLink{ContentID: "iz", PersonNorm: "acme sa", IDNorm: "nnval", Prox: 1})
+	docs = append(docs, "iz")
+	f := &fakeStore{
+		resolve:   []string{"alex martin"}, // given-first; the link is under surname-first
+		neighbors: []store.Neighbor{{Norm: "nnval", Weight: 0.030}},
+		types:     map[string]string{"nnval": "id_national_number"},
+		links:     map[string][]store.IdentifierLink{"nnval": links},
+		docs:      map[string][]string{"nnval": docs},
+		// PersonNormsContainingTokens returns nothing extra: prox must come from owner-awareness,
+		// not from pooling the surname-first variant.
+	}
+	r, err := LookupIdentifier(ctx, f, "alex martin", "national_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("owner cross-variant proximity: tier=%q (conf %.2f, reason %q), want high", r.Tier, r.Confidence, r.Reason)
 	}
 }

@@ -38,3 +38,33 @@ func TestDistinctPeople(t *testing.T) {
 		}
 	}
 }
+
+// TestDistinctPeopleGuarded_FatherSon — the father/son subset guard. {gérard,petit} ⊆
+// {denis,gérard,petit}, so a token-subset merge would count them as ONE (the son), erasing
+// the father. When each carries his OWN, distinct national_number the guard keeps them two.
+// A shared number (the founder's own two variants) still merges; a no-id variant still merges.
+func TestDistinctPeopleGuarded_FatherSon(t *testing.T) {
+	fatherSon := []string{"gerard petit", "denis gerard petit"}
+
+	if got := DistinctPeople(fatherSon); got != 1 {
+		t.Fatalf("no-id baseline: got %d, want 1 (token-subset merge)", got)
+	}
+	distinct := map[string][]string{
+		"gerard petit":       {"nissFather"},
+		"denis gerard petit": {"nissSon"},
+	}
+	if got := DistinctPeopleGuarded(fatherSon, distinct); got != 2 {
+		t.Errorf("distinct NISS father/son: got %d, want 2", got)
+	}
+	shared := map[string][]string{
+		"gerard petit":       {"nissOne"},
+		"denis gerard petit": {"nissOne"},
+	}
+	if got := DistinctPeopleGuarded(fatherSon, shared); got != 1 {
+		t.Errorf("shared NISS (one person's variants): got %d, want 1", got)
+	}
+	onlySon := map[string][]string{"denis gerard petit": {"nissSon"}}
+	if got := DistinctPeopleGuarded(fatherSon, onlySon); got != 1 {
+		t.Errorf("no-id subset variant must still merge: got %d, want 1", got)
+	}
+}

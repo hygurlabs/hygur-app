@@ -50,6 +50,7 @@ func (d *DB) ResolvePersonNorms(ctx context.Context, query string, limit int) ([
 // clear runner-up margin, mutual). Prox ∈ (0,1]. The lookup aggregates these across docs on
 // top of the NPMI edge to break the family-member tie doc-level co-occurrence cannot.
 type IdentifierLink struct {
+	ContentID  string // the document the link was found in (populated on read; the write side passes it separately)
 	PersonNorm string
 	IDNorm     string
 	IDType     string
@@ -86,7 +87,7 @@ func (d *DB) ReplaceIdentifierLinks(ctx context.Context, contentID string, links
 // all documents — which persons it was unambiguously tied to, and how strongly.
 func (d *DB) IdentifierLinksForID(ctx context.Context, idNorm string) ([]IdentifierLink, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT person_norm, id_norm, id_type, prox FROM entity_identifier_link WHERE id_norm = ?`, idNorm)
+		`SELECT content_id, person_norm, id_norm, id_type, prox FROM entity_identifier_link WHERE id_norm = ?`, idNorm)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +95,90 @@ func (d *DB) IdentifierLinksForID(ctx context.Context, idNorm string) ([]Identif
 	var out []IdentifierLink
 	for rows.Next() {
 		var l IdentifierLink
-		if err := rows.Scan(&l.PersonNorm, &l.IDNorm, &l.IDType, &l.Prox); err != nil {
+		if err := rows.Scan(&l.ContentID, &l.PersonNorm, &l.IDNorm, &l.IDType, &l.Prox); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// NationalNumbersByPersons returns, for each given person norm, the set of national_number
+// values it is proximity-linked to (its OWN NISS). Feeds the father/son guard in
+// DistinctPeopleGuarded so a father inside his son's full name is not merged into the son.
+func (d *DB) NationalNumbersByPersons(ctx context.Context, norms []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(norms) == 0 {
+		return out, nil
+	}
+	seen := map[string]bool{}
+	ph := make([]string, 0, len(norms))
+	args := make([]any, 0, len(norms))
+	for _, n := range norms {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		ph = append(ph, "?")
+		args = append(args, n)
+	}
+	if len(ph) == 0 {
+		return out, nil
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT person_norm, id_norm FROM entity_identifier_link
+		 WHERE id_type = 'national_number' AND person_norm IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p, id string
+		if err := rows.Scan(&p, &id); err != nil {
+			return nil, err
+		}
+		out[p] = append(out[p], id)
+	}
+	return out, rows.Err()
+}
+
+// PersonNormsContainingTokens returns distinct ner_person entity norms that contain ANY of the
+// given whole (space-delimited) tokens — a bounded candidate set for owner recognition, which
+// the caller narrows with an identity.Matcher. Word-boundary matched (space-padding), so 'l'
+// matches "denis l" but not "petit". Capped to keep a read-time call bounded.
+func (d *DB) PersonNormsContainingTokens(ctx context.Context, tokens []string) ([]string, error) {
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	var conds []string
+	var args []any
+	for _, t := range tokens {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		conds = append(conds, "(' ' || entity_norm || ' ') LIKE ('% ' || ? || ' %')")
+		args = append(args, t)
+	}
+	if len(conds) == 0 {
+		return nil, nil
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT entity_norm FROM entity_mentions
+		 WHERE attribute = 'ner_person' AND (`+strings.Join(conds, " OR ")+`) LIMIT 500`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
 	}
 	return out, rows.Err()
 }

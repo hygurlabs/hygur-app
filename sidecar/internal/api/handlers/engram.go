@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/fact"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -27,7 +28,7 @@ func (h *EngramHandler) IdentifierLookup(w http.ResponseWriter, r *http.Request)
 		writeKnowledgeError(w, http.StatusBadRequest, "BAD_REQUEST", "entity and type are required")
 		return
 	}
-	res, err := fact.LookupIdentifier(r.Context(), h.store, contradict.NormKey(entity), idType, time.Now())
+	res, err := fact.LookupIdentifier(r.Context(), h.store, contradict.NormKey(entity), idType, time.Now(), h.owner)
 	if err != nil {
 		h.logger.Warn().Err(err).Msg("identifier lookup failed")
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL", "lookup failed")
@@ -42,12 +43,14 @@ func (h *EngramHandler) IdentifierLookup(w http.ResponseWriter, r *http.Request)
 // Read-only; no LLM.
 type EngramHandler struct {
 	store        *store.DB
-	ownerExclude []string // normalized owner-identity norms, excluded from the subject list
+	owner        *identity.Matcher // first-class owner matcher (self recognition)
+	ownerExclude []string          // exact owner config norms, cheap SQL prefilter for the subject list
 	logger       zerolog.Logger
 }
 
 // NewEngramHandler builds the handler. store may be nil (the endpoint then returns 503).
-// ownerNames are the owner's own name/email variants (excluded from the subject list).
+// ownerNames are the owner's own name/email variants: they drive owner recognition (self is
+// affirmed on identifier lookup, unified in the dossier) and are excluded from the subject list.
 func NewEngramHandler(db *store.DB, ownerNames []string, logger zerolog.Logger) *EngramHandler {
 	ex := make([]string, 0, len(ownerNames))
 	for _, n := range ownerNames {
@@ -55,7 +58,12 @@ func NewEngramHandler(db *store.DB, ownerNames []string, logger zerolog.Logger) 
 			ex = append(ex, k)
 		}
 	}
-	return &EngramHandler{store: db, ownerExclude: ex, logger: logger.With().Str("handler", "engram").Logger()}
+	return &EngramHandler{
+		store:        db,
+		owner:        identity.NewMatcher(ownerNames),
+		ownerExclude: ex,
+		logger:       logger.With().Str("handler", "engram").Logger(),
+	}
 }
 
 // Dossier handles GET /engrams/{norm} — the consolidated dossier for one subject. The
@@ -70,7 +78,7 @@ func (h *EngramHandler) Dossier(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusBadRequest, "BAD_REQUEST", "subject is required")
 		return
 	}
-	eng, err := retrieval.AssembleEngram(r.Context(), h.store, norm, time.Now().UTC())
+	eng, err := retrieval.AssembleEngram(r.Context(), h.store, norm, time.Now().UTC(), h.owner)
 	if err != nil {
 		h.logger.Warn().Err(err).Str("subject", norm).Msg("engram assembly failed")
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "engram assembly failed")
@@ -96,11 +104,25 @@ func (h *EngramHandler) List(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	subjects, err := h.store.TopSubjects(r.Context(), limit, h.ownerExclude)
+	// Over-fetch so the owner-variant filter below cannot shrink the page under `limit`.
+	subjects, err := h.store.TopSubjects(r.Context(), limit+len(h.ownerExclude)+8, h.ownerExclude)
 	if err != nil {
 		h.logger.Warn().Err(err).Msg("top subjects failed")
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "top subjects failed")
 		return
 	}
-	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"subjects": subjects})
+	// The owner is not a subject to explore. The SQL prefilter only drops exact config norms;
+	// drop EVERY owner name-variant here (e.g. "denis gérard petit") so his variants never
+	// fragment the discovered-subjects list. Children/father are NOT owner → they remain.
+	filtered := subjects[:0]
+	for _, s := range subjects {
+		if h.owner.IsOwnerNorm(s.Norm) {
+			continue
+		}
+		filtered = append(filtered, s)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	writeKnowledgeJSON(w, http.StatusOK, map[string]any{"subjects": filtered})
 }

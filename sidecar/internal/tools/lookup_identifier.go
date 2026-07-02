@@ -9,6 +9,7 @@ import (
 
 	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/fact"
+	"github.com/hygur/sidecar/internal/identity"
 )
 
 // LookupIdentifierTool exposes the deterministic (entity, identifier-type) → value lookup to
@@ -17,11 +18,13 @@ import (
 // how "what is X's national number?" gets a grounded answer instead of a plausible guess.
 type LookupIdentifierTool struct {
 	store fact.Store
+	owner *identity.Matcher // first-class owner matcher (may be nil)
 }
 
-// NewLookupIdentifierTool builds the tool over the given store (a *store.DB).
-func NewLookupIdentifierTool(s fact.Store) *LookupIdentifierTool {
-	return &LookupIdentifierTool{store: s}
+// NewLookupIdentifierTool builds the tool over the given store (a *store.DB) and the owner
+// matcher, so the owner's OWN identifiers resolve via the owner anchor + dominance.
+func NewLookupIdentifierTool(s fact.Store, owner *identity.Matcher) *LookupIdentifierTool {
+	return &LookupIdentifierTool{store: s, owner: owner}
 }
 
 func (t *LookupIdentifierTool) Name() string { return "lookup_identifier" }
@@ -73,7 +76,7 @@ func (t *LookupIdentifierTool) Execute(ctx context.Context, raw json.RawMessage)
 	if a.Entity == "" || a.Type == "" {
 		return nil, fmt.Errorf("entity and type are required")
 	}
-	res, err := fact.LookupIdentifier(ctx, t.store, contradict.NormKey(a.Entity), a.Type, time.Now())
+	res, err := fact.LookupIdentifier(ctx, t.store, contradict.NormKey(a.Entity), a.Type, time.Now(), t.owner)
 	if err != nil {
 		return nil, err
 	}

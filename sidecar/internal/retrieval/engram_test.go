@@ -74,7 +74,7 @@ func TestAssembleEngram(t *testing.T) {
 		t.Fatalf("decision: %v", err)
 	}
 
-	eng, err := AssembleEngram(ctx, db, "Acme", now)
+	eng, err := AssembleEngram(ctx, db, "Acme", now, nil)
 	if err != nil {
 		t.Fatalf("AssembleEngram: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestAssembleEngram(t *testing.T) {
 	}
 
 	// Unknown subject → nil (404 at the handler).
-	if e, _ := AssembleEngram(ctx, db, "Nonexistent", now); e != nil {
+	if e, _ := AssembleEngram(ctx, db, "Nonexistent", now, nil); e != nil {
 		t.Errorf("unknown subject should yield nil, got %+v", e)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -107,14 +108,36 @@ type EngramItem struct {
 // AssembleEngram builds the dossier for a subject deterministically. The subject is
 // normalized server-side, so a raw name ("Acme") or a stored norm both work. Returns
 // nil when the subject has no presence at all (no mentions and no graph edges).
-func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.Time) (*Engram, error) {
+//
+// owner (may be nil) unifies the OWNER's dossier: when the subject is the owner, ALL his
+// name-variant norms are treated as ONE subject, so his mentions and network merge instead
+// of fragmenting across spellings. This is READ-TIME and REVERSIBLE (nothing is written or
+// merged in the store); a non-owner subject (a child, the father) is untouched and keeps its
+// own separate dossier.
+func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.Time, owner *identity.Matcher) (*Engram, error) {
 	norm := contradict.NormKey(strings.TrimSpace(subject))
 	if db == nil || norm == "" {
 		return nil, nil
 	}
 
-	// Network: the subject's Hebbian neighbors with weights (the ramifications).
-	rawNetwork, err := db.HebbianNeighborsWeighted(ctx, norm, now, 0, engramNetworkMax)
+	// Owner unification: gather every owner name-variant present in the graph and treat them as
+	// one subject. Bounded by the owner's discriminative tokens + the strict matcher filter.
+	subjectNorms := []string{norm}
+	if owner.IsOwnerNorm(norm) {
+		if cands, e := db.PersonNormsContainingTokens(ctx, owner.Tokens()); e == nil {
+			seen := map[string]bool{norm: true}
+			for _, c := range cands {
+				if !seen[c] && owner.IsOwnerNorm(c) {
+					seen[c] = true
+					subjectNorms = append(subjectNorms, c)
+				}
+			}
+		}
+	}
+
+	// Network: the subject's Hebbian neighbors with weights (the ramifications), unioned across
+	// the owner's variant norms (identical to a single-norm query for a non-owner subject).
+	rawNetwork, err := unionNeighbors(ctx, db, subjectNorms, now, engramNetworkMax)
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +165,8 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 		return neighborRank(network[i]) > neighborRank(network[j])
 	})
 
-	// 1st-order: items that mention the subject directly.
-	directIDs, err := db.EntityMentionContentIDs(ctx, []string{norm}, engramFirstCap)
+	// 1st-order: items that mention the subject directly (all owner variants, merged).
+	directIDs, err := db.EntityMentionContentIDs(ctx, subjectNorms, engramFirstCap)
 	if err != nil {
 		return nil, err
 	}
@@ -311,6 +334,52 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 		Decisions:      decisions,
 		Contradictions: contradictions,
 	}, nil
+}
+
+// unionNeighbors returns the Hebbian neighbors of one or more subject norms. For a single
+// norm it is exactly HebbianNeighborsWeighted (behavior-preserving for non-owner subjects).
+// For several (the owner's variants) it merges neighbors by MAX weight, drops the subject
+// norms themselves (a variant is not its own neighbor), and keeps the top `max` by weight.
+func unionNeighbors(ctx context.Context, db *store.DB, norms []string, now time.Time, max int) ([]store.Neighbor, error) {
+	if len(norms) <= 1 {
+		if len(norms) == 0 {
+			return nil, nil
+		}
+		return db.HebbianNeighborsWeighted(ctx, norms[0], now, 0, max)
+	}
+	self := make(map[string]bool, len(norms))
+	for _, n := range norms {
+		self[n] = true
+	}
+	best := map[string]float64{}
+	for _, n := range norms {
+		ns, err := db.HebbianNeighborsWeighted(ctx, n, now, 0, max)
+		if err != nil {
+			return nil, err
+		}
+		for _, x := range ns {
+			if self[x.Norm] {
+				continue
+			}
+			if x.Weight > best[x.Norm] {
+				best[x.Norm] = x.Weight
+			}
+		}
+	}
+	out := make([]store.Neighbor, 0, len(best))
+	for nm, w := range best {
+		out = append(out, store.Neighbor{Norm: nm, Weight: w})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Weight != out[j].Weight {
+			return out[i].Weight > out[j].Weight
+		}
+		return out[i].Norm < out[j].Norm
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out, nil
 }
 
 // subjectType labels a subject by its dominant NER attribute (most-mentioned of
