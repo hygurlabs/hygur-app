@@ -128,6 +128,17 @@ func runServe(args []string) {
 	// cross-origin; permit it (+ console) here. Loopback is always allowed.
 	rpOrigins := splitCSV(envOr("HYGUR_RP_ORIGINS", "https://cloud.hygur.ai,https://console.hygur.ai"))
 	root.Use(controlplane.CORSMiddleware(rpOrigins))
+	// Liveness/readiness: 200 as soon as the HTTP server is serving. Wired as the k8s
+	// readiness probe (with maxUnavailable=0) so a rollout only shifts traffic to a new
+	// pod once it truly serves — without it k8s marks a just-started pod Ready before
+	// ListenAndServe is up, so requests hit a not-yet-listening pod during a deploy and
+	// surface as 502s with no CORS headers. MUST be registered AFTER the root.Use(...)
+	// chain (chi panics if any route precedes a middleware); the Host guard exempts
+	// /health and CORS on an Origin-less GET is a no-op, so behaviour is unchanged.
+	root.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	svc.Register(root)
 
 	// First-party, cookieless client-error ingest (POST /errors) — the app reports
