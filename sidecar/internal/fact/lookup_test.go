@@ -9,6 +9,7 @@ import (
 )
 
 type fakeStore struct {
+	resolve   []string // persons the query resolves to (nil → the appended exact query drives it)
 	neighbors []store.Neighbor
 	types     map[string]string
 	links     map[string][]store.IdentifierLink
@@ -16,7 +17,7 @@ type fakeStore struct {
 }
 
 func (f *fakeStore) ResolvePersonNorms(_ context.Context, _ string, _ int) ([]string, error) {
-	return nil, nil // the appended exact query drives the test
+	return f.resolve, nil
 }
 func (f *fakeStore) HebbianNeighborsWeighted(_ context.Context, _ string, _ time.Time, _ float64, _ int) ([]store.Neighbor, error) {
 	return f.neighbors, nil
@@ -83,5 +84,98 @@ func TestLookupIdentifier(t *testing.T) {
 	f.types = map[string]string{"nnparent": "ner_person"}
 	if r, _ := LookupIdentifier(ctx, f, "elric", "national_number", now); r.Tier != TierNone || r.Value != "" {
 		t.Errorf("no candidate should decline; got %+v", r)
+	}
+}
+
+// TestLookupIdentifier_AmbiguousSubject — a bare surname that resolves to two DISTINCT people
+// (Alice Bernard + Bob Bernard) must decline and clarify, never hand back one's number at high.
+// Mirrors the real surname/first-name over-match leak (a shared name pooling distinct people). (O1)
+func TestLookupIdentifier_AmbiguousSubject(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	// Even though Alice's number is a perfectly good high-confidence candidate on its own,
+	// the SUBJECT is ambiguous — the query pooled two different people.
+	f := &fakeStore{
+		resolve:   []string{"alice bernard", "bob bernard"},
+		neighbors: []store.Neighbor{{Norm: "nnalice", Weight: 0.030}},
+		types:     map[string]string{"nnalice": "id_national_number"},
+		links:     map[string][]store.IdentifierLink{"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}}},
+		docs:      map[string][]string{"nnalice": {"d1", "d2", "d3"}},
+	}
+	r, err := LookupIdentifier(ctx, f, "bernard", "national_number", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierNone {
+		t.Errorf("ambiguous subject: tier = %q (conf %.2f), want none", r.Tier, r.Confidence)
+	}
+	if r.Value != "" {
+		t.Errorf("ambiguous subject must NOT return a value; got %q", r.Value)
+	}
+	if r.Reason != ReasonAmbiguousSubject {
+		t.Errorf("reason = %q, want %q", r.Reason, ReasonAmbiguousSubject)
+	}
+}
+
+// TestLookupIdentifier_MonoPersonStillHigh — ANTI-OVER-CORRECTION. An unambiguous full-name
+// query (one distinct person) with a proximity-linked, single-owner value must STILL affirm.
+// Proves the ambiguity/uniqueness guards did not start declining the good cases.
+func TestLookupIdentifier_MonoPersonStillHigh(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	f := &fakeStore{
+		resolve:   []string{"alice bernard"}, // exactly one distinct person
+		neighbors: []store.Neighbor{{Norm: "nnalice", Weight: 0.030}},
+		types:     map[string]string{"nnalice": "id_national_number"},
+		links:     map[string][]store.IdentifierLink{"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}}},
+		docs:      map[string][]string{"nnalice": {"d1", "d2", "d3"}},
+	}
+	r, err := LookupIdentifier(ctx, f, "alice bernard", "national_number", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("mono-person good case: tier = %q (conf %.2f), want high", r.Tier, r.Confidence)
+	}
+	if r.Value != "nnalice" {
+		t.Errorf("value = %q, want nnalice", r.Value)
+	}
+	if len(r.Sources) == 0 {
+		t.Error("expected sources for human verification")
+	}
+}
+
+// TestLookupIdentifier_ContestedValueNotHigh — a value proximity-linked to TWO distinct
+// persons violates the uniqueness invariant (one value = one owner). It must NOT be affirmed
+// for EITHER queried person, even though each query is itself unambiguous. (O2/V3)
+func TestLookupIdentifier_ContestedValueNotHigh(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	base := func(resolvedPerson string) *fakeStore {
+		return &fakeStore{
+			resolve:   []string{resolvedPerson},
+			neighbors: []store.Neighbor{{Norm: "nnshared", Weight: 0.030}},
+			types:     map[string]string{"nnshared": "id_national_number"},
+			links: map[string][]store.IdentifierLink{"nnshared": {
+				{PersonNorm: "alice bernard", IDNorm: "nnshared", Prox: 1},
+				{PersonNorm: "bob bernard", IDNorm: "nnshared", Prox: 1},
+			}},
+			docs: map[string][]string{"nnshared": {"d1", "d2", "d3"}},
+		}
+	}
+	for _, who := range []string{"alice bernard", "bob bernard"} {
+		r, err := LookupIdentifier(ctx, base(who), who, "national_number", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Tier == TierHigh {
+			t.Errorf("contested value for %q: tier = high (conf %.2f), want NOT high", who, r.Confidence)
+		}
+		if r.Reason != ReasonAmbiguousOwner {
+			t.Errorf("contested value for %q: reason = %q, want %q", who, r.Reason, ReasonAmbiguousOwner)
+		}
 	}
 }

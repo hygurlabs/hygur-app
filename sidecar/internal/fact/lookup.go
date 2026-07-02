@@ -34,6 +34,13 @@ const (
 	TierNone Tier = "none"   // decline ("no reliable value")
 )
 
+// Reason codes explain WHY a lookup declined, so the voice can phrase the right question
+// instead of a generic "I couldn't find it". Empty for confident results.
+const (
+	ReasonAmbiguousSubject = "ambiguous_subject" // the name matches several distinct people
+	ReasonAmbiguousOwner   = "ambiguous_owner"   // the value is claimed by several distinct people
+)
+
 // Source is a document that carries the value — surfaced so a human can verify.
 type Source struct {
 	ContentID string `json:"content_id"`
@@ -47,6 +54,7 @@ type Result struct {
 	Raw        string   `json:"raw"`        // as written, for display
 	Confidence float64  `json:"confidence"` // [0,1]
 	Tier       Tier     `json:"tier"`
+	Reason     string   `json:"reason,omitempty"` // why it declined (ambiguity code), when Tier=none
 	Sources    []Source `json:"sources"`
 	Candidates int      `json:"candidates"`
 }
@@ -68,9 +76,19 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	res := Result{Type: idType, Tier: TierNone}
 	attr := "id_" + idType
 
-	// Resolve the name to the graph's person entities (full names), plus the exact query.
-	norms, _ := s.ResolvePersonNorms(ctx, query, 20)
-	norms = append(norms, query)
+	// Resolve the name to the graph's person entities (full names). If the query resolves to
+	// MORE THAN ONE distinct person, the subject itself is ambiguous (a bare surname or first
+	// name shared by several people): we must NOT pool them and hand back one person's number
+	// at high confidence. Decline and ask which one — the honest answer to "whose is this?".
+	resolved, _ := s.ResolvePersonNorms(ctx, query, 20)
+	if len(resolved) > 1 {
+		res.Tier = TierNone
+		res.Reason = ReasonAmbiguousSubject
+		res.Candidates = len(resolved)
+		return res, nil
+	}
+	// Mono (or unresolved) subject: proceed with the resolved person plus the exact query.
+	norms := append(resolved, query)
 
 	type cinfo struct {
 		weight float64
@@ -157,6 +175,21 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	sort.Slice(all, func(i, j int) bool { return all[i].score > all[j].score })
 	best := all[0]
 
+	// Uniqueness invariant: one value = one owner. If the best value is proximity-linked to
+	// MORE THAN ONE distinct person, its ownership is contested — we cannot say it belongs to
+	// the queried subject. Decline (fail closed), never assert or even hedge a contested value.
+	if ownerCount(ctx, s, best.norm) > 1 {
+		res.Tier = TierNone
+		res.Reason = ReasonAmbiguousOwner
+		res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score
+		for _, id := range best.docs {
+			if it, e := s.GetKnowledgeItem(ctx, id); e == nil && it != nil {
+				res.Sources = append(res.Sources, Source{ContentID: id, Title: it.Title})
+			}
+		}
+		return res, nil
+	}
+
 	// Tier. Proximity is a trustworthy name↔number pairing → affirm/hedge on the value.
 	// WITHOUT proximity, doc-level NPMI CANNOT tell whose number it is once there are
 	// competing candidates: a parent's number co-occurs with a child more than the child's
@@ -181,6 +214,23 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 		}
 	}
 	return res, nil
+}
+
+// ownerCount is the number of DISTINCT persons proximity-linked to an identifier value —
+// the read-time half of the uniqueness invariant. >1 means the value's ownership is
+// contested across documents (the latent O2 case), so it must not be asserted for anyone.
+func ownerCount(ctx context.Context, s Store, idNorm string) int {
+	links, err := s.IdentifierLinksForID(ctx, idNorm)
+	if err != nil {
+		return 0
+	}
+	owners := map[string]bool{}
+	for _, l := range links {
+		if l.PersonNorm != "" {
+			owners[l.PersonNorm] = true
+		}
+	}
+	return len(owners)
 }
 
 func clamp01(x float64) float64 {

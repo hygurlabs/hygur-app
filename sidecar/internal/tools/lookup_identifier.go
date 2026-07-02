@@ -87,7 +87,14 @@ func (t *LookupIdentifierTool) Execute(ctx context.Context, raw json.RawMessage)
 		out.Value = res.Value
 		out.Guidance = "Give this value but explicitly flag that you are NOT certain (e.g. 'I'm not sure, but…'), and cite the source so the user can verify."
 	default: // TierNone
-		out.Guidance = "Do NOT state a value — you could not confirm a reliable one. Say so, and offer the source document(s) for the user to check themselves."
+		switch res.Reason {
+		case fact.ReasonAmbiguousSubject:
+			out.Guidance = "The name matches SEVERAL different people. Do NOT give any number — ask the user which specific person they mean (e.g. by full name)."
+		case fact.ReasonAmbiguousOwner:
+			out.Guidance = "This value is associated with MORE THAN ONE person, so you cannot attribute it to the one asked about. Do NOT state it as theirs — say the ownership is unclear and offer the source(s) to check."
+		default:
+			out.Guidance = "Do NOT state a value — you could not confirm a reliable one. Say so, and offer the source document(s) for the user to check themselves."
+		}
 	}
 	return json.Marshal(out)
 }

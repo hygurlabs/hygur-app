@@ -6,11 +6,19 @@ import (
 )
 
 // ResolvePersonNorms maps a name query to the person entity norms that contain it — the
-// graph indexes people by full name ("elric petit"), so a bare "elric" must resolve to
+// graph indexes people by full name ("alice bernard"), so a bare "alice" must resolve to
 // them before a lookup can find their identifier neighbors. Returns distinct ner_person
-// norms containing the (lowercased) query.
+// norms whose token stream contains the query as a WHOLE TOKEN or a contiguous full-name
+// phrase — never as an arbitrary substring. A bare-substring match (the old behavior) let a
+// partial name pool several distinct people (a shared surname pooled everyone who carries it;
+// a bare first name pooled every full-name variant): the caller then returned one of them at
+// high confidence with no ambiguity signal. Entity norms are single-space-separated
+// alphanumeric tokens (NormKey), so space-padding both sides turns LIKE into a word-boundary
+// match: ' bernard ' matches "alice bernard" but ' bern ' does not.
 func (d *DB) ResolvePersonNorms(ctx context.Context, query string, limit int) ([]string, error) {
-	q := strings.TrimSpace(strings.ToLower(query))
+	// Collapse to single-spaced lowercase tokens so the space-padding boundary holds even if
+	// the caller passes a raw (un-normalized) query.
+	q := strings.Join(strings.Fields(strings.ToLower(query)), " ")
 	if q == "" {
 		return nil, nil
 	}
@@ -19,7 +27,8 @@ func (d *DB) ResolvePersonNorms(ctx context.Context, query string, limit int) ([
 	}
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT DISTINCT entity_norm FROM entity_mentions
-		 WHERE attribute = 'ner_person' AND entity_norm LIKE '%' || ? || '%'
+		 WHERE attribute = 'ner_person'
+		   AND (' ' || entity_norm || ' ') LIKE ('% ' || ? || ' %')
 		 LIMIT ?`, q, limit)
 	if err != nil {
 		return nil, err
