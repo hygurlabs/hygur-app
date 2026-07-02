@@ -38,7 +38,7 @@ type LMStudioWatcher struct {
 // event payload so the macOS app can display "LM Studio at http://… is down".
 type Options struct {
 	URL      string
-	Interval time.Duration // default 10s
+	Interval time.Duration // default 60s
 	Timeout  time.Duration // default 3s; should be < Interval
 }
 
@@ -48,7 +48,7 @@ func New(client Pinger, broker *events.Broker, opts Options, logger zerolog.Logg
 		return nil
 	}
 	if opts.Interval <= 0 {
-		opts.Interval = 10 * time.Second
+		opts.Interval = 60 * time.Second
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 3 * time.Second

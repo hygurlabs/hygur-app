@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"strings"
@@ -23,6 +24,7 @@ import (
 type Server struct {
 	cfg                  *config.Config
 	logger               zerolog.Logger
+	bootTime             time.Time // set by SetBootTime; used to log boot_to_listen_ms at bind
 	router               chi.Router
 	llmClient            *llm.Client
 	httpServer           *http.Server
@@ -475,6 +477,10 @@ func (s *Server) setupMiddleware() {
 // LongOperationTimeout is the timeout for long-running operations like folder ingestion.
 const LongOperationTimeout = 5 * time.Minute
 
+// SetBootTime records when the process began booting so Start can log
+// boot_to_listen_ms (start of main → listener bound). Optional; unset disables the log.
+func (s *Server) SetBootTime(t time.Time) { s.bootTime = t }
+
 // Start starts the HTTP server and blocks until the context is cancelled.
 // It handles graceful shutdown when the context is done.
 func (s *Server) Start(ctx context.Context) error {
@@ -495,13 +501,26 @@ func (s *Server) Start(ctx context.Context) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	// Bind the listener synchronously so a bind error surfaces immediately and we can
+	// log the exact moment the port starts accepting — the end of the boot path (WP21).
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to bind %s: %w", addr, err)
+	}
+	if !s.bootTime.IsZero() {
+		s.logger.Info().
+			Int64("boot_to_listen_ms", time.Since(s.bootTime).Milliseconds()).
+			Str("addr", addr).
+			Msg("HTTP listener bound")
+	}
+
 	// Channel to receive server errors
 	errCh := make(chan error, 1)
 
-	// Start the server in a goroutine
+	// Serve on the bound listener in a goroutine
 	go func() {
 		s.logger.Info().Str("addr", addr).Msg("starting HTTP server")
-		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 		close(errCh)

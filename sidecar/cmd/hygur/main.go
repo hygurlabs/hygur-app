@@ -95,6 +95,10 @@ func main() {
 		}
 	}
 
+	// Boot clock — measured to the listener bind (boot_to_listen_ms) so a slow boot is
+	// observable (WP21). Placed after the CLI subcommands (which exit before booting).
+	bootStart := time.Now()
+
 	// Set up signal handling for graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -259,19 +263,10 @@ func main() {
 			Msg("indexing model client configured for Tier 2 extraction")
 	}
 
-	// Check LM Studio connectivity
-	available, err := llmClient.Ping(ctx)
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to ping LM Studio")
-	} else if !available {
-		logger.Warn().
-			Str("url", cfg.LMStudio.URL).
-			Msg("LM Studio is not available - some features may not work")
-	} else {
-		logger.Info().
-			Str("url", cfg.LMStudio.URL).
-			Msg("LM Studio connection verified")
-	}
+	// Check LM Studio connectivity — off the boot path. The ping only logs (nothing
+	// downstream depends on its result), so run it in a goroutine: a slow or
+	// unreachable model host must never delay the DB open or the HTTP listener bind.
+	go pingLLMAsync(ctx, llmClient, cfg.LMStudio.URL, logger)
 
 	// Initialize SQLite store via the per-identity Manager — the single seam
 	// that maps an identity to its database file (file-per-identity isolation,
@@ -778,6 +773,7 @@ func main() {
 
 	// Create API server
 	server := api.NewServer(cfg, logger, token)
+	server.SetBootTime(bootStart) // WP21: log boot_to_listen_ms when the listener binds
 	server.SetPushHandler(pushHandler)
 	// Remote auth mode: verify per-device EdDSA JWTs instead of the loopback
 	// static token. Fail fast on a bad key — silently falling back to local
@@ -966,8 +962,10 @@ func main() {
 	// each time up/down flips. The macOS app uses this to drive the menubar
 	// status dot.
 	lmWatcher := health.New(llmClient, broker, health.Options{
-		URL:      cfg.LMStudio.URL,
-		Interval: 10 * time.Second,
+		URL: cfg.LMStudio.URL,
+		// 60s (was 10s): the menubar status dot doesn't need sub-minute freshness, and
+		// a calmer poll keeps the model host free during the user's first minute (WP21).
+		Interval: 60 * time.Second,
 		Timeout:  3 * time.Second,
 	}, logger)
 	lmWatcher.Start(ctx)
@@ -1020,7 +1018,9 @@ func main() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(20 * time.Second): // let the server come up first
+		// Deferred well past boot (was +20s): leave the LLM free for the user's first
+		// interaction — the backfill is idempotent and can wait (WP21).
+		case <-time.After(10 * time.Minute):
 		}
 		if n, err := ingestor.SuggestProjects(bctx); err != nil {
 			logger.Warn().Err(err).Msg("project-suggestion backfill failed")
@@ -1128,6 +1128,28 @@ func main() {
 	}
 
 	logger.Info().Msg("hygur sidecar stopped")
+}
+
+// llmPinger is the slim surface pingLLMAsync needs from an LLM client — kept as an
+// interface so the boot-time connectivity check is unit-testable with a fake.
+type llmPinger interface {
+	Ping(ctx context.Context) (bool, error)
+}
+
+// pingLLMAsync probes the inference endpoint and logs the outcome. It is called in a
+// goroutine at boot: nothing downstream depends on the result, so a slow/unreachable
+// model host must never block the HTTP listener bind (WP21). A ping failure is a
+// logged warn, not a fatal.
+func pingLLMAsync(ctx context.Context, p llmPinger, url string, logger zerolog.Logger) {
+	available, err := p.Ping(ctx)
+	switch {
+	case err != nil:
+		logger.Warn().Err(err).Msg("failed to ping LM Studio")
+	case !available:
+		logger.Warn().Str("url", url).Msg("LM Studio is not available - some features may not work")
+	default:
+		logger.Info().Str("url", url).Msg("LM Studio connection verified")
+	}
 }
 
 // tokenUsageSink adapts the store to llm.UsageRecorder. RecordUsage runs on

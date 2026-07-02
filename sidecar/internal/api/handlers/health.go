@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/hygur/sidecar/internal/llm"
@@ -26,10 +27,21 @@ type HealthResponse struct {
 	UptimeSeconds int64  `json:"uptime_seconds,omitempty"`
 }
 
+// healthPingTTL bounds how long a /health ping result is reused. The Sidebar polls
+// /health and k8s liveness/readiness probes hit it too; caching the ping results (30s)
+// stops each poll from firing two live network pings at the model host (WP21).
+const healthPingTTL = 30 * time.Second
+
 // HealthHandler handles the /health endpoint.
 type HealthHandler struct {
 	llmClient *llm.Client
 	startTime time.Time
+
+	// mu guards the cached ping results below (server-side, healthPingTTL).
+	mu              sync.Mutex
+	pingedAt        time.Time
+	cachedInference string
+	cachedEmbedding string
 }
 
 // NewHealthHandler creates a new HealthHandler.
@@ -42,20 +54,7 @@ func NewHealthHandler(llmClient *llm.Client) *HealthHandler {
 
 // ServeHTTP implements http.Handler for the health endpoint.
 func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Use a 2-second timeout for the LM Studio ping
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
-	inferenceStatus := "disconnected"
-	embeddingStatus := "disconnected"
-	if h.llmClient != nil {
-		if connected, _ := h.llmClient.Ping(ctx); connected {
-			inferenceStatus = "connected"
-		}
-		if connected, _ := h.llmClient.PingEmbedding(ctx); connected {
-			embeddingStatus = "connected"
-		}
-	}
+	inferenceStatus, embeddingStatus := h.pingStatuses(r.Context())
 
 	status := "ok"
 	if inferenceStatus == "disconnected" || embeddingStatus == "disconnected" {
@@ -76,6 +75,37 @@ func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Headers already sent, nothing we can do
 		return
 	}
+}
+
+// pingStatuses returns the inference/embedding reachability, cached for healthPingTTL.
+// Within the TTL it serves the last result without touching the network; on a miss it
+// fires the two pings (each bounded to 2s) and refreshes the cache.
+func (h *HealthHandler) pingStatuses(ctx context.Context) (inference, embedding string) {
+	h.mu.Lock()
+	if !h.pingedAt.IsZero() && time.Since(h.pingedAt) < healthPingTTL {
+		inference, embedding = h.cachedInference, h.cachedEmbedding
+		h.mu.Unlock()
+		return inference, embedding
+	}
+	h.mu.Unlock()
+
+	inference, embedding = "disconnected", "disconnected"
+	if h.llmClient != nil {
+		// Bound each probe so a slow model host can't stall /health past ~2s.
+		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if connected, _ := h.llmClient.Ping(pingCtx); connected {
+			inference = "connected"
+		}
+		if connected, _ := h.llmClient.PingEmbedding(pingCtx); connected {
+			embedding = "connected"
+		}
+	}
+
+	h.mu.Lock()
+	h.cachedInference, h.cachedEmbedding, h.pingedAt = inference, embedding, time.Now()
+	h.mu.Unlock()
+	return inference, embedding
 }
 
 // SetStartTime allows setting a custom start time (useful for testing).

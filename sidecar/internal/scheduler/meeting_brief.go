@@ -288,9 +288,10 @@ func (s *MeetingBriefScheduler) Start(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
-		// Run once shortly after boot so a deadline due today is briefed without
-		// waiting a full interval.
-		first := time.NewTimer(90 * time.Second)
+		// Run once after boot so a deadline due today is briefed without waiting a
+		// full interval — but deferred (was 90s) to leave the LLM free for the user's
+		// first interaction (WP21).
+		first := time.NewTimer(5 * time.Minute)
 		defer first.Stop()
 		for {
 			select {

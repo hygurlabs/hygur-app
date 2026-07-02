@@ -85,7 +85,7 @@ export function Sidebar({
       const h = await api.health();
       return h?.status === "ok";
     },
-    refetchInterval: 15000,
+    refetchInterval: 60000, // WP21: 60s (was 15s) — /health caches pings 30s; a calmer poll
     refetchOnReconnect: true,
     retry: false,
   });
