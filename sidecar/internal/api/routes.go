@@ -308,6 +308,8 @@ func (s *Server) setupRoutes() {
 		// saving it never restarts the sidecar.
 		r.Get("/usage/tokens", s.handleGetTokenUsage)
 		r.Put("/usage/pricing", s.handleSetTokenPricing)
+		// Per-(category, pass) LLM token breakdown — read-only operator view.
+		r.Get("/usage/by-pass", s.handleGetTokenUsageByPass)
 
 		// Phase 1 (pair mode) — append-only interaction signals + learning gauge.
 		r.Post("/interactions", s.handleInteractionsAppend)

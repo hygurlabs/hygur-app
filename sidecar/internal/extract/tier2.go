@@ -99,6 +99,11 @@ func ExtractTier2(ctx context.Context, client *llm.Client, text string) (Tier2En
 	userPrompt := "Document:\n" + body + "\n\nReturn the JSON now."
 
 	resp, err := client.Chat(tctx, llm.ChatRequest{
+		// Ingestion-time NER — metered as "ingest" REGARDLESS of which client runs
+		// it, so a `?model=main` backfill (main client) can never land in the chat
+		// cap. This single site covers both live ingestion and the backfill (WP16a).
+		Category: "ingest",
+		Pass:     "tier2",
 		Messages: []llm.Message{
 			{Role: "system", Content: tier2SystemPrompt},
 			{Role: "user", Content: userPrompt},

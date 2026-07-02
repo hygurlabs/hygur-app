@@ -97,9 +97,11 @@ func (c *Client) prepareRequest(req ChatRequest) ChatRequest {
 
 // UsageRecorder receives token usage observed by the client. Implementations
 // must be safe for concurrent use and must not block. category is one of
-// "chat", "indexing" (chat completions) or "embedding".
+// "chat", "background", "ingest", "indexing" (chat completions) or "embedding".
+// pass is a short label for the specific call (e.g. "ask", "chronicle_act",
+// "tier2"); it may be empty and is used only for the per-pass usage breakdown.
 type UsageRecorder interface {
-	RecordUsage(category string, tokensIn, tokensOut int)
+	RecordUsage(category, pass string, tokensIn, tokensOut int)
 }
 
 // SetUsageRecorder attaches a usage recorder. chatCategory labels chat
@@ -114,15 +116,22 @@ func (c *Client) SetUsageRecorder(r UsageRecorder, chatCategory string) {
 }
 
 // recordChatUsage forwards a completion's token counts to the recorder, if any.
-func (c *Client) recordChatUsage(u *Usage) {
+// category is the per-request ChatRequest.Category — when non-empty it meters
+// the call by its PURPOSE (chat|background|ingest) regardless of which client
+// ran it; empty falls back to the client's fixed chatCategory so an untagged
+// call behaves exactly as before (WP16a). pass is the per-pass detail label.
+func (c *Client) recordChatUsage(category, pass string, u *Usage) {
 	if c.usageRecorder == nil || u == nil {
 		return
 	}
-	cat := c.chatCategory
+	cat := category
+	if cat == "" {
+		cat = c.chatCategory
+	}
 	if cat == "" {
 		cat = "chat"
 	}
-	c.usageRecorder.RecordUsage(cat, u.PromptTokens, u.CompletionTokens)
+	c.usageRecorder.RecordUsage(cat, pass, u.PromptTokens, u.CompletionTokens)
 }
 
 // setAuthHeader adds the bearer Authorization header when an API key is
@@ -393,6 +402,16 @@ type ChatRequest struct {
 	// (token counts). Set automatically by the streaming path when a usage
 	// recorder is attached; otherwise omitted. vLLM/Mistral/LM Studio honour it.
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+	// Category meters THIS request by its purpose — "chat" (the user's live
+	// Ask/chat), "background" (scheduler/prose/analysis) or "ingest"
+	// (ingestion-time extraction) — independent of which client runs it. Empty
+	// falls back to the client's fixed chatCategory, so an untagged request
+	// behaves exactly as before. Never serialized to the wire (WP16a).
+	Category string `json:"-"`
+	// Pass is a short label for the specific call (e.g. "ask", "chronicle_act",
+	// "daily_brief", "tier2") recorded alongside Category for the per-pass usage
+	// breakdown (GET /usage/by-pass). Never serialized.
+	Pass string `json:"-"`
 }
 
 // StreamOptions mirrors OpenAI's stream_options object.
@@ -530,7 +549,7 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, handler Stream
 	return c.streamWith(ctx, req, func(body io.Reader) error {
 		return processSSEStream(body, func(delta string, done bool, usage *Usage) error {
 			if done {
-				c.recordChatUsage(usage)
+				c.recordChatUsage(req.Category, req.Pass, usage)
 			}
 			return handler(delta, done, usage)
 		})
@@ -545,7 +564,7 @@ func (c *Client) StreamChatRich(ctx context.Context, req ChatRequest, handler St
 	return c.streamWith(ctx, req, func(body io.Reader) error {
 		return processSSEStreamRich(body, func(evt StreamEvent) error {
 			if evt.Done {
-				c.recordChatUsage(evt.Usage)
+				c.recordChatUsage(req.Category, req.Pass, evt.Usage)
 			}
 			return handler(evt)
 		})
@@ -708,7 +727,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 			return nil, fmt.Errorf("failed to decode response: %w", err)
 		}
 
-		c.recordChatUsage(chatResp.Usage)
+		c.recordChatUsage(req.Category, req.Pass, chatResp.Usage)
 		c.breaker.record(true, time.Now())
 		return &chatResp, nil
 	}

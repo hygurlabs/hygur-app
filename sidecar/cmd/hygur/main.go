@@ -1161,9 +1161,16 @@ type tokenUsageSink struct {
 	logger zerolog.Logger
 }
 
-func (s tokenUsageSink) RecordUsage(category string, tokensIn, tokensOut int) {
+func (s tokenUsageSink) RecordUsage(category, pass string, tokensIn, tokensOut int) {
+	// The cap table (feeds ChatTokensToday/ThisMonth) — its schema and queries
+	// are unchanged, so metering by category keeps the caps correct.
 	if err := s.db.RecordTokenUsage(context.Background(), category, tokensIn, tokensOut); err != nil {
 		s.logger.Warn().Err(err).Str("category", category).Msg("record token usage failed")
+	}
+	// The per-pass detail table (feeds GET /usage/by-pass). Purely additive — a
+	// failure here must not disturb the cap accounting above.
+	if err := s.db.RecordTokenUsagePass(context.Background(), category, pass, tokensIn, tokensOut); err != nil {
+		s.logger.Warn().Err(err).Str("category", category).Str("pass", pass).Msg("record token usage (pass) failed")
 	}
 }
 

@@ -164,6 +164,8 @@ func (s *DecisionScanner) extract(ctx context.Context, text string) []decisionCa
 		return nil
 	}
 	resp, err := s.llm.Chat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "decisions",
 		Messages: []llm.Message{
 			{Role: "system", Content: decisionSystemPrompt},
 			{Role: "user", Content: body},

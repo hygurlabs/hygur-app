@@ -61,6 +61,8 @@ func ExtractClaims(ctx context.Context, client *llm.Client, text string) ([]Clai
 		return nil, nil
 	}
 	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Category: "ingest",
+		Pass:     "claims",
 		Messages: []llm.Message{
 			{Role: "system", Content: claimsSystemPrompt},
 			{Role: "user", Content: body},

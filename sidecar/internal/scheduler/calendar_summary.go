@@ -128,6 +128,8 @@ func (d *DailyBrief) generateCalendarSummary(ctx context.Context, now time.Time,
 	}
 
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "calendar_summary",
 		Messages: []llm.Message{
 			{Role: "system", Content: calSummarySystemPrompt},
 			{Role: "user", Content: sb.String()},

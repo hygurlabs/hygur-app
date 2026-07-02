@@ -119,6 +119,10 @@ func (h *ChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Messages:  req.Messages,
 		Stream:    true,
 		MaxTokens: req.MaxTokens,
+		// The user's live basic-chat turn — the only work that should count
+		// against the Ask token cap (WP16a).
+		Category: "chat",
+		Pass:     "chat",
 	}
 	// Map the client-supplied temperature to a pointer only when non-zero.
 	// The old float64+omitempty field already dropped 0 on the wire, so this

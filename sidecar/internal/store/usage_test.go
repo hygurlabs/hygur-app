@@ -36,6 +36,98 @@ func TestChatTokensThisMonth(t *testing.T) {
 	}
 }
 
+// The 429-incident proof: a batch of background/ingest-tagged completions must
+// NOT move the chat cap counters (ChatTokensToday / ChatTokensThisMonth) — that
+// runaway background work exhausting the user's Ask cap was the real incident.
+// A chat-tagged completion still moves them. WP16a.
+func TestBackgroundIngestUsageNeverTouchesChatCap(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Simulate a burst of background + ingest work (chronicle, briefs, claims,
+	// tier2, memory extraction, a ?model=main backfill…). Mirror the sink: each
+	// records both the cap row and the per-pass detail row.
+	mustRec := func(cat, pass string, in, out int) {
+		if err := db.RecordTokenUsage(ctx, cat, in, out); err != nil {
+			t.Fatalf("record %s: %v", cat, err)
+		}
+		if err := db.RecordTokenUsagePass(ctx, cat, pass, in, out); err != nil {
+			t.Fatalf("record pass %s/%s: %v", cat, pass, err)
+		}
+	}
+	mustRec("background", "chronicle_act", 50000, 20000)
+	mustRec("background", "daily_brief", 30000, 10000)
+	mustRec("background", "memory_extract", 5000, 1000)
+	mustRec("ingest", "tier2", 80000, 4000) // e.g. a ?model=main backfill
+	mustRec("ingest", "claims", 40000, 2000)
+
+	// The chat cap must be pristine after all that background/ingest work.
+	if got, _ := db.ChatTokensToday(ctx); got != 0 {
+		t.Fatalf("ChatTokensToday after background/ingest burst = %d, want 0", got)
+	}
+	if got, _ := db.ChatTokensThisMonth(ctx); got != 0 {
+		t.Fatalf("ChatTokensThisMonth after background/ingest burst = %d, want 0", got)
+	}
+
+	// A genuine chat turn DOES move the cap counters.
+	mustRec("chat", "ask", 1000, 400)
+	if got, _ := db.ChatTokensToday(ctx); got != 1400 {
+		t.Fatalf("ChatTokensToday after chat turn = %d, want 1400", got)
+	}
+	if got, _ := db.ChatTokensThisMonth(ctx); got != 1400 {
+		t.Fatalf("ChatTokensThisMonth after chat turn = %d, want 1400", got)
+	}
+}
+
+// The per-pass detail feeds /usage/by-pass and must aggregate independently of
+// the cap table (which stays the source of truth for the caps).
+func TestPassUsageSinceAggregates(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Same (category, pass) accumulates; distinct passes stay separate.
+	if err := db.RecordTokenUsagePass(ctx, "background", "chronicle_act", 100, 40); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordTokenUsagePass(ctx, "background", "chronicle_act", 50, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordTokenUsagePass(ctx, "ingest", "tier2", 200, 5); err != nil {
+		t.Fatal(err)
+	}
+	// Negative/zero is a no-op.
+	if err := db.RecordTokenUsagePass(ctx, "chat", "ask", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	today := time.Now().Format("2006-01-02")
+	rows, err := db.PassUsageSince(ctx, today)
+	if err != nil {
+		t.Fatalf("PassUsageSince: %v", err)
+	}
+	got := map[string]PassUsage{}
+	for _, r := range rows {
+		got[r.Category+"/"+r.Pass] = r
+	}
+	if c := got["background/chronicle_act"]; c.TokensIn != 150 || c.TokensOut != 50 {
+		t.Errorf("chronicle_act = (%d,%d), want (150,50)", c.TokensIn, c.TokensOut)
+	}
+	if c := got["ingest/tier2"]; c.TokensIn != 200 || c.TokensOut != 5 {
+		t.Errorf("tier2 = (%d,%d), want (200,5)", c.TokensIn, c.TokensOut)
+	}
+	if _, ok := got["chat/ask"]; ok {
+		t.Errorf("zero-count pass should not have been recorded")
+	}
+}
+
 func TestRecordTokenUsageAccumulates(t *testing.T) {
 	db, err := NewDB(":memory:")
 	if err != nil {

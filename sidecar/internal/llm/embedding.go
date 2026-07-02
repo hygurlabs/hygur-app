@@ -330,7 +330,7 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, texts []string) ([][]fl
 		resp.Body.Close()
 
 		if c.usageRecorder != nil && embResp.Usage != nil {
-			c.usageRecorder.RecordUsage("embedding", embResp.Usage.PromptTokens, 0)
+			c.usageRecorder.RecordUsage("embedding", "", embResp.Usage.PromptTokens, 0)
 		}
 
 		if len(embResp.Data) == 0 {

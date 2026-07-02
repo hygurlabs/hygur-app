@@ -223,6 +223,8 @@ func (w *ChronicleWriter) generateClosing(ctx context.Context, synopsis, note st
 	user := fmt.Sprintf("STORY SO FAR:\n%s\n\nCLOSING NOTE (from the user):\n%s", storySoFar, closingNote)
 	var sb strings.Builder
 	err := w.llm.StreamChat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "chronicle_close",
 		Messages: []llm.Message{
 			{Role: "system", Content: chronicleClosingPrompt},
 			{Role: "user", Content: user},
@@ -366,6 +368,8 @@ func (w *ChronicleWriter) generate(ctx context.Context, title, synopsis, traces,
 	}
 	var sb strings.Builder
 	err := w.llm.StreamChat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "chronicle_act",
 		Messages: []llm.Message{
 			{Role: "system", Content: chronicleSystemPrompt},
 			{Role: "user", Content: user},

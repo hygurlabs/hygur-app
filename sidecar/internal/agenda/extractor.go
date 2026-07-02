@@ -242,6 +242,8 @@ If no deadline is found, return [].`
 	userPrompt := fmt.Sprintf("Documents:\n%s\n\nExtract the actions with a deadline (max 80 tokens).", sb.String())
 
 	resp, err := e.llm.Chat(ctx, llm.ChatRequest{
+		Category: "ingest",
+		Pass:     "agenda_extract",
 		Messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},

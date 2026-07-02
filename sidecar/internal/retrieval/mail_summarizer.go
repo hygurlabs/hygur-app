@@ -155,6 +155,8 @@ func (s *MailSummarizer) judgeViaLLM(ctx context.Context, item *store.KnowledgeI
 	b.WriteString(body)
 
 	resp, err := s.llm.Chat(llmCtx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "mail_notify_judge",
 		Messages: []llm.Message{
 			{Role: "system", Content: notificationJudgeSystemPrompt},
 			{Role: "user", Content: b.String()},
@@ -248,6 +250,8 @@ func (s *MailSummarizer) summarizeViaLLM(ctx context.Context, item *store.Knowle
 	b.WriteString(body)
 
 	resp, err := s.llm.Chat(llmCtx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "mail_summary",
 		Messages: []llm.Message{
 			{Role: "system", Content: summarizerSystemPrompt},
 			{Role: "user", Content: b.String()},

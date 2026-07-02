@@ -39,11 +39,70 @@ ON CONFLICT(day, category) DO UPDATE SET
 	return err
 }
 
+// PassUsage holds summed token counts for one (category, pass) pair over a
+// period — the per-pass detail behind GET /usage/by-pass.
+type PassUsage struct {
+	Category  string `json:"category"`
+	Pass      string `json:"pass"`
+	TokensIn  int    `json:"tokens_in"`
+	TokensOut int    `json:"tokens_out"`
+}
+
+// RecordTokenUsagePass adds token counts to the running daily total for a
+// (category, pass) pair. It is an UPSERT on (day, category, pass). This is
+// purely additive observability detail: the chat caps read token_usage (via
+// ChatTokensToday/ThisMonth), NEVER this table — so a write here can never move
+// a cap. A no-op when the category is empty or both counts are non-positive.
+func (d *DB) RecordTokenUsagePass(ctx context.Context, category, pass string, tokensIn, tokensOut int) error {
+	if category == "" || (tokensIn <= 0 && tokensOut <= 0) {
+		return nil
+	}
+	day := time.Now().Format("2006-01-02")
+	_, err := d.db.ExecContext(ctx, `
+INSERT INTO token_usage_pass (day, category, pass, tokens_in, tokens_out)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(day, category, pass) DO UPDATE SET
+    tokens_in  = tokens_in  + excluded.tokens_in,
+    tokens_out = tokens_out + excluded.tokens_out`,
+		day, category, pass, clampNonNeg(tokensIn), clampNonNeg(tokensOut))
+	return err
+}
+
+// PassUsageSince returns per-(category, pass) token sums for all days on or
+// after startDay (inclusive, 'YYYY-MM-DD'), ordered by category then pass.
+func (d *DB) PassUsageSince(ctx context.Context, startDay string) ([]PassUsage, error) {
+	rows, err := d.db.QueryContext(ctx, `
+SELECT category, pass, COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
+FROM token_usage_pass
+WHERE day >= ?
+GROUP BY category, pass
+ORDER BY category, pass`, startDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PassUsage
+	for rows.Next() {
+		var p PassUsage
+		if err := rows.Scan(&p.Category, &p.Pass, &p.TokensIn, &p.TokensOut); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // ResetTokenUsage clears all recorded token usage (the running daily totals).
 // Pricing settings in app_settings are untouched. Returns the rows removed.
 func (d *DB) ResetTokenUsage(ctx context.Context) (int64, error) {
 	res, err := d.db.ExecContext(ctx, `DELETE FROM token_usage`)
 	if err != nil {
+		return 0, err
+	}
+	// Clear the per-pass detail too so /usage/by-pass doesn't show stale rows
+	// after a reset. Best-effort: the count returned reflects the cap table.
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM token_usage_pass`); err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()

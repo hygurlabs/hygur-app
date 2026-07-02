@@ -59,6 +59,8 @@ func classifyMail(ctx context.Context, client *llm.Client, text string) ([]strin
 		return nil, nil
 	}
 	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Category: "ingest",
+		Pass:     "mailcat",
 		Messages: []llm.Message{
 			{Role: "system", Content: mailCatSystemPrompt()},
 			{Role: "user", Content: body},

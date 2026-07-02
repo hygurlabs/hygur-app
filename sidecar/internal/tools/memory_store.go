@@ -131,6 +131,10 @@ func (t *MemoryStoreTool) ExtractMemoriesFromTurn(ctx context.Context, userMessa
 
 	userPrompt := fmt.Sprintf("User: %s\n\nAssistant: %s", userMessage, assistantMessage)
 	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
+		// Post-turn memory extraction: background work triggered by the chat, but
+		// it must NOT consume the user's Ask cap (WP16a).
+		Category: "background",
+		Pass:     "memory_extract",
 		Messages: []llm.Message{
 			{Role: "system", Content: extractorSystemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -296,6 +300,9 @@ func (t *MemoryStoreTool) ExtractMemoriesFromSession(ctx context.Context, transc
 	}
 
 	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
+		// Session-level memory extraction: background, off the Ask cap (WP16a).
+		Category: "background",
+		Pass:     "memory_extract_session",
 		Messages: []llm.Message{
 			{Role: "system", Content: sessionExtractorSystemPrompt},
 			{Role: "user", Content: rendered},

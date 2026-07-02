@@ -594,6 +594,26 @@ CREATE INDEX IF NOT EXISTS idx_eil_person ON entity_identifier_link(person_norm)
 CREATE INDEX IF NOT EXISTS idx_eil_id ON entity_identifier_link(id_norm);
 `,
 	},
+	// Migration 32 adds per-(category, pass) LLM token detail feeding the
+	// operator GET /usage/by-pass endpoint. Purely additive: token_usage stays
+	// the sole source of truth for the chat caps (ChatTokensToday/ThisMonth) and
+	// is left untouched — this table only carries the finer per-pass breakdown.
+	// Same idempotent UPSERT shape as token_usage; created on fresh installs too
+	// (migrations run on an empty DB).
+	{
+		Version: 32,
+		Name:    "token_usage_pass",
+		SQL: `
+CREATE TABLE IF NOT EXISTS token_usage_pass (
+    day        TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    pass       TEXT NOT NULL DEFAULT '',
+    tokens_in  INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, category, pass)
+);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

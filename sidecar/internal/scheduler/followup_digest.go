@@ -276,6 +276,8 @@ func numberedItemsContext(items []*store.KnowledgeItem) string {
 
 func (d *DailyBrief) generateFollowup(ctx context.Context, items []*store.KnowledgeItem) FollowUpDigest {
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "followup_digest",
 		Messages: []llm.Message{
 			{Role: "system", Content: followupSystemPrompt},
 			{Role: "user", Content: numberedItemsContext(items)},
@@ -486,6 +488,8 @@ func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, projectID string,
 
 	var sb strings.Builder
 	streamErr := d.llm.StreamChat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "followup_report",
 		Messages: []llm.Message{
 			{Role: "system", Content: followupReportSystemPrompt},
 			{Role: "user", Content: numberedItemsContext(items)},

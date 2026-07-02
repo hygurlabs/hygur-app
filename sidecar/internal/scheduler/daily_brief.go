@@ -230,6 +230,8 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 	}
 	prompt := buildBriefPrompt(enriched, opts, projectName, dueTasks)
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "daily_brief",
 		Messages: []llm.Message{
 			// Reasoning-capable backends (LM Studio + Nemotron/Qwen) emit
 			// their scratch thinking before any visible content. Without

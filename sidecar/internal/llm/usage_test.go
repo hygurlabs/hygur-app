@@ -12,6 +12,7 @@ import (
 
 type recordedUsage struct {
 	category  string
+	pass      string
 	tokensIn  int
 	tokensOut int
 }
@@ -21,10 +22,10 @@ type fakeRecorder struct {
 	events []recordedUsage
 }
 
-func (f *fakeRecorder) RecordUsage(category string, tokensIn, tokensOut int) {
+func (f *fakeRecorder) RecordUsage(category, pass string, tokensIn, tokensOut int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.events = append(f.events, recordedUsage{category, tokensIn, tokensOut})
+	f.events = append(f.events, recordedUsage{category, pass, tokensIn, tokensOut})
 }
 
 func (f *fakeRecorder) snapshot() []recordedUsage {
@@ -73,8 +74,45 @@ func TestStreamChatRecordsUsageAndSetsStreamOptions(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 recorded usage, got %d (%+v)", len(got), got)
 	}
-	if got[0] != (recordedUsage{"chat", 12, 7}) {
-		t.Errorf("recorded %+v, want {chat 12 7}", got[0])
+	if got[0] != (recordedUsage{"chat", "", 12, 7}) {
+		t.Errorf("recorded %+v, want {chat  12 7}", got[0])
+	}
+}
+
+// A per-request Category overrides the client's fixed chatCategory: the same
+// "chat" client, given a background-tagged request, must record under
+// "background" (and carry the Pass through) — this is the core WP16a fix that
+// keeps background/ingest work off the chat cap regardless of which client runs
+// it. An empty Category still falls back to the client default (compat).
+func TestChatCategoryPerRequestOverride(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	rec := &fakeRecorder{}
+	client.SetUsageRecorder(rec, "chat") // main chat client
+
+	// Tagged background request → recorded as background, not chat.
+	if _, err := client.Chat(context.Background(), ChatRequest{Model: "m", Category: "background", Pass: "chronicle_act"}); err != nil {
+		t.Fatalf("Chat tagged: %v", err)
+	}
+	// Untagged request → falls back to the client's default category (chat).
+	if _, err := client.Chat(context.Background(), ChatRequest{Model: "m"}); err != nil {
+		t.Fatalf("Chat untagged: %v", err)
+	}
+
+	got := rec.snapshot()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 recorded usages, got %d (%+v)", len(got), got)
+	}
+	if got[0] != (recordedUsage{"background", "chronicle_act", 10, 5}) {
+		t.Errorf("tagged recorded %+v, want {background chronicle_act 10 5}", got[0])
+	}
+	if got[1] != (recordedUsage{"chat", "", 10, 5}) {
+		t.Errorf("untagged recorded %+v, want {chat  10 5} (client default)", got[1])
 	}
 }
 
@@ -92,8 +130,8 @@ func TestStreamChatRichRecordsUsageWithCategory(t *testing.T) {
 		t.Fatalf("StreamChatRich: %v", err)
 	}
 	got := rec.snapshot()
-	if len(got) != 1 || got[0] != (recordedUsage{"indexing", 12, 7}) {
-		t.Fatalf("recorded %+v, want one {indexing 12 7}", got)
+	if len(got) != 1 || got[0] != (recordedUsage{"indexing", "", 12, 7}) {
+		t.Fatalf("recorded %+v, want one {indexing  12 7}", got)
 	}
 }
 
@@ -130,7 +168,7 @@ func TestEmbeddingsRecordUsage(t *testing.T) {
 		t.Fatalf("GenerateEmbeddings: %v", err)
 	}
 	got := rec.snapshot()
-	if len(got) != 1 || got[0] != (recordedUsage{"embedding", 42, 0}) {
-		t.Fatalf("recorded %+v, want one {embedding 42 0}", got)
+	if len(got) != 1 || got[0] != (recordedUsage{"embedding", "", 42, 0}) {
+		t.Fatalf("recorded %+v, want one {embedding  42 0}", got)
 	}
 }

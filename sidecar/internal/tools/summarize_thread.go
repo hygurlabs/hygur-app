@@ -95,6 +95,10 @@ func (t *SummarizeThreadTool) summarize(ctx context.Context, thread *mail.Thread
 	prompt := buildSummaryPrompt(thread, normalizedText)
 	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
 		Model: model,
+		// Runs inside the chat tool-loop on behalf of the user's live turn, so it
+		// counts against the chat cap like the answer it feeds (WP16a).
+		Category: "chat",
+		Pass:     "summarize_thread",
 		Messages: []llm.Message{
 			{Role: "system", Content: summarySystemPrompt},
 			{Role: "user", Content: prompt},

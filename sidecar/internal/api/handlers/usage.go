@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/hygur/sidecar/internal/store"
@@ -105,6 +106,44 @@ func (h *UsageHandler) SetPricing(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// byPassResponse is the per-(category, pass) breakdown returned by GetByPass.
+type byPassResponse struct {
+	Days int               `json:"days"`
+	Rows []store.PassUsage `json:"rows"`
+}
+
+// GetByPass returns per-(category, pass) token totals over the last N days
+// (?days=N, default 30, clamped to [1, 366]). Read-only operator view sourced
+// from token_usage_pass — never from the cap table — so it can never affect the
+// chat cap. Categories are chat|background|ingest|indexing|embedding (WP16a).
+func (h *UsageHandler) GetByPass(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if q := r.URL.Query().Get("days"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			days = n
+		}
+	}
+	if days < 1 {
+		days = 1
+	}
+	if days > 366 {
+		days = 366
+	}
+	// Inclusive window: today plus the previous days-1 calendar days.
+	start := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+	rows, err := h.db.PassUsageSince(r.Context(), start)
+	if err != nil {
+		h.logger.Warn().Err(err).Msg("by-pass usage query failed")
+		http.Error(w, `{"error":"by-pass usage query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []store.PassUsage{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(byPassResponse{Days: days, Rows: rows})
 }
 
 // weekStart returns midnight on the Monday of t's week, in t's location.

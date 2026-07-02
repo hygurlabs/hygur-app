@@ -35,6 +35,8 @@ func (d *DailyBrief) DraftReply(ctx context.Context, item *store.KnowledgeItem) 
 	fmt.Fprintf(&sb, "Subject: %s\n\n%s", strings.TrimSpace(item.Title), snippet(item.NormalizedText, 2000))
 
 	resp, err := d.llm.Chat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "reply_draft",
 		Messages: []llm.Message{
 			{Role: "system", Content: replyDraftSystemPrompt},
 			{Role: "user", Content: sb.String()},

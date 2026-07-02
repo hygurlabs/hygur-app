@@ -67,6 +67,52 @@ func TestUsageHandler_GetTokensAggregatesByCategory(t *testing.T) {
 	}
 }
 
+func TestUsageHandler_GetByPassAggregates(t *testing.T) {
+	h, db := newUsageTestHandler(t)
+	ctx := context.Background()
+
+	// Per-pass detail as the sink would write it.
+	if err := db.RecordTokenUsagePass(ctx, "background", "chronicle_act", 1000, 300); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordTokenUsagePass(ctx, "background", "chronicle_act", 500, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordTokenUsagePass(ctx, "ingest", "tier2", 2000, 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordTokenUsagePass(ctx, "chat", "ask", 800, 400); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.GetByPass(rec, httptest.NewRequest(http.MethodGet, "/usage/by-pass?days=7", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var resp byPassResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Days != 7 {
+		t.Errorf("days = %d, want 7", resp.Days)
+	}
+	got := map[string]store.PassUsage{}
+	for _, r := range resp.Rows {
+		got[r.Category+"/"+r.Pass] = r
+	}
+	if c := got["background/chronicle_act"]; c.TokensIn != 1500 || c.TokensOut != 400 {
+		t.Errorf("chronicle_act = (%d,%d), want (1500,400)", c.TokensIn, c.TokensOut)
+	}
+	if c := got["ingest/tier2"]; c.TokensIn != 2000 || c.TokensOut != 50 {
+		t.Errorf("tier2 = (%d,%d), want (2000,50)", c.TokensIn, c.TokensOut)
+	}
+	if c := got["chat/ask"]; c.TokensIn != 800 || c.TokensOut != 400 {
+		t.Errorf("ask = (%d,%d), want (800,400)", c.TokensIn, c.TokensOut)
+	}
+}
+
 func TestUsageHandler_SetPricingPersists(t *testing.T) {
 	h, db := newUsageTestHandler(t)
 

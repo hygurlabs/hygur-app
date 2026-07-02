@@ -166,6 +166,53 @@ func TestExtractTier2_EmptyDocReturnsEmpty(t *testing.T) {
 	}
 }
 
+// captureRecorder records the category/pass the client meters each completion
+// under.
+type captureRecorder struct {
+	category string
+	pass     string
+}
+
+func (c *captureRecorder) RecordUsage(category, pass string, _, _ int) {
+	c.category = category
+	c.pass = pass
+}
+
+// The `?model=main` escape hatch: BackfillTier2NER(useMainModel=true) runs the
+// extraction on the MAIN chat client (chatCategory="chat"). ExtractTier2 must
+// still meter it as "ingest" so a main-model backfill can never land in the
+// chat cap again (WP16a fix #4). Metering by the CALL's purpose, not the client.
+func TestExtractTier2_MetersAsIngestEvenOnMainClient(t *testing.T) {
+	// A completion carrying a usage block (real backends always do) so the
+	// client actually meters it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]string{"role": "assistant", "content": `{"persons":["Alice"],"topics":["rh"]}`},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]int{"prompt_tokens": 30, "completion_tokens": 8, "total_tokens": 38},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	rec := &captureRecorder{}
+	client.SetUsageRecorder(rec, "chat") // main chat client (the ?model=main case)
+
+	if _, err := ExtractTier2(context.Background(), client, "doc mentioning Alice"); err != nil {
+		t.Fatalf("ExtractTier2: %v", err)
+	}
+	if rec.category != "ingest" {
+		t.Errorf("category = %q, want \"ingest\" (must not hit the chat cap)", rec.category)
+	}
+	if rec.pass != "tier2" {
+		t.Errorf("pass = %q, want \"tier2\"", rec.pass)
+	}
+}
+
 func TestNormalizeTier2_DeduplicatesAndCaps(t *testing.T) {
 	t2 := Tier2Entities{
 		Persons: []string{"Alice", "alice", "ALICE", "Bob", "  ", ""},

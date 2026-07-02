@@ -61,6 +61,8 @@ func ReconcileClaimConflict(ctx context.Context, client *llm.Client, c ClaimConf
 		fmt.Fprintf(&b, "- %q (source %s, %s)\n", m.Value, shortID(m.SourceID), date)
 	}
 	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "reconcile",
 		Messages: []llm.Message{
 			{Role: "system", Content: reconcileSystemPrompt},
 			{Role: "user", Content: b.String()},

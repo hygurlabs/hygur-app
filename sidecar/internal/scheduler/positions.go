@@ -156,6 +156,8 @@ func (d *DailyBrief) generatePositions(ctx context.Context, decs []*store.Decisi
 
 	var sb strings.Builder
 	err := d.llm.StreamChat(ctx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "positions",
 		Messages: []llm.Message{
 			{Role: "system", Content: positionsSystemPrompt},
 			{Role: "user", Content: "CONFIRMED DECISIONS:\n" + b.String()},

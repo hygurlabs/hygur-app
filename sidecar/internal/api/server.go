@@ -955,6 +955,14 @@ func (s *Server) handleSetTokenPricing(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, "usage handler not configured")
 }
 
+func (s *Server) handleGetTokenUsageByPass(w http.ResponseWriter, r *http.Request) {
+	if s.usageHandler != nil {
+		s.usageHandler.GetByPass(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "usage handler not configured")
+}
+
 // SetMentionsHandler attaches the mentions autocomplete handler.
 func (s *Server) SetMentionsHandler(handler *handlers.MentionsHandler) {
 	s.mentionsHandler = handler

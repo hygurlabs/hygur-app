@@ -512,6 +512,8 @@ func (b *TimelineBuilder) titleViaLLM(ctx context.Context, ch TimelineChapter) (
 	}
 
 	resp, err := b.llm.Chat(llmCtx, llm.ChatRequest{
+		Category: "background",
+		Pass:     "timeline_title",
 		Messages: []llm.Message{
 			{Role: "system", Content: timelineTitleSystemPrompt},
 			{Role: "user", Content: sb.String()},

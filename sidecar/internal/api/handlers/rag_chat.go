@@ -646,6 +646,9 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Messages:  messages,
 		Stream:    true,
 		MaxTokens: req.MaxTokens,
+		// The user's live Ask answer — the work the chat cap exists to meter (WP16a).
+		Category: "chat",
+		Pass:     "ask",
 	}
 	// Map the client-supplied temperature to a pointer only when non-zero.
 	// The old float64+omitempty field already dropped 0 on the wire, so this

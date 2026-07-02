@@ -54,6 +54,8 @@ func suggestProjectID(ctx context.Context, client *llm.Client, item *store.Knowl
 		"No other text. When in doubt, reply NONE. Never invent a project."
 
 	resp, err := client.Chat(ctx, llm.ChatRequest{
+		Category: "ingest",
+		Pass:     "projectsuggest",
 		Messages: []llm.Message{
 			{Role: "system", Content: system},
 			{Role: "user", Content: sb.String()},
