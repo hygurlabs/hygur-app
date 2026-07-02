@@ -1,12 +1,15 @@
 import type { ReactNode } from "react";
 import { FolderKanban } from "lucide-react";
 import { DEFAULT_TAG_COLOR } from "../lib/format";
-import { Badge } from "./ui";
+import { Badge, StatusBadge, type StatusVariant } from "./ui";
 
 export interface RecordRow {
   id: string;
-  title: string;
+  title?: ReactNode;
   badge?: string;
+  /** When set, the badge renders through `StatusBadge` with this state colour
+   *  instead of the neutral descriptive `Badge`. */
+  badgeVariant?: StatusVariant;
   meta?: string;
   excerpt?: string;
   accent?: string; // optional left color dot (tags, calendars)
@@ -16,6 +19,15 @@ export interface RecordRow {
   /** Optional tags — rendered as colored pills (first 3, then a "+N" count). */
   tags?: { name: string; color?: string }[];
   onClick?: () => void;
+
+  // --- Custom-row mode (rich lists with leading controls / trailing actions).
+  // When `content` is set the row renders `leading · content · trailing` in a
+  // flex row and the structured fields above are ignored; each caller supplies
+  // the exact inner markup so behaviour stays identical. ---
+  content?: ReactNode;
+  leading?: ReactNode; // left-hand control (checkbox, health dot, …)
+  trailing?: ReactNode; // right-hand actions (buttons, delete confirm, …)
+  selected?: boolean; // highlighted row background
 }
 
 /** Project + tag pills (project glyph, then up to 3 colored tags, then "+N").
@@ -50,20 +62,69 @@ function RowPills({ row }: { row: RecordRow }) {
   );
 }
 
+/** The row badge — a coloured `StatusBadge` when a state variant is given,
+ *  otherwise the neutral descriptive `Badge`. */
+function RowBadge({ row }: { row: RecordRow }) {
+  if (!row.badge) return null;
+  return row.badgeVariant ? (
+    <StatusBadge variant={row.badgeVariant}>{row.badge}</StatusBadge>
+  ) : (
+    <Badge>{row.badge}</Badge>
+  );
+}
+
 /** Divider-separated rows — the minimalism alternative to card spam. Title +
  *  quiet meta on the baseline, a clamped two-line excerpt below. The whole row
  *  is the hit target when `onClick` is provided. In `compact` mode each record
- *  collapses to a single line (title · project · tags · date, no excerpt). */
+ *  collapses to a single line (title · project · tags · date, no excerpt).
+ *
+ *  Rows carrying a `content` node switch to a flex layout (leading control ·
+ *  content · trailing actions) — the one primitive behind the app's richer,
+ *  stateful lists. `variant="card"` wraps the whole list in a rounded, filled
+ *  card (with an optional `accent` frame); `align` sets flex-row alignment. */
 export function RecordList({
   rows,
   compact = false,
+  variant = "divider",
+  accent = false,
+  align = "center",
 }: {
   rows: RecordRow[];
   compact?: boolean;
+  variant?: "divider" | "card";
+  accent?: boolean;
+  align?: "center" | "start";
 }) {
+  const card = variant === "card";
+  const listClass = card
+    ? `divide-y divide-border rounded-xl border ${
+        accent ? "border-accent/40 bg-accent-weak/20" : "border-border bg-surface"
+      }`
+    : "border-t border-border";
+  const liClass = card ? "" : "border-b border-border";
+  const alignClass = align === "start" ? "items-start" : "items-center";
+  const customPad = card ? "px-3.5 py-3" : "px-1 py-3.5";
+
   return (
-    <ul className="border-t border-border">
+    <ul className={listClass}>
       {rows.map((r) => {
+        // --- Custom-row mode: caller-supplied inner markup, no whole-row click. ---
+        if (r.content !== undefined) {
+          return (
+            <li key={r.id} className={liClass}>
+              <div
+                className={`group flex gap-3 ${alignClass} ${customPad} ${
+                  r.selected ? "bg-accent-weak/40" : ""
+                }`}
+              >
+                {r.leading}
+                <div className="min-w-0 flex-1">{r.content}</div>
+                {r.trailing}
+              </div>
+            </li>
+          );
+        }
+
         const interactive = Boolean(r.onClick);
         const rowKeyDown = interactive
           ? (e: React.KeyboardEvent) => {
@@ -79,7 +140,7 @@ export function RecordList({
 
         if (compact) {
           return (
-            <li key={r.id} className="border-b border-border">
+            <li key={r.id} className={liClass}>
               <div
                 role={interactive ? "button" : undefined}
                 tabIndex={interactive ? 0 : undefined}
@@ -112,7 +173,7 @@ export function RecordList({
         }
 
         return (
-          <li key={r.id} className="border-b border-border">
+          <li key={r.id} className={liClass}>
             <div
               role={interactive ? "button" : undefined}
               tabIndex={interactive ? 0 : undefined}
@@ -132,7 +193,7 @@ export function RecordList({
                 <span className="truncate">{r.title || "(untitled)"}</span>
               </span>
               <span className="flex items-center gap-2.5 text-[12.5px] text-muted">
-                {r.badge && <Badge>{r.badge}</Badge>}
+                <RowBadge row={r} />
                 {r.meta && <span className="tnum whitespace-nowrap">{r.meta}</span>}
               </span>
               {r.excerpt && (

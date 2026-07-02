@@ -142,3 +142,141 @@ export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
     />
   );
 }
+
+/** The one status-badge system: a small pill whose color encodes an item's
+ *  state, replacing the ad-hoc status stylings scattered across the app. */
+export type StatusVariant =
+  | "closed"
+  | "contradiction"
+  | "decision"
+  | "superseded"
+  | "evolution";
+
+const STATUS_STYLES: Record<StatusVariant, string> = {
+  closed: "bg-surface2 text-muted",
+  contradiction: "bg-danger/10 text-danger",
+  decision: "bg-accent-weak text-accent",
+  superseded: "bg-surface2 text-faint",
+  evolution: "bg-accent-weak text-accent",
+};
+
+export function StatusBadge({
+  variant,
+  icon,
+  children,
+}: {
+  variant: StatusVariant;
+  icon?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${STATUS_STYLES[variant]}`}
+    >
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+/** The one toggle-group system: a single accessible control (roving `aria-pressed`)
+ *  behind the app's three toggle shapes — underline `tabs`, a pill `segmented`
+ *  control, and rounded `chips` — replacing the divergent hand-rolled versions. */
+export type ToggleVariant = "tabs" | "segmented" | "chips";
+
+export interface ToggleOption<T extends string> {
+  value: T;
+  label: string;
+  icon?: ReactNode; // leading glyph (e.g. Notes view toggle)
+  count?: number; // trailing count (e.g. Contradictions filters, Chronicle rail)
+  dot?: string; // leading color swatch (e.g. Calendar chips)
+  dimmed?: boolean; // faded item (e.g. a closed Chronicle chapter)
+}
+
+const TOGGLE_CONTAINER: Record<ToggleVariant, string> = {
+  tabs: "flex flex-wrap gap-1 border-b border-border",
+  segmented: "inline-flex rounded-lg border border-border bg-surface p-0.5",
+  chips: "flex flex-wrap gap-1.5",
+};
+
+function toggleItemClass(
+  variant: ToggleVariant,
+  active: boolean,
+  size: "sm" | "md",
+  dimmed?: boolean,
+): string {
+  if (variant === "tabs") {
+    return `-mb-px rounded-t-lg px-3 py-2 text-[14px] transition-colors ${
+      active
+        ? "border-b-2 border-accent font-medium text-accent"
+        : "text-muted hover:text-text"
+    }`;
+  }
+  if (variant === "chips") {
+    return `inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[13px] transition-colors ${
+      active
+        ? "border-accent bg-accent-weak font-medium text-accent"
+        : "border-border text-muted hover:text-text"
+    } ${dimmed ? "opacity-60" : ""}`;
+  }
+  const pad = size === "sm" ? "px-2.5 py-1 text-[12.5px]" : "px-3 py-1.5 text-[13px]";
+  return `inline-flex items-center gap-1.5 rounded-md ${pad} transition-colors ${
+    active ? "bg-accent-weak font-medium text-accent" : "text-muted hover:text-text"
+  }`;
+}
+
+export function ToggleGroup<T extends string>({
+  value,
+  onChange,
+  options,
+  variant = "segmented",
+  size = "md",
+  ariaLabel,
+  className,
+}: {
+  /** A single selected value, or — for multi-select groups — the set of the
+   *  currently-on values (the parent owns the "on" logic). */
+  value: T | readonly T[];
+  onChange: (v: T) => void;
+  options: ToggleOption<T>[];
+  variant?: ToggleVariant;
+  size?: "sm" | "md";
+  ariaLabel?: string;
+  className?: string;
+}) {
+  const selected = Array.isArray(value) ? (value as readonly T[]) : null;
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={`${TOGGLE_CONTAINER[variant]} ${className ?? ""}`}
+    >
+      {options.map((o) => {
+        const active = selected ? selected.includes(o.value) : o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            aria-pressed={active}
+            title={o.label}
+            className={toggleItemClass(variant, active, size, o.dimmed)}
+          >
+            {o.dot && (
+              <span
+                aria-hidden
+                className="size-2.5 shrink-0 rounded-full"
+                style={{ background: o.dot }}
+              />
+            )}
+            {o.icon}
+            {o.label}
+            {o.count !== undefined && (
+              <span className="tnum text-faint">{o.count}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
