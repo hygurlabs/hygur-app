@@ -103,8 +103,11 @@ func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink 
 
 	// Emit only doubly-unique claims: a person who is the sole nearest to exactly one same-type
 	// value (per-person uniqueness) AND whose value is claimed by only that one person in this doc
-	// (per-VALUE uniqueness — O2). A value nearest to two DISTINCT persons has contested ownership
-	// here, so it links to NEITHER — this drops the double-owner link at the source (fixes KG-1).
+	// (per-VALUE uniqueness — O2). "One person" is measured by store.DistinctPeople: a value near
+	// several name-variant norms of the SAME person (reversed order / middle name / OCR accent
+	// split) has ONE distinct owner and links to that person; a value near two GENUINELY distinct
+	// persons has contested ownership here and links to NEITHER — dropping the double-owner link at
+	// the source (fixes KG-1) without unlinking a person's own number from his own variant norms.
 	var out []store.IdentifierLink
 	for key, vals := range claims {
 		if len(vals) != 1 {
@@ -112,13 +115,26 @@ func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink 
 		}
 		typ, pnorm, _ := strings.Cut(key, "\x1f")
 		for v := range vals {
-			if len(valueOwners[typ+"\x1f"+v]) > 1 {
+			if distinctOwners(valueOwners[typ+"\x1f"+v]) > 1 {
 				continue // value claimed by >1 distinct person in this doc → ambiguous ownership
 			}
 			out = append(out, store.IdentifierLink{PersonNorm: pnorm, IDNorm: v, IDType: typ, Prox: 1.0})
 		}
 	}
 	return out
+}
+
+// distinctOwners counts how many genuinely distinct persons a set of nearest-person norms
+// denotes, collapsing one person's name-variant norms (token-subset) via store.DistinctPeople.
+func distinctOwners(owners map[string]bool) int {
+	if len(owners) < 2 {
+		return len(owners)
+	}
+	norms := make([]string, 0, len(owners))
+	for n := range owners {
+		norms = append(norms, n)
+	}
+	return store.DistinctPeople(norms)
 }
 
 func abs(x int) int {

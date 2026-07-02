@@ -151,6 +151,36 @@ func TestLookupIdentifier_MonoPersonStillHigh(t *testing.T) {
 	}
 }
 
+// TestLookupIdentifier_PersonVariantsResolve — the over-decline regression. A query that pools
+// several norms which are really ONE person (reversed order + a middle name: {bernard,alice} and
+// {alice,marie,bernard}) must NOT decline as ambiguous_subject. Its number is proximity-linked to
+// both variant norms; the owner cluster is one person, so it resolves to high (not ambiguous_owner).
+func TestLookupIdentifier_PersonVariantsResolve(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	f := &fakeStore{
+		resolve:   []string{"bernard alice", "alice marie bernard"}, // one person, two variants
+		neighbors: []store.Neighbor{{Norm: "nnown", Weight: 0.030}},
+		types:     map[string]string{"nnown": "id_national_number"},
+		links: map[string][]store.IdentifierLink{"nnown": {
+			{PersonNorm: "bernard alice", IDNorm: "nnown", Prox: 1},
+			{PersonNorm: "alice marie bernard", IDNorm: "nnown", Prox: 1},
+		}},
+		docs: map[string][]string{"nnown": {"d1", "d2", "d3"}},
+	}
+	r, err := LookupIdentifier(ctx, f, "alice marie bernard", "national_number", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("single-person variants: tier = %q (conf %.2f, reason %q), want high", r.Tier, r.Confidence, r.Reason)
+	}
+	if r.Value != "nnown" {
+		t.Errorf("value = %q, want nnown", r.Value)
+	}
+}
+
 // TestLookupIdentifier_ContestedValueNotHigh — a value proximity-linked to TWO distinct
 // persons violates the uniqueness invariant (one value = one owner). It must NOT be affirmed
 // for EITHER queried person, even though each query is itself unambiguous. (O2/V3)

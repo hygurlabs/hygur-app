@@ -76,13 +76,15 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	res := Result{Type: idType, Tier: TierNone}
 	attr := "id_" + idType
 
-	// Resolve the name to the graph's person/org entities (full names). A query that resolves to
-	// MORE THAN ONE norm is either genuinely ambiguous (a bare surname shared by distinct people)
-	// OR one entity under several name variants (an org renamed, a person's NER reconstructions).
-	// We tell them apart AFTER pooling (Flag 2, below): same-entity variants SHARE one
-	// proximity-linked identifier; distinct people carry distinct ones. So we do not decline yet.
+	// Resolve the name to the graph's person/org entities (full names). A query may resolve to
+	// several norms that are really ONE person under name-variant reconstructions (reversed order,
+	// a middle name, an OCR accent split): {petit,denis} and {denis,gérard,petit} are the
+	// same person. store.DistinctPeople clusters by token-subset (a norm whose tokens ⊆ another's
+	// is that person's variant) and counts the MAXIMAL norms = the number of distinct people. So a
+	// person's own variants stay ONE subject (resolve), while a bare surname or first name shared
+	// by genuinely distinct people (≥2 maximal, non-subset norms) stays ambiguous.
 	resolved, _ := s.ResolvePersonNorms(ctx, query, 20)
-	ambiguous := len(resolved) > 1
+	ambiguous := store.DistinctPeople(resolved) > 1
 	// Pool the resolved norms plus the exact query.
 	norms := append(resolved, query)
 
@@ -245,6 +247,9 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 // ownerCount is the number of DISTINCT persons proximity-linked to an identifier value —
 // the read-time half of the uniqueness invariant. >1 means the value's ownership is
 // contested across documents (the latent O2 case), so it must not be asserted for anyone.
+// The owner NORMS are clustered by token-subset (store.DistinctPeople) so a person's own
+// name-variant norms count as ONE owner (their number is not "contested" with themselves),
+// while genuinely distinct people each with the value still count as ≥2 → contested.
 func ownerCount(ctx context.Context, s Store, idNorm string) int {
 	links, err := s.IdentifierLinksForID(ctx, idNorm)
 	if err != nil {
@@ -256,7 +261,11 @@ func ownerCount(ctx context.Context, s Store, idNorm string) int {
 			owners[l.PersonNorm] = true
 		}
 	}
-	return len(owners)
+	norms := make([]string, 0, len(owners))
+	for n := range owners {
+		norms = append(norms, n)
+	}
+	return store.DistinctPeople(norms)
 }
 
 // idTypeAllowsVariantCollapse reports whether an identifier type may legitimately be shared

@@ -78,6 +78,46 @@ func TestIdentifierProximityLinks_DoubleOwner(t *testing.T) {
 	}
 }
 
+// TestIdentifierProximityLinks_SamePersonVariants — the over-decline regression. The SAME number
+// sits once next to a person's "Zephrine Bernard" mention and once next to their "Zephrine
+// Josephine Bernard" variant, so it is nearest a DIFFERENT variant norm at each spot. These are
+// name-variant norms of ONE person (token-subset), so the value has ONE distinct owner and MUST
+// link to that person — it must NOT be dropped as a double-owner the way two genuinely distinct
+// persons are (that is the KG-1 case, covered above). Both variant norms link. Fictional NISS.
+func TestIdentifierProximityLinks_SamePersonVariants(t *testing.T) {
+	nn := mkNISS("700101123")
+	item := &store.KnowledgeItem{
+		Title: "dossier",
+		NormalizedText: "Zephrine Bernard, reference " + fmtNN(nn) + "." +
+			strings.Repeat(" texte de remplissage.", 8) +
+			" Concernant Zephrine Josephine " + fmtNN(nn) + " Bernard.",
+		Metadata: map[string]any{"extracted_persons": []string{"Zephrine Bernard", "Zephrine Josephine Bernard"}},
+	}
+	links := identifierProximityLinks(item)
+	owners := map[string]bool{}
+	for _, l := range links {
+		if l.IDNorm != nn {
+			t.Errorf("unexpected id norm %q, want %q", l.IDNorm, nn)
+		}
+		owners[l.PersonNorm] = true
+	}
+	if len(owners) < 2 {
+		t.Fatalf("expected the value near BOTH variant norms (exercises owner clustering), got owners=%v", owners)
+	}
+	// The two owner norms are name variants of ONE person, so the guard did not drop the link.
+	if store.DistinctPeople(keysOf(owners)) != 1 {
+		t.Errorf("linked owners should cluster to one person, got %v", owners)
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // TestTypedIdentifierMentions_MailcatPrior — the document-trust prior (T1). A transactional
 // mail (Invoicing) yields NO typed-identifier node even though its text carries a valid NISS;
 // an ordinary administrative document still extracts it. Fictional NISS only.
