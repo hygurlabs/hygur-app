@@ -30,6 +30,13 @@ func cloudShellURL() string {
 	return "https://cloud.hygur.ai"
 }
 
+// dormantRetention is the reactivation grace: a fully-canceled tenant stays dormant
+// (data + DEK kept, pod scaled to 0) for this long before it is crypto-shredded.
+// The poller's `dormant-expired`/`purgeable` reapers default to the same 30 days
+// (main.go flags); the success-page discovery + passkey recovery reuse it so a match
+// is only ever offered while the tenant is still resurrectable.
+const dormantRetention = 30 * 24 * time.Hour
+
 // Billing turns Stripe subscription events into accounts + provisioning requests.
 // Invariants (product spec):
 //   - act ONLY on a finalized, paid checkout — never on created/failed/unpaid;
@@ -168,7 +175,7 @@ func (b *Billing) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 var successPage = template.Must(template.New("s").Parse(`<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-{{if not .Ready}}<meta http-equiv="refresh" content="8">{{end}}
+{{if not .Ready}}{{if not .Recover}}<meta http-equiv="refresh" content="8">{{end}}{{end}}
 <title>Hygur Cloud</title><style>
 :root{--bg:#fbfaf7;--surface:#fff;--text:#1b1b18;--muted:#6b6b63;--faint:#9a978c;--accent:#2e6a57;--border:#e7e3d8}
 *{box-sizing:border-box}
@@ -179,11 +186,25 @@ p{color:var(--muted);line-height:1.55;margin:.5rem 0}
 .muted{font-size:.85rem;color:var(--faint)}
 .space{margin:1.25rem 0 .2rem;font-family:ui-serif,Georgia,serif;font-size:1.35rem;color:var(--accent)}
 .url{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;color:var(--muted);word-break:break-all}
-.btn{display:inline-block;margin:1.25rem 0 .25rem;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem}
+.btn{display:inline-block;margin:1.25rem 0 .25rem;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem;border:0;cursor:pointer;font-size:1rem}
+.btn:disabled{opacity:.55;cursor:default}
 .qr{margin:1.1rem auto .2rem;width:180px;height:180px;border:1px solid var(--border);border-radius:.6rem;padding:.4rem;background:#fff}
 code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;letter-spacing:.1em;background:var(--bg);border:1px solid var(--border);border-radius:.6rem;padding:.85rem;margin:.75rem 0;word-break:break-all}
 .note{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)}
+.recover{background:#eef6f1;border:1px solid #cfe6db;border-radius:.8rem;padding:1.25rem;margin:0 0 1.4rem}
+.recover h1{color:var(--accent)}
+.recover-alt{margin-top:1.4rem;text-align:left}
+.recover-alt summary{cursor:pointer;color:var(--accent);font-weight:600;text-align:center}
+.recover-alt input{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:.95rem;padding:.6rem;border:1px solid var(--border);border-radius:.5rem;margin:.7rem 0}
+.status{min-height:1.1rem}
 </style></head><body><div class="card">
+{{if .Recover}}<div class="recover">
+<h1>Welcome back</h1>
+<p>You already have a Hygur space — <strong>{{.DormantSlug}}</strong> — from before. Recover it with your passkey and your data and settings come back intact, instead of starting over with an empty space.</p>
+<button class="btn" id="recover-btn" type="button">Recover with your passkey →</button>
+<p class="muted status" id="recover-status" role="status"></p>
+<p class="muted">Prefer a clean slate? Just continue with the new space below.</p>
+</div>{{end}}
 {{if .Ready}}<h1>Welcome to Hygur Cloud</h1>
 <p>Your instance name, which you'll use to sign in, is:</p>
 <div class="space">{{.Slug}}</div>
@@ -198,7 +219,108 @@ code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;le
 {{else}}<h1>Setting up your space…</h1>
 <p>Payment received. We're creating your private, encrypted space: its own database with its own encryption key.</p>
 <p class="muted"><strong>Keep this tab open.</strong> Your space and a one-time enrollment code appear here as soon as it's ready (usually under a minute). We don't send it by email — this page refreshes itself.</p>
-{{end}}</div></body></html>`))
+{{end}}
+{{if .HasSession}}<details class="note recover-alt">
+<summary>Recover a different space</summary>
+<p class="muted">Already had a Hygur space under another name? Enter it and sign in with that space's passkey to bring it back.</p>
+<input id="recover-instance" type="text" placeholder="brave-azure-harbor" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
+<button class="btn" id="recover-alt-btn" type="button">Recover →</button>
+<p class="muted status" id="recover-alt-status" role="status"></p>
+</details>
+<div id="recover-cfg" data-session="{{.SessionID}}" data-slug="{{.DormantSlug}}" data-cloud="{{.CloudURL}}" hidden></div>
+<script>
+(function(){
+  var cfg = document.getElementById("recover-cfg");
+  if(!cfg) return;
+  var SESSION = cfg.dataset.session || "";
+  var CLOUD = (cfg.dataset.cloud || "").replace(/\/+$/, "");
+  function b64urlToBuf(s){
+    s = String(s).replace(/-/g, "+").replace(/_/g, "/");
+    while(s.length % 4) s += "=";
+    var bin = atob(s), buf = new Uint8Array(bin.length), i;
+    for(i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+  }
+  function bufToB64url(buf){
+    var bytes = new Uint8Array(buf), bin = "", i;
+    for(i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function setStatus(el, msg){ if(el) el.textContent = msg; }
+  async function recover(instance, statusEl, btn){
+    instance = (instance || "").trim().toLowerCase();
+    if(!instance){ setStatus(statusEl, "Enter your space name."); return; }
+    if(!window.PublicKeyCredential){ setStatus(statusEl, "This browser does not support passkeys."); return; }
+    if(btn) btn.disabled = true;
+    setStatus(statusEl, "Starting...");
+    try {
+      var beginResp = await fetch("/account/reactivate/begin", {
+        method: "POST", credentials: "include",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({instance: instance, session_id: SESSION})
+      });
+      if(!beginResp.ok){
+        var e = {};
+        try { e = await beginResp.json(); } catch(_){}
+        setStatus(statusEl, (e && e.error === "no_passkey")
+          ? "That space has no passkey, so it cannot be recovered here."
+          : "Could not start recovery for that space.");
+        if(btn) btn.disabled = false;
+        return;
+      }
+      var opts = await beginResp.json();
+      var pk = opts.publicKey || {};
+      pk.challenge = b64urlToBuf(pk.challenge);
+      if(pk.allowCredentials){
+        pk.allowCredentials = pk.allowCredentials.map(function(c){
+          return Object.assign({}, c, {id: b64urlToBuf(c.id)});
+        });
+      }
+      setStatus(statusEl, "Waiting for your passkey...");
+      var assertion = await navigator.credentials.get({publicKey: pk});
+      var rp = assertion.response;
+      var body = {
+        id: assertion.id,
+        rawId: bufToB64url(assertion.rawId),
+        type: assertion.type,
+        response: {
+          clientDataJSON: bufToB64url(rp.clientDataJSON),
+          authenticatorData: bufToB64url(rp.authenticatorData),
+          signature: bufToB64url(rp.signature),
+          userHandle: rp.userHandle ? bufToB64url(rp.userHandle) : null
+        }
+      };
+      var finishResp = await fetch("/account/reactivate/finish?s=" + encodeURIComponent(opts.session_id), {
+        method: "POST", credentials: "include",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      if(!finishResp.ok){
+        setStatus(statusEl, finishResp.status === 409
+          ? "That space's recovery window has closed."
+          : "Passkey did not verify. Please try again.");
+        if(btn) btn.disabled = false;
+        return;
+      }
+      var bundle = await finishResp.json();
+      setStatus(statusEl, "Recovered - opening your space...");
+      window.location.href = CLOUD + "/" + encodeURIComponent(bundle.tenant_id || instance);
+    } catch(err){
+      setStatus(statusEl, "Recovery was cancelled or failed. Please try again.");
+      if(btn) btn.disabled = false;
+    }
+  }
+  var autoBtn = document.getElementById("recover-btn");
+  if(autoBtn) autoBtn.addEventListener("click", function(){
+    recover(cfg.dataset.slug || "", document.getElementById("recover-status"), autoBtn);
+  });
+  var altBtn = document.getElementById("recover-alt-btn");
+  if(altBtn) altBtn.addEventListener("click", function(){
+    var input = document.getElementById("recover-instance");
+    recover(input ? input.value : "", document.getElementById("recover-alt-status"), altBtn);
+  });
+})();
+</script>{{end}}</div></body></html>`))
 
 // handleSuccess is the Stripe post-payment landing. It resolves the checkout
 // session → account and, once the poller has provisioned the tenant (state
@@ -215,9 +337,35 @@ func (b *Billing) handleSuccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, state, err := b.store.SubscriptionBySession(sid)
-	if err != nil || state != "ready" {
-		// Unknown session (webhook not arrived) or pod not provisioned yet.
+	if err != nil {
+		// Unknown session (webhook not arrived yet).
 		_ = successPage.Execute(w, map[string]any{"Ready": false})
+		return
+	}
+	// Discovery ONLY (changes NO state): if the paying Stripe customer still has a
+	// dormant tenant in grace on a DIFFERENT account, surface a "recover with your
+	// passkey" offer. The passkey assertion is the sole security gate — matching the
+	// customer id never re-attaches anything, it only shows the button.
+	offerRecover, dormantSlug := false, ""
+	if _, _, custID, _, rerr := b.store.SubscriptionRowBySession(sid); rerr == nil {
+		if dAcc, dSlug, ok, ferr := b.store.FindDormantByCustomer(custID, b.clock(), dormantRetention); ferr == nil && ok && dAcc != acc.AccountNumber {
+			offerRecover, dormantSlug = true, dSlug
+		}
+	}
+	// Fields shared by every page that resolved a session, so the recover banner +
+	// inline ceremony + the "recover a different space" fallback (F2) can render.
+	data := map[string]any{
+		"HasSession":  true,
+		"Recover":     offerRecover,
+		"DormantSlug": dormantSlug,
+		"SessionID":   sid,
+		"CloudURL":    cloudShellURL(),
+	}
+	if state != "ready" {
+		// Pod not provisioned yet — still offer recovery (and don't auto-refresh over
+		// an in-progress ceremony; the template drops the meta-refresh when Recover).
+		data["Ready"] = false
+		_ = successPage.Execute(w, data)
 		return
 	}
 	code, err := b.store.CreateEnrollCode(b.clock(), acc.AccountNumber, "web", 30*time.Minute)
@@ -234,10 +382,13 @@ func (b *Billing) handleSuccess(w http.ResponseWriter, r *http.Request) {
 	if png, qerr := qrcode.Encode(deepLink, qrcode.Medium, 220); qerr == nil {
 		qr = template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png))
 	}
-	_ = successPage.Execute(w, map[string]any{
-		"Ready": true, "Code": code, "Slug": slug,
-		"URL": displayURL, "DeepLink": template.URL(deepLink), "QR": qr,
-	})
+	data["Ready"] = true
+	data["Code"] = code
+	data["Slug"] = slug
+	data["URL"] = displayURL
+	data["DeepLink"] = template.URL(deepLink)
+	data["QR"] = qr
+	_ = successPage.Execute(w, data)
 }
 
 // verifyStripeSig validates a `Stripe-Signature: t=…,v1=…` header: HMAC-SHA256 of
@@ -559,6 +710,179 @@ func (s *Store) SubscriptionBySession(sessionID string) (Account, string, error)
 	}
 	acc, gerr := s.GetAccount(accNum)
 	return acc, state, gerr
+}
+
+// SubscriptionRowBySession resolves a checkout session to its subscription id,
+// account number, Stripe customer id, and provision state — the raw row behind the
+// success page (SubscriptionBySession returns the joined Account instead). Used to
+// resolve the fresh stub subscription during passkey reactivation and to read the
+// customer id for discovery. Unknown session → ErrNotFound.
+func (s *Store) SubscriptionRowBySession(sessionID string) (subID, account, customerID, state string, err error) {
+	if sessionID == "" {
+		return "", "", "", "", ErrNotFound
+	}
+	err = s.db.QueryRow(
+		`SELECT stripe_sub_id, account_number, customer_id, provision_state FROM stripe_subscriptions WHERE checkout_session_id=?`,
+		sessionID).Scan(&subID, &account, &customerID, &state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("controlplane: lookup subscription by session: %w", err)
+	}
+	return subID, account, customerID, state, nil
+}
+
+// HasDormantInGrace reports whether the account still owns a dormant subscription
+// within its reactivation grace (dormant AND dormant_at >= now-retention). Gate for
+// offering passkey recovery: nothing to recover once the grace has elapsed.
+func (s *Store) HasDormantInGrace(account string, now time.Time, retention time.Duration) (bool, error) {
+	if account == "" {
+		return false, nil
+	}
+	cutoff := now.Add(-retention).UTC().Format(rfc)
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM stripe_subscriptions WHERE account_number=? AND provision_state='dormant' AND dormant_at IS NOT NULL AND dormant_at >= ?`,
+		account, cutoff).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("controlplane: dormant-in-grace: %w", err)
+	}
+	return n > 0, nil
+}
+
+// FindDormantByCustomer resolves a Stripe customer id to its single dormant tenant
+// still within the reactivation grace (provision_state='dormant' AND dormant_at >=
+// now-retention). DISCOVERY ONLY: it merely surfaces the "recover with your passkey"
+// offer on the success page and never changes state — the passkey assertion is the
+// sole security gate. Fails CLOSED (ok=false) on an empty customer id or on 0 / >1
+// matches, so an ambiguous or absent match never auto-links anything.
+func (s *Store) FindDormantByCustomer(customerID string, now time.Time, retention time.Duration) (account, tenant string, ok bool, err error) {
+	if customerID == "" {
+		return "", "", false, nil
+	}
+	cutoff := now.Add(-retention).UTC().Format(rfc)
+	rows, err := s.db.Query(`
+		SELECT ss.account_number, a.tenant_id
+		FROM stripe_subscriptions ss JOIN accounts a ON a.account_number = ss.account_number
+		WHERE ss.customer_id=? AND ss.provision_state='dormant' AND ss.dormant_at IS NOT NULL AND ss.dormant_at >= ?`,
+		customerID, cutoff)
+	if err != nil {
+		return "", "", false, fmt.Errorf("controlplane: find dormant by customer: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		n++
+		var a, t string
+		if serr := rows.Scan(&a, &t); serr != nil {
+			return "", "", false, serr
+		}
+		if n == 1 {
+			account, tenant = a, t
+		}
+	}
+	if rerr := rows.Err(); rerr != nil {
+		return "", "", false, rerr
+	}
+	if n != 1 { // 0 = no match; >1 = ambiguous → fail closed, offer nothing.
+		return "", "", false, nil
+	}
+	return account, tenant, true, nil
+}
+
+// ReattachSubscriptionToDormant re-attaches a freshly-paid stub subscription to a
+// dormant tenant after a passkey assertion has PROVEN ownership (the caller has
+// already verified the assertion — this method only flips DB state; the off-repo
+// poller does the k8s work). TRANSACTIONAL + guarded: it re-checks INSIDE the tx
+// that the dormant tenant is still dormant AND in-grace, returning ErrGraceExpired
+// otherwise, so a race with the erasure reaper can never resurrect a crypto-shredded
+// tenant. Steps: (a) repoint the new sub → dormant account, provision_state='resume'
+// (poller scales the preserved pod 0→1, DEK intact); (b) retire the old dormant sub
+// → 'superseded'; (c) reactivate the dormant account; (d) retire the stub account +
+// tear down any stub tenant still pointing at it. Idempotent: a repeat call once the
+// new sub already resumes the dormant account is a no-op. Mirrors insertSubscriptionRow's
+// atomic dormant-adoption pattern.
+func (s *Store) ReattachSubscriptionToDormant(newSubID, dormantAccount, stubAccount string, now time.Time, retention time.Duration) error {
+	if newSubID == "" || dormantAccount == "" {
+		return errors.New("controlplane: reattach requires a new subscription + dormant account")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("controlplane: reattach: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Idempotency: the new sub already drives the dormant account (a replayed finish,
+	// a double-tap) → nothing to do.
+	var curAccount, curState string
+	err = tx.QueryRow(`SELECT account_number, provision_state FROM stripe_subscriptions WHERE stripe_sub_id=?`, newSubID).
+		Scan(&curAccount, &curState)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: unknown subscription %q", ErrNotFound, newSubID)
+	}
+	if err != nil {
+		return fmt.Errorf("controlplane: reattach lookup: %w", err)
+	}
+	if curAccount == dormantAccount && curState == "resume" {
+		return tx.Commit() // already reattached — no-op.
+	}
+
+	// Guard (fail closed): the dormant tenant MUST still be dormant AND within grace.
+	cutoff := now.Add(-retention).UTC().Format(rfc)
+	var dormantSub string
+	err = tx.QueryRow(
+		`SELECT stripe_sub_id FROM stripe_subscriptions WHERE account_number=? AND provision_state='dormant' AND dormant_at IS NOT NULL AND dormant_at >= ? ORDER BY dormant_at DESC LIMIT 1`,
+		dormantAccount, cutoff).Scan(&dormantSub)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrGraceExpired
+	}
+	if err != nil {
+		return fmt.Errorf("controlplane: reattach dormant lookup: %w", err)
+	}
+
+	// (a) The paid subscription now drives the dormant tenant (poller scales 0→1).
+	res, err := tx.Exec(
+		`UPDATE stripe_subscriptions SET account_number=?, provision_state='resume' WHERE stripe_sub_id=?`,
+		dormantAccount, newSubID)
+	if err != nil {
+		return fmt.Errorf("controlplane: reattach repoint: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: subscription %q", ErrNotFound, newSubID)
+	}
+	// (b) The old dormant subscription is retired (its tenant is now driven by newSubID).
+	if _, err := tx.Exec(
+		`UPDATE stripe_subscriptions SET provision_state='superseded', dormant_at=NULL WHERE stripe_sub_id=? AND provision_state='dormant'`,
+		dormantSub); err != nil {
+		return fmt.Errorf("controlplane: reattach supersede: %w", err)
+	}
+	// (c) The recovered account is active again. valid_until is a near-term placeholder
+	// (one grace window) that the next invoice.paid on newSubID — now attached here —
+	// refreshes to the real Stripe period end.
+	validUntil := now.Add(retention).UTC().Format(rfc)
+	if _, err := tx.Exec(
+		`UPDATE accounts SET status='active', valid_until=? WHERE account_number=?`,
+		validUntil, dormantAccount); err != nil {
+		return fmt.Errorf("controlplane: reattach reactivate: %w", err)
+	}
+	// (d) Retire the stub: cancel its account and tear down any stub tenant still
+	// pointing at it. In the common case the stub sub was newSubID (just repointed in
+	// step a while still 'pending'), so its fresh empty pod is never provisioned; this
+	// deprovision only fires if the poller had raced ahead and created it.
+	if stubAccount != "" && stubAccount != dormantAccount {
+		if _, err := tx.Exec(
+			`UPDATE stripe_subscriptions SET provision_state='deprovision' WHERE account_number=? AND provision_state NOT IN ('gone','purged','superseded','deprovision')`,
+			stubAccount); err != nil {
+			return fmt.Errorf("controlplane: reattach retire stub subs: %w", err)
+		}
+		if _, err := tx.Exec(
+			`UPDATE accounts SET status='canceled' WHERE account_number=?`,
+			stubAccount); err != nil {
+			return fmt.Errorf("controlplane: reattach cancel stub account: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) getAccountByEmail(email string) (Account, error) {

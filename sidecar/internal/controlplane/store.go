@@ -29,6 +29,11 @@ var (
 	ErrCodeInvalid = errors.New("enrollment code invalid, expired, or already used")
 	// ErrRefreshInvalid covers an unknown/revoked refresh token.
 	ErrRefreshInvalid = errors.New("refresh token invalid or revoked")
+	// ErrGraceExpired is returned by ReattachSubscriptionToDormant when the dormant
+	// tenant is no longer dormant-in-grace (grace elapsed, or already erased), so the
+	// passkey-authenticated recovery must fail closed instead of resuming a shredded
+	// tenant.
+	ErrGraceExpired = errors.New("reactivation grace expired")
 )
 
 // Account is one paying customer. tenant_id is the pod namespace suffix
@@ -126,6 +131,10 @@ CREATE TABLE IF NOT EXISTS stripe_subscriptions (
   created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_stripe_sub_session ON stripe_subscriptions(checkout_session_id);
+-- customer_id index backs the discovery-only dormant-tenant lookup on the success
+-- page (FindDormantByCustomer): a returning Stripe customer surfaces the "recover
+-- with your passkey" offer. Discovery ONLY — the passkey is the sole security gate.
+CREATE INDEX IF NOT EXISTS idx_stripe_sub_customer ON stripe_subscriptions(customer_id);
 -- Passkeys (WebAuthn): one credential row per registered authenticator, stored as
 -- an opaque JSON blob (the go-webauthn Credential) so the store stays decoupled
 -- from the ceremony types. Ceremony SessionData (challenge etc.) is parked between

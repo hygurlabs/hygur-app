@@ -69,6 +69,158 @@ func (a *WebAuthnService) Register(r chi.Router) {
 	r.Post("/desktop/claim", a.handleDesktopClaim)
 }
 
+// RegisterReactivation adds the passkey-gated dormant-tenant recovery endpoints.
+// PUBLIC (no device token): the passkey assertion IS the authorization. Composed in
+// runServe next to Register so the two live alongside the login/register ceremonies.
+func (a *WebAuthnService) RegisterReactivation(r chi.Router) {
+	r.Post("/account/reactivate/begin", a.reactivateBegin)
+	r.Post("/account/reactivate/finish", a.reactivateFinish)
+}
+
+// reactivateData is the ceremony state parked between reactivate begin → finish: the
+// WebAuthn SessionData (challenge) plus the resolved reattach targets. Parked under
+// the dormant account number + purpose "reactivate" (5-min TTL), so finish can only
+// ever reattach the exact subscription that begin resolved — and only after the
+// assertion against the dormant account's own passkey verifies.
+type reactivateData struct {
+	Session     webauthn.SessionData `json:"session"`
+	NewSubID    string               `json:"new_sub_id"`
+	StubAccount string               `json:"stub_account"`
+}
+
+type reactivateBeginReq struct {
+	Instance  string `json:"instance"`   // the dormant tenant slug to recover
+	SessionID string `json:"session_id"` // the fresh checkout session (stub sub)
+}
+
+// reactivateBegin surfaces the passkey challenge for recovering a dormant tenant. It
+// resolves the dormant account by its (old) instance slug, requires it to still have
+// a passkey (F3: 0 creds → 400 no_passkey) AND a dormant subscription in grace, then
+// resolves the fresh stub subscription from the checkout session. It changes NO state
+// — only parks the challenge; the reattach happens in finish, gated by the assertion.
+func (a *WebAuthnService) reactivateBegin(w http.ResponseWriter, r *http.Request) {
+	var in reactivateBeginReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil ||
+		strings.TrimSpace(in.Instance) == "" || strings.TrimSpace(in.SessionID) == "" {
+		writeErr(w, http.StatusBadRequest, "instance and session_id required")
+		return
+	}
+	dormant, err := a.store.getAccountByTenantID(strings.ToLower(strings.TrimSpace(in.Instance)))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "unknown instance")
+		return
+	}
+	user, err := a.loadUser(dormant)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load user")
+		return
+	}
+	// F3: no passkey on the dormant account → ownership can't be proven here.
+	if len(user.creds) == 0 {
+		writeErr(w, http.StatusBadRequest, "no_passkey")
+		return
+	}
+	// Must actually have a dormant tenant still in grace (else nothing to recover).
+	if ok, herr := a.store.HasDormantInGrace(dormant.AccountNumber, a.clock(), dormantRetention); herr != nil || !ok {
+		writeErr(w, http.StatusBadRequest, "not recoverable")
+		return
+	}
+	// Resolve the fresh stub subscription from the checkout session. It must be a
+	// live, freshly-created stub on a DIFFERENT account than the dormant one.
+	subID, stubAccount, _, state, serr := a.store.SubscriptionRowBySession(strings.TrimSpace(in.SessionID))
+	if serr != nil || subID == "" || stubAccount == dormant.AccountNumber ||
+		(state != "pending" && state != "ready") {
+		writeErr(w, http.StatusBadRequest, "no fresh subscription for session")
+		return
+	}
+	options, session, err := a.wa.BeginLogin(user)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "begin login")
+		return
+	}
+	blob, err := json.Marshal(reactivateData{Session: *session, NewSubID: subID, StubAccount: stubAccount})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "session")
+		return
+	}
+	id := newSessionID()
+	if err := a.store.PutWebauthnSession(id, dormant.AccountNumber, "reactivate", blob, a.clock().Add(5*time.Minute)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "session")
+		return
+	}
+	raw, _ := json.Marshal(options) // {"publicKey":{...}}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		writeErr(w, http.StatusInternalServerError, "options")
+		return
+	}
+	m["session_id"] = id
+	writeJSON(w, http.StatusOK, m)
+}
+
+// reactivateFinish verifies the passkey assertion against the dormant account and,
+// ONLY on success, reattaches the fresh subscription and resumes the dormant tenant.
+// The passkey is the SOLE gate: an invalid assertion returns 401 and never calls
+// ReattachSubscriptionToDormant. Deliberately SKIPS the IsActive gate that normal
+// login enforces (F1) — the dormant account is inactive by definition; the whole
+// point is to bring it back. Purpose "reactivate" is enforced on resume (F9).
+func (a *WebAuthnService) reactivateFinish(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("s")
+	if id == "" {
+		writeErr(w, http.StatusUnauthorized, "invalid session")
+		return
+	}
+	account, purpose, data, err := a.store.TakeWebauthnSession(a.clock(), id)
+	if err != nil || purpose != "reactivate" { // F9: purpose-scoped, one-time.
+		writeErr(w, http.StatusUnauthorized, "invalid session")
+		return
+	}
+	var rd reactivateData
+	if err := json.Unmarshal(data, &rd); err != nil {
+		writeErr(w, http.StatusInternalServerError, "session")
+		return
+	}
+	dormant, err := a.store.GetAccount(account)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load account")
+		return
+	}
+	user, err := a.loadUser(dormant)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load user")
+		return
+	}
+	// The assertion IS the proof of ownership. On failure: 401, and NO reattach.
+	cred, err := a.wa.FinishLogin(user, rd.Session, r)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "authentication failed")
+		return
+	}
+	// Persist sign-count / clone-warning updates from this assertion.
+	if blob, mErr := json.Marshal(cred); mErr == nil {
+		_ = a.store.UpdateWebauthnCredential(base64url(cred.ID), blob)
+	}
+
+	now := a.clock()
+	// NO IsActive gate here (F1): the dormant account is intentionally inactive.
+	if rerr := a.store.ReattachSubscriptionToDormant(rd.NewSubID, dormant.AccountNumber, rd.StubAccount, now, dormantRetention); rerr != nil {
+		if errors.Is(rerr, ErrGraceExpired) {
+			writeErr(w, http.StatusConflict, "reactivation grace expired — this space can no longer be recovered")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "reattach failed")
+		return
+	}
+	// The account is active again (step c of the reattach); mint the token bundle for
+	// the RECOVERED tenant (issueAndRespond re-reads the now-active account).
+	dev, refresh, err := a.store.CreateDeviceForAccount(now, dormant.AccountNumber, "passkey")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "issue device")
+		return
+	}
+	a.svc.issueAndRespond(w, now, dev, refresh)
+}
+
 // passkeyCount returns how many passkeys the caller's account has registered.
 // The web shell uses it to warn a user who enrolled by code but skipped adding a
 // passkey: without one they can only sign back in from the enrolling browser, so

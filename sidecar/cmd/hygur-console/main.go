@@ -151,6 +151,10 @@ func runServe(args []string) {
 	wa, err := controlplane.NewWebAuthnService(store, svc, rpID, "Hygur Cloud", rpOrigins)
 	die(err)
 	wa.Register(root)
+	// Passkey-gated recovery of a dormant tenant (WP-SEC1-reactivation): the passkey
+	// assertion is the sole security gate; Stripe customer-id match only surfaces the
+	// offer on the success page. PUBLIC, next to the other passkey ceremonies.
+	wa.RegisterReactivation(root)
 	fmt.Printf("hygur-console: passkey (WebAuthn) enabled — RP %q, origins %v\n", rpID, rpOrigins)
 
 	if wh := os.Getenv("HYGUR_STRIPE_WEBHOOK_SECRET"); wh != "" {
