@@ -8,6 +8,7 @@ import { fmtDate } from "../lib/format";
 import { useToast } from "../lib/toast";
 import type { Task } from "../lib/types";
 import { TagInput } from "../components/TagInput";
+import { RecordList } from "../components/RecordList";
 import { Button, EmptyState, ErrorBanner, Skeleton, TextInput } from "../components/ui";
 
 export function Tasks() {
@@ -104,17 +105,15 @@ export function Tasks() {
               <div className="mb-2 text-[12.5px] text-muted">
                 {openCount} open · {tasks.length - openCount} done
               </div>
-              <ul className="divide-y divide-border rounded-xl border border-border bg-surface">
-                {tasks.map((t) => {
+              <RecordList
+                variant="card"
+                rows={tasks.map((t) => {
                   const done = t.status === "done";
                   const proj = projectName(t.project_id);
-                  return (
-                    <li
-                      key={t.id}
-                      className={`flex items-center gap-3 px-3.5 py-2.5 ${
-                        selectedId === t.id ? "bg-accent-weak/40" : ""
-                      }`}
-                    >
+                  return {
+                    id: t.id,
+                    selected: selectedId === t.id,
+                    leading: (
                       <button
                         onClick={() => toggle.mutate(t)}
                         aria-label={done ? "Mark as open" : "Mark as done"}
@@ -126,9 +125,11 @@ export function Tasks() {
                       >
                         <Check size={12} strokeWidth={2.5} />
                       </button>
+                    ),
+                    content: (
                       <button
                         onClick={() => setSelectedId(t.id)}
-                        className="min-w-0 flex-1 text-left"
+                        className="w-full min-w-0 text-left"
                       >
                         <p
                           className={`truncate text-[14px] ${
@@ -152,7 +153,9 @@ export function Tasks() {
                           </div>
                         )}
                       </button>
-                      {confirmId === t.id ? (
+                    ),
+                    trailing:
+                      confirmId === t.id ? (
                         <span className="flex shrink-0 items-center gap-1.5 text-[12.5px]">
                           <span className="text-muted">Delete?</span>
                           <button
@@ -177,11 +180,10 @@ export function Tasks() {
                         >
                           <Trash2 size={15} strokeWidth={1.75} />
                         </button>
-                      )}
-                    </li>
-                  );
+                      ),
+                  };
                 })}
-              </ul>
+              />
             </>
           ) : (
             <EmptyState

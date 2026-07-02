@@ -30,6 +30,7 @@ import {
   PageHeader,
   Skeleton,
   TextInput,
+  ToggleGroup,
 } from "../components/ui";
 
 // Static toolbar config (module scope so render builds no ref-capturing
@@ -144,28 +145,17 @@ export function Notes() {
       )}
       {!isLoading && rows.length > 0 && (
         <div className="mb-2 flex justify-end">
-          <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
-            {(
-              [
-                [false, "Detailed", List],
-                [true, "Compact", Rows3],
-              ] as const
-            ).map(([value, label, Icon]) => (
-              <button
-                key={label}
-                onClick={() => setCompactPersisted(value)}
-                title={label}
-                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors ${
-                  compact === value
-                    ? "bg-accent-weak font-medium text-accent"
-                    : "text-muted hover:text-text"
-                }`}
-              >
-                <Icon size={14} strokeWidth={1.9} />
-                {label}
-              </button>
-            ))}
-          </div>
+          <ToggleGroup
+            variant="segmented"
+            size="sm"
+            ariaLabel="List density"
+            value={compact ? "compact" : "detailed"}
+            onChange={(v) => setCompactPersisted(v === "compact")}
+            options={[
+              { value: "detailed", label: "Detailed", icon: <List size={14} strokeWidth={1.9} /> },
+              { value: "compact", label: "Compact", icon: <Rows3 size={14} strokeWidth={1.9} /> },
+            ]}
+          />
         </div>
       )}
 

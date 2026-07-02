@@ -7,7 +7,14 @@ import { api } from "../lib/api";
 import type { ChronicleAct } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
 import { useToast } from "../lib/toast";
-import { Button, EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
+import {
+  Button,
+  EmptyState,
+  Page,
+  PageHeader,
+  Skeleton,
+  ToggleGroup,
+} from "../components/ui";
 
 const LIFE = "life";
 
@@ -129,25 +136,22 @@ export function Chronicle() {
       )}
 
       {/* Chapter rail */}
-      <div className="mb-5 flex flex-wrap gap-1.5">
-        {rail.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => {
-              setSelected(c.id);
-              setPage(null);
-            }}
-            className={`rounded-full border px-3 py-1 text-[13px] transition-colors ${
-              c.id === selected
-                ? "border-accent bg-accent-weak font-medium text-accent"
-                : "border-border text-muted hover:text-text"
-            } ${c.status === "closed" ? "opacity-60" : ""}`}
-          >
-            {c.title}
-            {c.act_count > 0 && <span className="tnum ml-1.5 text-faint">{c.act_count}</span>}
-          </button>
-        ))}
-      </div>
+      <ToggleGroup
+        variant="chips"
+        ariaLabel="Chapters"
+        className="mb-5"
+        value={selected}
+        onChange={(id) => {
+          setSelected(id);
+          setPage(null);
+        }}
+        options={rail.map((c) => ({
+          value: c.id,
+          label: c.title,
+          count: c.act_count > 0 ? c.act_count : undefined,
+          dimmed: c.status === "closed",
+        }))}
+      />
 
       {/* Lifecycle control — project chapters only ("Life" never closes) */}
       {isProject && (

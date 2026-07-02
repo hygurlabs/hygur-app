@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, CalendarClock, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
 import { useDetail } from "../components/DetailPanel";
+import { RecordList } from "../components/RecordList";
 import { fmtDate, fmtDateTime } from "../lib/format";
 import {
   Button,
@@ -13,6 +14,7 @@ import {
   Page,
   PageHeader,
   Skeleton,
+  ToggleGroup,
 } from "../components/ui";
 
 const ENABLED_KEY = "hygur.calendar.enabled";
@@ -29,6 +31,7 @@ function SectionLabel({ children }: { children: string }) {
 export function Calendar() {
   const isNative = native.available;
   const openDetail = useDetail();
+  const navigate = useNavigate();
   const [enabled, setEnabled] = useState(
     () => localStorage.getItem(ENABLED_KEY) === "1",
   );
@@ -150,33 +153,24 @@ export function Calendar() {
     .sort((a, b) => b.ts - a.ts)
     .slice(0, 10);
   const renderEventList = (list: typeof allSynced) => (
-    <ul className="border-t border-border">
-      {list.map((e) => (
-        <li
-          key={e.content_id}
-          onClick={() =>
-            openDetail({
-              title: e.title,
-              contentId: e.content_id,
-              meta: [
-                e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
-                e.location,
-              ].filter(Boolean),
-              body: e.body,
-            })
-          }
-          className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5 transition-colors hover:bg-surface2"
-        >
-          <span className="truncate font-medium">{e.title}</span>
-          <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
-            {e.allDay ? fmtDate(e.start) : fmtDateTime(e.start)}
-          </span>
-          {e.location && (
-            <span className="col-span-2 text-[13px] text-muted">{e.location}</span>
-          )}
-        </li>
-      ))}
-    </ul>
+    <RecordList
+      rows={list.map((e) => ({
+        id: e.content_id,
+        title: e.title,
+        meta: e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
+        excerpt: e.location || undefined,
+        onClick: () =>
+          openDetail({
+            title: e.title,
+            contentId: e.content_id,
+            meta: [
+              e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
+              e.location,
+            ].filter(Boolean),
+            body: e.body,
+          }),
+      }))}
+    />
   );
 
   const selectedSet = new Set(selected);
@@ -272,13 +266,10 @@ export function Calendar() {
               appleid.apple.com). Stays private — no public sharing.
             </li>
           </ul>
-          <Link
-            to="/connectors"
-            className="inline-flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
-          >
+          <Button onClick={() => navigate("/connectors")}>
             <CalendarClock size={16} strokeWidth={1.75} />
             Connect a calendar
-          </Link>
+          </Button>
         </div>
       )}
 
@@ -301,22 +292,16 @@ export function Calendar() {
           ) : events.isLoading ? (
             <Skeleton rows={3} />
           ) : shownEvents.length > 0 ? (
-            <ul className="border-t border-border">
-              {shownEvents.map((e, i) => (
-                <li
-                  key={`${e.title}-${e.start}-${i}`}
-                  className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5"
-                >
-                  <span className="truncate font-medium">{e.title}</span>
-                  <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
-                    {e.allDay ? fmtDate(e.start) : fmtDateTime(e.start)}
-                  </span>
-                  <span className="col-span-2 text-[13px] text-muted">
-                    {[e.calendarTitle, e.location].filter(Boolean).join(" · ")}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <RecordList
+              rows={shownEvents.map((e, i) => ({
+                id: `${e.title}-${e.start}-${i}`,
+                title: e.title,
+                meta: e.allDay ? fmtDate(e.start) : fmtDateTime(e.start),
+                excerpt:
+                  [e.calendarTitle, e.location].filter(Boolean).join(" · ") ||
+                  undefined,
+              }))}
+            />
           ) : (
             <EmptyState
               title="No meetings ahead"
@@ -335,29 +320,19 @@ export function Calendar() {
               ? "All calendars are watched. Select specific ones to narrow briefings."
               : `${selected.length} calendar${selected.length === 1 ? "" : "s"} watched.`}
           </p>
-          <div className="flex flex-wrap gap-2">
-            {calendars.data!.map((c) => {
-              const on = selected.length === 0 || selectedSet.has(c.id);
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => toggle(c.id)}
-                  className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
-                    on
-                      ? "border-accent/40 bg-accent-weak text-text"
-                      : "border-border text-muted hover:border-accent/40"
-                  }`}
-                >
-                  <span
-                    aria-hidden
-                    className="size-2.5 rounded-full"
-                    style={{ background: c.color }}
-                  />
-                  {c.title}
-                </button>
-              );
-            })}
-          </div>
+          <ToggleGroup
+            variant="chips"
+            ariaLabel="Calendars to watch"
+            value={calendars
+              .data!.filter((c) => selected.length === 0 || selectedSet.has(c.id))
+              .map((c) => c.id)}
+            onChange={toggle}
+            options={calendars.data!.map((c) => ({
+              value: c.id,
+              label: c.title,
+              dot: c.color,
+            }))}
+          />
         </>
       )}
 
@@ -372,19 +347,13 @@ export function Calendar() {
       ) : agenda.isLoading ? (
         <Skeleton rows={3} />
       ) : (agenda.data?.actions.length ?? 0) > 0 ? (
-        <ul className="border-t border-border">
-          {agenda.data!.actions.map((a, i) => (
-            <li
-              key={`${a.source_id}-${i}`}
-              className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-3.5"
-            >
-              <span className="truncate font-medium">{a.what}</span>
-              <span className="tnum whitespace-nowrap text-[12.5px] text-muted">
-                {fmtDate(a.deadline_iso)}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <RecordList
+          rows={agenda.data!.actions.map((a, i) => ({
+            id: `${a.source_id}-${i}`,
+            title: a.what,
+            meta: fmtDate(a.deadline_iso),
+          }))}
+        />
       ) : (
         <EmptyState
           title="No upcoming deadlines"

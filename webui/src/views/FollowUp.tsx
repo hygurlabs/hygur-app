@@ -9,6 +9,7 @@ import {
 } from "../components/ContradictionList";
 import { fmtDate } from "../lib/format";
 import { useSlow } from "../lib/slow";
+import { RecordList } from "../components/RecordList";
 import { ErrorBanner, Page, PageHeader } from "../components/ui";
 import type { DigestEntry } from "../lib/types";
 
@@ -130,27 +131,15 @@ export function FollowUp() {
         <section className="mb-8">
           <Label>Exchange timeline</Label>
           {rows.length > 0 ? (
-            <ul className="border-t border-border">
-              {rows.map((r) => (
-                <li
-                  key={r.content_id}
-                  onClick={() => openItem(r.content_id, r.title)}
-                  className="grid cursor-pointer grid-cols-[1fr_auto] items-baseline gap-x-4 border-b border-border px-1 py-2.5 transition-colors hover:bg-surface2"
-                >
-                  <span className="truncate text-[13.5px] text-text">
-                    {r.title || "(untitled)"}
-                  </span>
-                  <span className="tnum whitespace-nowrap text-[12px] text-muted">
-                    {fmtDate(r.date)}
-                  </span>
-                  {r.from && (
-                    <span className="col-span-2 truncate text-[12px] text-muted">
-                      {r.from}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <RecordList
+              rows={rows.map((r) => ({
+                id: r.content_id,
+                title: r.title || "(untitled)",
+                meta: fmtDate(r.date),
+                excerpt: r.from || undefined,
+                onClick: () => openItem(r.content_id, r.title),
+              }))}
+            />
           ) : timeline.isLoading ? (
             <p className="text-[13px] text-muted">Loading…</p>
           ) : (

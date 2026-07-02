@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Brain, Info } from "lucide-react";
 import { api } from "../lib/api";
+import { ToggleGroup } from "../components/ui";
 import type { LearningProgress } from "../lib/types";
 import { Decisions } from "./Decisions";
 import { Contradictions } from "./Contradictions";
@@ -96,22 +97,14 @@ export function Mind() {
             )}
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-1 border-b border-border">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={`-mb-px rounded-t-lg px-3 py-2 text-[14px] transition-colors ${
-                  tab === t.key
-                    ? "border-b-2 border-accent font-medium text-accent"
-                    : "text-muted hover:text-text"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          <ToggleGroup
+            variant="tabs"
+            ariaLabel="Mind section"
+            className="mt-4"
+            value={tab}
+            onChange={setTab}
+            options={TABS.map((t) => ({ value: t.key, label: t.label }))}
+          />
         </div>
       </div>
 

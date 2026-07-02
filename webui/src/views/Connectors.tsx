@@ -9,6 +9,7 @@ import { ConnectorConfigForm } from "./ConnectorConfigForm";
 import { EdgeProtonCard } from "./EdgeProtonCard";
 import { EdgeFilesCard } from "./EdgeFilesCard";
 import { isDesktop } from "../lib/desktop";
+import { RecordList } from "../components/RecordList";
 import {
   Badge,
   Button,
@@ -168,21 +169,21 @@ export function Connectors() {
           hint="Install one from the marketplace below to start syncing data."
         />
       ) : (
-        <ul className="border-t border-border">
-          {instances.map((c: ConnectorInstance) => {
+        <RecordList
+          rows={instances.map((c: ConnectorInstance) => {
             const isDynamic = c.instance_id !== c.type_id; // a "+"-added account
-            return (
-              <li
-                key={c.instance_id}
-                className="flex items-center gap-3 border-b border-border px-1 py-3.5"
-              >
+            return {
+              id: c.instance_id,
+              leading: (
                 <span
                   aria-hidden
                   className="size-2.5 shrink-0 rounded-full"
                   style={{ background: healthColor(c.health) }}
                   title={c.health.status ?? "unknown"}
                 />
-                <div className="min-w-0 flex-1">
+              ),
+              content: (
+                <>
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">{c.display_name}</span>
                     {c.info.multi_instance && <Badge>{c.type_id}</Badge>}
@@ -203,7 +204,9 @@ export function Connectors() {
                           .filter(Boolean)
                           .join(" · ")}
                   </p>
-                </div>
+                </>
+              ),
+              trailing: (
                 <div className="flex shrink-0 items-center gap-1.5">
                   <button
                     onClick={() => setConfigId(c.instance_id)}
@@ -261,10 +264,10 @@ export function Connectors() {
                     {c.enabled ? "Disable" : "Enable"}
                   </Button>
                 </div>
-              </li>
-            );
+              ),
+            };
           })}
-        </ul>
+        />
       )}
 
       {multiTypes.length > 0 && (
@@ -298,13 +301,11 @@ export function Connectors() {
           hint="All available connectors are already configured."
         />
       ) : (
-        <ul className="border-t border-border">
-          {available.map((m: MarketplaceItem) => (
-            <li
-              key={m.id}
-              className="flex items-center gap-3 border-b border-border px-1 py-3.5"
-            >
-              <div className="min-w-0 flex-1">
+        <RecordList
+          rows={available.map((m: MarketplaceItem) => ({
+            id: m.id,
+            content: (
+              <>
                 <div className="flex items-center gap-2">
                   <span className="truncate font-medium">{m.display_name}</span>
                   {m.verified && <Badge>verified</Badge>}
@@ -315,7 +316,9 @@ export function Connectors() {
                     {m.description}
                   </p>
                 )}
-              </div>
+              </>
+            ),
+            trailing: (
               <Button
                 variant="ghost"
                 onClick={() => install.mutate(m.id)}
@@ -331,9 +334,9 @@ export function Connectors() {
                   </>
                 )}
               </Button>
-            </li>
-          ))}
-        </ul>
+            ),
+          }))}
+        />
       )}
     </Page>
   );

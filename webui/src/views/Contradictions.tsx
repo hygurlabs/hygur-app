@@ -7,7 +7,14 @@ import {
   useOpenSource,
 } from "../components/ContradictionList";
 import { useSlow } from "../lib/slow";
-import { EmptyState, ErrorBanner, Page, PageHeader, Skeleton } from "../components/ui";
+import {
+  EmptyState,
+  ErrorBanner,
+  Page,
+  PageHeader,
+  Skeleton,
+  ToggleGroup,
+} from "../components/ui";
 
 type Filter = "all" | "conflict" | "supersedes";
 
@@ -62,21 +69,14 @@ export function Contradictions() {
       />
 
       {all.length > 0 && (
-        <div className="mb-5 inline-flex rounded-lg border border-border bg-surface p-0.5 text-[13px]">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setFilter(t.id)}
-              className={`rounded-md px-3 py-1.5 transition-colors ${
-                filter === t.id
-                  ? "bg-accent-weak font-medium text-accent"
-                  : "text-muted hover:text-text"
-              }`}
-            >
-              {t.label} <span className="tnum text-faint">{t.count}</span>
-            </button>
-          ))}
-        </div>
+        <ToggleGroup
+          variant="segmented"
+          ariaLabel="Filter contradictions"
+          className="mb-5"
+          value={filter}
+          onChange={setFilter}
+          options={TABS.map((t) => ({ value: t.id, label: t.label, count: t.count }))}
+        />
       )}
 
       {error && (

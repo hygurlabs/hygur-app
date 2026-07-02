@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   StickyNote,
   MessageSquareText,
@@ -93,39 +94,43 @@ function useEscapeToDismiss() {
 
 function NotePane() {
   useEscapeToDismiss();
+  const qc = useQueryClient();
   const [text, setText] = useState("");
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     ref.current?.focus();
   }, []);
 
-  const save = async () => {
-    const content = text.trim();
-    if (!content || saving) return;
-    const title = (content.split("\n")[0] ?? "").trim().slice(0, 80) || "Quick note";
-    setSaving(true);
-    setError(null);
-    try {
-      await api.createNote(title, content);
+  // react-query for consistency with the rest of the app — a discrete write with
+  // free error/pending state and cache invalidation (the palette renders bare at
+  // /quick, but the query client is available from the root provider).
+  const save = useMutation({
+    mutationFn: () => {
+      const content = text.trim();
+      const title = (content.split("\n")[0] ?? "").trim().slice(0, 80) || "Quick note";
+      return api.createNote(title, content);
+    },
+    onSuccess: () => {
       setText("");
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2500);
+      qc.invalidateQueries({ queryKey: ["notes"] });
       ref.current?.focus();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the note");
-    } finally {
-      setSaving(false);
-    }
+    },
+  });
+
+  const submit = () => {
+    if (!text.trim() || save.isPending) return;
+    setSaved(false);
+    save.mutate();
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      void save();
+      submit();
     }
   };
 
@@ -141,18 +146,22 @@ function NotePane() {
       />
       <div className="mt-2 flex items-center gap-3">
         <button
-          onClick={() => void save()}
-          disabled={saving || !text.trim()}
+          onClick={submit}
+          disabled={save.isPending || !text.trim()}
           className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-surface transition-opacity disabled:opacity-40"
         >
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+          {save.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           Save note
         </button>
         <span className="flex items-center gap-1 text-[11px] text-faint">
           <CornerDownLeft size={12} /> ⌘↵ to save
         </span>
         {saved && <span className="text-[12px] text-accent">Saved ✓</span>}
-        {error && <span className="text-[12px] text-danger">{error}</span>}
+        {save.error && (
+          <span className="text-[12px] text-danger">
+            {save.error instanceof Error ? save.error.message : "Could not save the note"}
+          </span>
+        )}
       </div>
     </div>
   );

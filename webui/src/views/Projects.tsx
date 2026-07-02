@@ -319,20 +319,20 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
           hint="Open a note, mail or document and link it to this project."
         />
       ) : (
-        <ul className="border-t border-border">
-          {items.map((it) => (
-            <li
-              key={it.id}
-              className="flex items-center gap-3 border-b border-border px-1 py-3"
-            >
+        <RecordList
+          rows={items.map((it) => ({
+            id: it.id,
+            content: (
               <button
                 onClick={() => openItem(it.id, it.title, it.source_type)}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors hover:text-accent"
+                className="flex w-full min-w-0 items-center gap-2 text-left transition-colors hover:text-accent"
               >
                 <FolderOpen size={15} strokeWidth={1.75} className="shrink-0 text-faint" />
                 <span className="truncate font-medium">{it.title || "(untitled)"}</span>
                 <Badge>{srcLabel(it.source_type)}</Badge>
               </button>
+            ),
+            trailing: (
               <button
                 onClick={() => unlink.mutate(it.id)}
                 aria-label="Unlink"
@@ -340,9 +340,9 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
               >
                 <X size={15} strokeWidth={1.75} />
               </button>
-            </li>
-          ))}
-        </ul>
+            ),
+          }))}
+        />
       )}
     </Page>
   );

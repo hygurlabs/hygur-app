@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDate, fmtDateTime } from "../lib/format";
 import { useDetail } from "./DetailPanel";
+import { StatusBadge } from "./ui";
 import type { ReconciledConflict } from "../lib/types";
 
 /** Opens a cited source in the detail panel — the fetch-then-open used wherever
@@ -82,15 +83,11 @@ export function ContradictionList({
         >
           <div className="mb-1 flex items-start justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide ${
-                  c.verdict.kind === "conflict"
-                    ? "bg-danger/10 text-danger"
-                    : "bg-accent-weak text-accent"
-                }`}
+              <StatusBadge
+                variant={c.verdict.kind === "conflict" ? "contradiction" : "evolution"}
               >
                 {c.verdict.kind === "conflict" ? "Conflict" : "Evolution"}
-              </span>
+              </StatusBadge>
               <span className="text-[13.5px] font-medium text-text">
                 {c.entity} · {c.attribute}
               </span>

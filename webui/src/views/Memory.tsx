@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Check, X } from "lucide-react";
 import { api } from "../lib/api";
 import { useToast } from "../lib/toast";
+import { RecordList } from "../components/RecordList";
 import {
   Badge,
   Button,
@@ -11,6 +12,7 @@ import {
   Page,
   PageHeader,
   Skeleton,
+  TextInput,
 } from "../components/ui";
 
 const TYPES = ["fact", "preference", "action"] as const;
@@ -97,11 +99,11 @@ export function MemoryView() {
             </option>
           ))}
         </select>
-        <input
+        <TextInput
           value={content}
           onChange={(e) => setContent(e.target.value)}
           placeholder="Something Hygur should remember…"
-          className="min-w-[220px] flex-1 rounded-lg border border-border bg-surface px-3.5 py-2 text-sm text-text outline-none transition-colors placeholder:text-faint focus:border-accent"
+          className="min-w-[220px] flex-1"
         />
         <Button type="submit" disabled={!content.trim() || add.isPending}>
           <Plus size={16} strokeWidth={2} />
@@ -123,18 +125,21 @@ export function MemoryView() {
           <h2 className="mb-2.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">
             To review ({pend.length})
           </h2>
-          <ul className="flex flex-col gap-2">
-            {pend.map((m) => (
-              <li
-                key={m.memory_id}
-                className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent-weak/30 px-4 py-3"
-              >
-                <div className="min-w-0 flex-1">
+          <RecordList
+            variant="card"
+            accent
+            align="start"
+            rows={pend.map((m) => ({
+              id: m.memory_id,
+              content: (
+                <>
                   <div className="mb-1">
                     <Badge>{typeLabel(m.type)}</Badge>
                   </div>
                   <p className="text-[14px] text-text">{m.content}</p>
-                </div>
+                </>
+              ),
+              trailing: (
                 <div className="flex shrink-0 gap-1.5">
                   <button
                     onClick={() => accept.mutate(m.memory_id)}
@@ -153,19 +158,22 @@ export function MemoryView() {
                     <X size={15} strokeWidth={2} />
                   </button>
                 </div>
-              </li>
-            ))}
-          </ul>
+              ),
+            }))}
+          />
         </section>
       )}
 
       {list.isLoading ? (
         <Skeleton rows={4} />
       ) : memories.length > 0 ? (
-        <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-surface">
-          {memories.map((m) => (
-            <li key={m.memory_id} className="group flex items-start gap-3 px-4 py-3">
-              <div className="min-w-0 flex-1">
+        <RecordList
+          variant="card"
+          align="start"
+          rows={memories.map((m) => ({
+            id: m.memory_id,
+            content: (
+              <>
                 <div className="mb-1 flex items-center gap-2">
                   <Badge>{typeLabel(m.type)}</Badge>
                   {m.source === "extracted" && (
@@ -173,8 +181,10 @@ export function MemoryView() {
                   )}
                 </div>
                 <p className="text-[14px] text-text">{m.content}</p>
-              </div>
-              {confirmId === m.memory_id ? (
+              </>
+            ),
+            trailing:
+              confirmId === m.memory_id ? (
                 <span className="flex shrink-0 items-center gap-1.5 text-[12.5px]">
                   <span className="text-muted">Delete?</span>
                   <button
@@ -200,10 +210,9 @@ export function MemoryView() {
                 >
                   <Trash2 size={15} strokeWidth={1.75} />
                 </button>
-              )}
-            </li>
-          ))}
-        </ul>
+              ),
+          }))}
+        />
       ) : pend.length === 0 ? (
         <EmptyState
           title="Nothing remembered yet"

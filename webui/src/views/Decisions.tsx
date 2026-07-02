@@ -16,7 +16,16 @@ import { fmtDate } from "../lib/format";
 import type { Decision } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
 import { useToast } from "../lib/toast";
-import { Button, EmptyState, ErrorBanner, Page, PageHeader, Skeleton } from "../components/ui";
+import { RecordList } from "../components/RecordList";
+import {
+  Button,
+  EmptyState,
+  ErrorBanner,
+  Page,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+} from "../components/ui";
 
 export function Decisions() {
   const qc = useQueryClient();
@@ -221,10 +230,14 @@ export function Decisions() {
               <h2 className="mb-2 text-[12px] font-medium uppercase tracking-[0.09em] text-faint">
                 Proposed · {proposed.length}
               </h2>
-              <ul className="divide-y divide-border rounded-xl border border-accent/40 bg-accent-weak/20">
-                {proposed.map((d) => (
-                  <li key={d.id} className="flex items-start gap-3 px-3.5 py-3">
-                    <div className="min-w-0 flex-1">
+              <RecordList
+                variant="card"
+                accent
+                align="start"
+                rows={proposed.map((d) => ({
+                  id: d.id,
+                  content: (
+                    <>
                       <p className="text-[14px] text-text">{d.statement}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
                         {d.decided_on && <span className="tnum">{fmtDate(d.decided_on)}</span>}
@@ -236,7 +249,9 @@ export function Decisions() {
                         )}
                         {sourceChips(d)}
                       </div>
-                    </div>
+                    </>
+                  ),
+                  trailing: (
                     <div className="flex shrink-0 items-center gap-1.5">
                       <button
                         onClick={() => confirm.mutate(d.id)}
@@ -256,9 +271,9 @@ export function Decisions() {
                         <X size={15} strokeWidth={1.9} />
                       </button>
                     </div>
-                  </li>
-                ))}
-              </ul>
+                  ),
+                }))}
+              />
             </section>
           )}
 
@@ -268,12 +283,15 @@ export function Decisions() {
               <h2 className="mb-2 text-[12px] font-medium uppercase tracking-[0.09em] text-faint">
                 Standing
               </h2>
-              <ul className="divide-y divide-border rounded-xl border border-border bg-surface">
-                {settled.map((d) => {
+              <RecordList
+                variant="card"
+                align="start"
+                rows={settled.map((d) => {
                   const superseded = d.status === "superseded";
-                  return (
-                    <li key={d.id} className="flex items-start gap-3 px-3.5 py-3">
-                      <div className="min-w-0 flex-1">
+                  return {
+                    id: d.id,
+                    content: (
+                      <>
                         <p
                           className={`text-[14px] ${
                             superseded ? "text-muted line-through" : "text-text"
@@ -297,9 +315,7 @@ export function Decisions() {
                         )}
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
                           {superseded && (
-                            <span className="rounded bg-surface2 px-1.5 py-0.5 text-faint">
-                              superseded
-                            </span>
+                            <StatusBadge variant="superseded">superseded</StatusBadge>
                           )}
                           {d.decided_on && <span className="tnum">{fmtDate(d.decided_on)}</span>}
                           {projectName(d.project_id) && (
@@ -310,7 +326,9 @@ export function Decisions() {
                           )}
                           {sourceChips(d)}
                         </div>
-                      </div>
+                      </>
+                    ),
+                    trailing: (
                       <div className="flex shrink-0 items-center gap-1">
                         <button
                           onClick={() =>
@@ -353,10 +371,10 @@ export function Decisions() {
                           </button>
                         )}
                       </div>
-                    </li>
-                  );
+                    ),
+                  };
                 })}
-              </ul>
+              />
             </section>
           )}
         </>

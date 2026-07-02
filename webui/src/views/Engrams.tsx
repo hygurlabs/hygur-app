@@ -12,6 +12,7 @@ import {
   EmptyState,
   ErrorBanner,
   Button,
+  type StatusVariant,
 } from "../components/ui";
 
 /** Engrams — the discovered subjects and the memory Hygur consolidated around each.
@@ -95,21 +96,33 @@ function Dossier({
   }
 
   const tl = data.timeline ?? [];
-  const rows: RecordRow[] = tl.map((it) => ({
-    id: it.content_id,
-    title: it.title || "(untitled)",
-    badge: it.closed
+  const rows: RecordRow[] = tl.map((it) => {
+    // State badges route through StatusBadge (coloured); the descriptive
+    // "linked"/source-type fall back to the neutral Badge.
+    const badgeVariant: StatusVariant | undefined = it.closed
       ? "closed"
       : it.contradicted
         ? "contradiction"
-        : it.decision_status || (it.order === 2 ? "linked" : it.source_type),
-    meta: [
-      it.date_missing ? "no date" : fmtDate(it.date),
-      it.via_neighbor ? `via ${it.via_neighbor}` : "",
-    ]
-      .filter(Boolean)
-      .join(" · "),
-  }));
+        : it.decision_status
+          ? "decision"
+          : undefined;
+    return {
+      id: it.content_id,
+      title: it.title || "(untitled)",
+      badge: it.closed
+        ? "closed"
+        : it.contradicted
+          ? "contradiction"
+          : it.decision_status || (it.order === 2 ? "linked" : it.source_type),
+      badgeVariant,
+      meta: [
+        it.date_missing ? "no date" : fmtDate(it.date),
+        it.via_neighbor ? `via ${it.via_neighbor}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    };
+  });
 
   return (
     <Page>
