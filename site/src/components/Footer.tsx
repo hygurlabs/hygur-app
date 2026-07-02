@@ -2,6 +2,8 @@ import { GITHUB_URL, EDITIONS } from "../lib/content";
 import logo from "../assets/logo.jpg";
 
 const RESOURCES = [
+  // Internal path route (pre-rendered, crawlable) — no new tab.
+  { label: "Whitepaper", href: "/engram-ai", internal: true },
   { label: "Source code", href: GITHUB_URL },
   { label: "License (AGPL-3.0)", href: `${GITHUB_URL}/blob/main/LICENSE` },
 ];
@@ -68,8 +70,8 @@ export function Footer() {
                 <li key={r.label}>
                   <a
                     href={r.href}
-                    target="_blank"
-                    rel="noreferrer"
+                    target={r.internal ? undefined : "_blank"}
+                    rel={r.internal ? undefined : "noreferrer"}
                     className="text-sm text-muted transition-colors hover:text-text"
                   >
                     {r.label}

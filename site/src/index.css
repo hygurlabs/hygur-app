@@ -152,6 +152,46 @@ body::before {
   margin: 0 0 1rem;
 }
 
+/* Whitepaper long-form — a touch wider rhythm than the legal pages, with a
+   clear display-serif hierarchy for a document meant to be read end to end. */
+.paper-prose {
+  color: var(--muted);
+  line-height: 1.78;
+  font-size: 1.05rem;
+}
+.paper-prose > p {
+  margin: 0 0 1.15rem;
+}
+.paper-prose strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.paper-prose em {
+  font-style: italic;
+}
+.paper-prose h2 {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  font-variation-settings: "opsz" 40;
+  font-weight: 600;
+  font-size: clamp(1.5rem, 3vw, 1.9rem);
+  letter-spacing: -0.015em;
+  line-height: 1.16;
+  margin: 3rem 0 1.1rem;
+}
+.paper-prose h2:first-child {
+  margin-top: 0;
+}
+.paper-prose a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.paper-prose a:hover {
+  color: var(--accent-strong);
+}
+
 /* ── Motion system (calm, MOTION 4) ───────────────────────────────────────── */
 
 /* Scroll-entry reveal. `--d` staggers siblings; transform/opacity only. */
