@@ -1090,6 +1090,7 @@ func main() {
 	decisionScanner := scheduler.NewDecisionScanner(db, llmClient, logger)
 	decisionHandler := handlers.NewDecisionHandler(db, decisionScanner, logger)
 	decisionHandler.SetEmbeddingService(embeddingService)
+	decisionHandler.SetBrief(dailyBrief) // WP20: refresh positions synopsis on confirm/edit (nil-safe)
 	server.SetDecisionHandler(decisionHandler)
 	scheduler.NewDecisionScheduler(decisionScanner, 23, logger).Start(ctx)
 

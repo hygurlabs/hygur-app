@@ -13,6 +13,7 @@ import (
 	"github.com/hygur/sidecar/internal/scheduler"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/errgroup"
 )
 
 // BriefHandler exposes on-demand triggers for the daily brief task plus the
@@ -389,6 +390,7 @@ func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
 		writeBriefError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "not configured")
 		return
 	}
+	start := time.Now()
 	ctx := r.Context()
 	const (
 		maxContradictions = 5
@@ -396,56 +398,89 @@ func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
 		maxTasks          = 10
 	)
 
-	// Where things stand: the rolling life synopsis (compact, grounded).
-	var synopsis string
-	if ch, err := h.store.GetChronicleChapter(ctx, "life"); err == nil && ch != nil {
-		synopsis = ch.Synopsis
-	}
+	// This is composition of PRECOMPUTED state, never on-request generation: every
+	// step below is a cheap read (or a cache serve) and makes ZERO LLM calls. The
+	// steps are independent, so run them concurrently — WP19's WAL makes concurrent
+	// SQLite reads safe. Each degrades on its own, so a step error is logged inside
+	// the goroutine, not propagated (no sibling cancellation).
+	var (
+		synopsis       string
+		positions      string
+		contradictions = make([]contradict.ReconciledConflict, 0, maxContradictions)
+		proposed       = []*store.Decision{}
+		dueTasks       = []*store.Task{}
+		upcoming       []scheduler.Upcoming
+	)
+	var g errgroup.Group
 
-	// Open contradictions (non-dismissed). Uses the cached/durable reconcile path.
-	contradictions := make([]contradict.ReconciledConflict, 0, maxContradictions)
-	if h.brief != nil {
-		if conflicts, _, err := h.brief.SemanticContradictions(ctx, ""); err == nil {
-			dismissed, _ := h.store.DismissedContradictions(ctx)
-			for _, c := range conflicts {
-				if dismissed[c.Key] {
-					continue
-				}
-				contradictions = append(contradictions, c)
-				if len(contradictions) >= maxContradictions {
-					break
-				}
-			}
-		} else {
-			h.logger.Debug().Err(err).Msg("digest: contradictions unavailable")
+	// Where things stand: the rolling life synopsis (compact, grounded).
+	g.Go(func() error {
+		if ch, err := h.store.GetChronicleChapter(ctx, "life"); err == nil && ch != nil {
+			synopsis = ch.Synopsis
 		}
-	}
+		return nil
+	})
+
+	// Open contradictions (non-dismissed), served from precomputed state
+	// (stale-while-revalidate) — never an on-request LLM reconcile.
+	g.Go(func() error {
+		if h.brief == nil {
+			return nil
+		}
+		conflicts, _ := h.brief.SemanticContradictionsCached(ctx, "")
+		dismissed, _ := h.store.DismissedContradictions(ctx)
+		for _, c := range conflicts {
+			if dismissed[c.Key] {
+				continue
+			}
+			contradictions = append(contradictions, c)
+			if len(contradictions) >= maxContradictions {
+				break
+			}
+		}
+		return nil
+	})
 
 	// Decisions awaiting confirmation.
-	proposed := []*store.Decision{}
-	if ds, err := h.store.ListDecisions(ctx, "", "proposed"); err == nil {
-		if len(ds) > maxDecisions {
-			ds = ds[:maxDecisions]
+	g.Go(func() error {
+		if ds, err := h.store.ListDecisions(ctx, "", "proposed"); err == nil {
+			if len(ds) > maxDecisions {
+				ds = ds[:maxDecisions]
+			}
+			proposed = ds
 		}
-		proposed = ds
-	}
+		return nil
+	})
 
 	// Tasks due within the next week (open, dated, soonest first).
-	dueTasks := []*store.Task{}
-	cutoff := time.Now().AddDate(0, 0, 7).UTC().Format(time.RFC3339)
-	if ts, err := h.store.TasksDueBefore(ctx, cutoff); err == nil {
-		if len(ts) > maxTasks {
-			ts = ts[:maxTasks]
+	g.Go(func() error {
+		cutoff := time.Now().AddDate(0, 0, 7).UTC().Format(time.RFC3339)
+		if ts, err := h.store.TasksDueBefore(ctx, cutoff); err == nil {
+			if len(ts) > maxTasks {
+				ts = ts[:maxTasks]
+			}
+			dueTasks = ts
 		}
-		dueTasks = ts
-	}
+		return nil
+	})
 
 	// Where the user stands: a grounded summary of their confirmed decisions
-	// (Angle A-2b). Regenerated here on a decision-set change, then cached.
-	var positions string
-	if h.brief != nil {
-		positions = h.brief.PositionsSynopsis(ctx, true)
-	}
+	// (Angle A-2b) — served from the fingerprint-addressed cache; a miss schedules
+	// an async regeneration (see PositionsSynopsisCached). No on-request LLM call.
+	g.Go(func() error {
+		positions = h.brief.PositionsSynopsisCached(ctx)
+		return nil
+	})
+
+	// Coming up: deterministic prospection, process-cached (no corpus reload on a hit).
+	g.Go(func() error {
+		upcoming = h.brief.UpcomingItems(ctx, 45)
+		return nil
+	})
+
+	_ = g.Wait()
+
+	h.logger.Info().Int64("digest_ms", time.Since(start).Milliseconds()).Msg("digest served")
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -454,7 +489,7 @@ func (h *BriefHandler) Digest(w http.ResponseWriter, r *http.Request) {
 		"contradictions":     contradictions,
 		"proposed_decisions": proposed,
 		"due_tasks":          dueTasks,
-		"upcoming":           h.brief.UpcomingItems(ctx, 45),
+		"upcoming":           upcoming,
 	})
 }
 

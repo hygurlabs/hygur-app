@@ -26,6 +26,7 @@ type DecisionHandler struct {
 	store            *store.DB
 	scanner          *scheduler.DecisionScanner
 	embeddingService *llm.EmbeddingService
+	brief            *scheduler.DailyBrief // optional: to refresh the positions synopsis on a decision change
 	logger           zerolog.Logger
 }
 
@@ -39,6 +40,11 @@ func NewDecisionHandler(store *store.DB, scanner *scheduler.DecisionScanner, log
 // indexed like notes. Optional; without it bodies still persist and stay
 // searchable via FTS.
 func (h *DecisionHandler) SetEmbeddingService(svc *llm.EmbeddingService) { h.embeddingService = svc }
+
+// SetBrief wires the daily-brief task so confirming/editing a standing decision can
+// refresh the standing-positions synopsis off the request path (WP20). Optional;
+// nil-safe — without it the synopsis simply regenerates lazily on the next /digest.
+func (h *DecisionHandler) SetBrief(b *scheduler.DailyBrief) { h.brief = b }
 
 // DecisionResponse is a decision with its note-like properties (rationale, tags,
 // project) hydrated alongside the decision state.
@@ -330,6 +336,12 @@ func (h *DecisionHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if d == nil {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load decision")
 		return
+	}
+	// WP20: confirming/editing a standing decision changes the standing-positions
+	// fingerprint — regenerate the synopsis off the request path (singleflight-guarded,
+	// and a no-op LLM-wise if the fingerprint didn't actually move). Nil-safe.
+	if d.Status == store.DecisionStanding {
+		h.brief.RefreshPositionsAsync()
 	}
 	writeKnowledgeJSON(w, http.StatusOK, h.toResponse(r.Context(), d))
 }

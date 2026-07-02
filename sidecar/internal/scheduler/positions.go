@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/prose"
@@ -76,6 +77,45 @@ func (d *DailyBrief) PositionsSynopsis(ctx context.Context, allowGenerate bool) 
 		d.logger.Debug().Err(perr).Msg("cache positions synopsis")
 	}
 	return text
+}
+
+// PositionsSynopsisCached is the request-path (digest) variant: it NEVER calls the
+// LLM. It returns the fingerprint-addressed cached summary when it is current; on a
+// miss (stale or absent) it serves whatever is cached now (possibly "" or stale) and
+// kicks a singleflight-guarded background regeneration so the NEXT request is current.
+// Nil-safe.
+func (d *DailyBrief) PositionsSynopsisCached(ctx context.Context) string {
+	if d == nil || d.store == nil {
+		return ""
+	}
+	decs, err := d.store.ListDecisions(ctx, "", store.DecisionStanding)
+	if err != nil || len(decs) == 0 {
+		return ""
+	}
+	fp := positionsFingerprint(decs)
+	cached, cachedFP, found, _ := d.store.GetPositionsSynopsis(ctx)
+	if found && cachedFP == fp {
+		return cached // current
+	}
+	d.RefreshPositionsAsync() // stale/absent: converge in the background
+	return cached
+}
+
+// RefreshPositionsAsync regenerates the standing-positions summary off the request
+// path. Singleflight-guarded: concurrent callers (many /digest hits, a decision
+// confirm/edit) collapse to at most one in-flight LLM regeneration; the next request
+// serves the fresh, fingerprint-addressed value. Nil-safe, best-effort.
+func (d *DailyBrief) RefreshPositionsAsync() {
+	if d == nil {
+		return
+	}
+	go func() {
+		_, _, _ = d.positionsSF.Do("positions", func() (any, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			return d.PositionsSynopsis(ctx, true), nil
+		})
+	}()
 }
 
 // positionsFingerprint hashes the standing-decision set's identity (id + statement +

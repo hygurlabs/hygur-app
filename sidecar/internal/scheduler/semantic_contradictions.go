@@ -115,6 +115,69 @@ func (d *DailyBrief) SemanticContradictions(ctx context.Context, projectID strin
 	return reconciled, len(items), nil
 }
 
+// SemanticContradictionsCached is the request-path (digest) variant: it NEVER blocks
+// on the serial per-cluster LLM reconcile. Stale-while-revalidate — it serves the
+// freshest cached conflicts (in-memory, else the durable cache, else empty) and, when
+// that value is stale or absent, kicks a singleflight-guarded background refresh so
+// the NEXT request is current. Nil-safe. projectID "" = all mail+notes.
+func (d *DailyBrief) SemanticContradictionsCached(ctx context.Context, projectID string) ([]contradict.ReconciledConflict, int) {
+	if d == nil || d.store == nil {
+		return []contradict.ReconciledConflict{}, 0
+	}
+	key := "proj=" + projectID
+
+	// 1) In-memory cache (populated by a prior compute this process). Serve it even
+	//    if expired; refresh in the background when stale.
+	semContraMu.Lock()
+	e, ok := semContraCache[key]
+	semContraMu.Unlock()
+	if ok {
+		if time.Now().After(e.expires) {
+			d.triggerContradictionsRefresh(projectID)
+		}
+		return e.conflicts, e.scanned
+	}
+
+	// 2) Durable cache (survives a restart). Serve it even if past its TTL; repopulate
+	//    the in-memory cache with its true remaining life, and refresh when stale.
+	if js, scanned, age, found, err := d.store.GetContradictionCache(ctx, projectID); err == nil && found {
+		var cached []contradict.ReconciledConflict
+		if json.Unmarshal([]byte(js), &cached) == nil {
+			if cached == nil {
+				cached = []contradict.ReconciledConflict{}
+			}
+			semContraMu.Lock()
+			semContraCache[key] = semContraEntry{conflicts: cached, scanned: scanned, expires: time.Now().Add(semanticContradictionsTTL - age)}
+			semContraMu.Unlock()
+			if age >= semanticContradictionsTTL {
+				d.triggerContradictionsRefresh(projectID)
+			}
+			return cached, scanned
+		}
+	}
+
+	// 3) Absolute cold — nothing cached anywhere. Serve empty, refresh asynchronously.
+	d.triggerContradictionsRefresh(projectID)
+	return []contradict.ReconciledConflict{}, 0
+}
+
+// triggerContradictionsRefresh recomputes the reconciled conflicts for a scope off the
+// request path. Singleflight-guarded per scope so concurrent /digest hits collapse to
+// at most one in-flight reconcile; the recompute writes through both caches. Nil-safe.
+func (d *DailyBrief) triggerContradictionsRefresh(projectID string) {
+	if d == nil {
+		return
+	}
+	go func() {
+		_, _, _ = d.contradictionsSF.Do("proj="+projectID, func() (any, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			_, _, err := d.SemanticContradictions(ctx, projectID)
+			return nil, err
+		})
+	}()
+}
+
 // reconcileCached judges the candidate clusters using the durable per-cluster
 // verdict cache: a cluster Key encodes its exact claim set, so a verdict holds for
 // that Key forever. Only clusters with no cached verdict (new or claim-changed)
@@ -253,14 +316,53 @@ type Upcoming struct {
 	Detail string `json:"detail"` // "every 31d" | "decision"
 }
 
+// upcomingCacheEntry is one process-cached "coming up" result. count is the
+// knowledge_items total at compute time — a cheap invalidation signal (a changed
+// corpus size means new/removed items, so recompute).
+type upcomingCacheEntry struct {
+	items   []Upcoming
+	count   int
+	expires time.Time
+}
+
+// upcomingCacheTTL bounds how long a cached "coming up" result is served when the
+// corpus size is unchanged.
+const upcomingCacheTTL = 15 * time.Minute
+
 // UpcomingItems is the prospection surface (Conséquence): recurring subjects whose
 // next occurrence is within ~withinDays (not >1w overdue), plus standing decisions
 // carrying a future-dated obligation in their text. Fully deterministic (no LLM,
 // no claim extraction) — sorted soonest-first. Nil-safe.
+//
+// WP20: process-cached (15 min TTL, invalidated when the knowledge_items count
+// changes) so a /digest doesn't reload the entire mail+notes corpus every time.
 func (d *DailyBrief) UpcomingItems(ctx context.Context, withinDays int) []Upcoming {
 	if d == nil || d.store == nil {
 		return nil
 	}
+	count, cerr := d.store.CountKnowledgeItems(ctx)
+	if cerr == nil {
+		d.upcomingMu.Lock()
+		e, ok := d.upcomingCache[withinDays]
+		d.upcomingMu.Unlock()
+		if ok && e.count == count && time.Now().Before(e.expires) {
+			return e.items
+		}
+	}
+	out := d.computeUpcoming(ctx, withinDays)
+	if cerr == nil {
+		d.upcomingMu.Lock()
+		if d.upcomingCache == nil {
+			d.upcomingCache = map[int]upcomingCacheEntry{}
+		}
+		d.upcomingCache[withinDays] = upcomingCacheEntry{items: out, count: count, expires: time.Now().Add(upcomingCacheTTL)}
+		d.upcomingMu.Unlock()
+	}
+	return out
+}
+
+// computeUpcoming is the uncached scan behind UpcomingItems (loads the corpus).
+func (d *DailyBrief) computeUpcoming(ctx context.Context, withinDays int) []Upcoming {
 	now := time.Now().UTC()
 	from, horizon := now.AddDate(0, 0, -7), now.AddDate(0, 0, withinDays)
 	inWindow := func(t time.Time) bool { return !t.Before(from) && !t.After(horizon) }

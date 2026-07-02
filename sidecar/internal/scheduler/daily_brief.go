@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hygur/sidecar/internal/config"
@@ -16,6 +17,7 @@ import (
 	"github.com/hygur/sidecar/internal/prose"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/singleflight"
 )
 
 // dailyBriefPromptBase is the daily-brief system prompt. Reasoning-capable
@@ -38,6 +40,19 @@ type DailyBrief struct {
 	// notify, when set, fires after the main daily brief is published — used to
 	// send a Web Push so the user is nudged even with the tab closed. Best-effort.
 	notify func(ctx context.Context, title, body string)
+
+	// WP20 — /digest serves precomputed state, never blocking on an LLM. These
+	// singleflight groups guard the background (re)generation of the precomputed
+	// surfaces so concurrent /digest hits (and a decision confirm/edit) collapse
+	// to at most one in-flight LLM call per surface.
+	positionsSF      singleflight.Group
+	contradictionsSF singleflight.Group
+	// upcomingCache is the process cache for the deterministic "coming up" surface
+	// (keyed by window days); it avoids reloading the whole mail+notes corpus on
+	// every /digest. Invalidated when the knowledge_items count changes or the TTL
+	// expires.
+	upcomingMu    sync.Mutex
+	upcomingCache map[int]upcomingCacheEntry
 }
 
 // SetBriefNotifier registers a callback fired after the primary daily brief is
