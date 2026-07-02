@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { api } from "../lib/api";
 import { native } from "../lib/native";
+import { useToast } from "../lib/toast";
 import type { ConfigField } from "../lib/types";
 import { Button, ErrorBanner, Page, Skeleton, TextInput } from "../components/ui";
 
@@ -24,6 +25,8 @@ export function ConnectorConfigForm({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
+  const fail = (e: unknown) => toast.error(`Action failed: ${(e as Error).message}`);
   const detailQ = useQuery({
     queryKey: ["connector", id],
     queryFn: () => api.connectorDetail(id),
@@ -89,6 +92,7 @@ export function ConnectorConfigForm({
       qc.invalidateQueries({ queryKey: ["connector", id] });
       qc.invalidateQueries({ queryKey: ["connectors"] });
     },
+    onError: fail,
   });
 
   const oauth = useMutation({
@@ -97,6 +101,10 @@ export function ConnectorConfigForm({
       const { url } = await api.connectorAuthUrl(id);
       await native.openExternal(url);
       setOauthStarted(true);
+    },
+    // save.mutateAsync surfaces its own failure; only report steps unique to oauth.
+    onError: (e) => {
+      if (!save.error) fail(e);
     },
   });
   const oauthSubmit = useMutation({
@@ -107,6 +115,7 @@ export function ConnectorConfigForm({
       qc.invalidateQueries({ queryKey: ["connector", id] });
       qc.invalidateQueries({ queryKey: ["connectors"] });
     },
+    onError: fail,
   });
 
   if (detailQ.isLoading || !detail) {
@@ -146,14 +155,6 @@ export function ConnectorConfigForm({
       </h1>
       {detail.info.description && (
         <p className="mb-6 text-[13.5px] text-muted">{detail.info.description}</p>
-      )}
-
-      {(save.error || oauth.error || oauthSubmit.error) && (
-        <ErrorBanner
-          message={`Action failed: ${
-            ((save.error || oauth.error || oauthSubmit.error) as Error).message
-          }`}
-        />
       )}
 
       {(detail.config_schema.groups ?? []).map((group) => (

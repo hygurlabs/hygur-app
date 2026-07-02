@@ -13,6 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ItemMeta } from "./ItemMeta";
 import { api } from "../lib/api";
+import { useToast } from "../lib/toast";
 
 export interface DetailData {
   title: string;
@@ -39,6 +40,7 @@ const isMail = (st?: string) => st === "mail" || st === "email";
 export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const [data, setData] = useState<DetailData | null>(null);
   const [taskDone, setTaskDone] = useState(false);
   const [taskError, setTaskError] = useState(false);
@@ -75,10 +77,11 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       });
       qc.invalidateQueries({ queryKey: ["tasks"] });
       setTaskDone(true);
-    } catch {
+    } catch (e) {
       setTaskError(true);
+      toast.error(`Couldn't create the task: ${(e as Error).message}`);
     }
-  }, [data, qc]);
+  }, [data, qc, toast]);
 
   const draftReply = useCallback(async () => {
     if (!data?.contentId) return;

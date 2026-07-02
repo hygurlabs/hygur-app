@@ -6,7 +6,8 @@ import { BookCheck, BookOpen, ChevronLeft, ChevronRight, Sparkles } from "lucide
 import { api } from "../lib/api";
 import type { ChronicleAct } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
-import { Button, EmptyState, ErrorBanner, Page, PageHeader, Skeleton } from "../components/ui";
+import { useToast } from "../lib/toast";
+import { Button, EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
 
 const LIFE = "life";
 
@@ -37,6 +38,7 @@ function citedRefs(markdown: string, sources: string[]): number[] {
 export function Chronicle() {
   const qc = useQueryClient();
   const openSource = useOpenSource();
+  const toast = useToast();
   const chaptersQ = useQuery({ queryKey: ["chronicle", "chapters"], queryFn: () => api.chronicle() });
   const chapters = chaptersQ.data?.chapters ?? [];
 
@@ -62,7 +64,14 @@ export function Chronicle() {
     window.setTimeout(() => qc.invalidateQueries({ queryKey: ["chronicle"] }), 22000);
     window.setTimeout(() => setGenerating(false), 24000);
   };
-  const run = useMutation({ mutationFn: () => api.chronicleRun(), onSuccess: scheduleRefetch });
+  const run = useMutation({
+    mutationFn: () => api.chronicleRun(),
+    onSuccess: () => {
+      toast.success("Writing today's entry — it'll appear shortly.");
+      scheduleRefetch();
+    },
+    onError: (e) => toast.error(`Couldn't start the entry: ${(e as Error).message}`),
+  });
 
   const [closeOpen, setCloseOpen] = useState(false);
   const [closeNote, setCloseNote] = useState("");
@@ -73,6 +82,7 @@ export function Chronicle() {
       setCloseNote("");
       scheduleRefetch();
     },
+    onError: (e) => toast.error(`Couldn't close the chapter: ${(e as Error).message}`),
   });
 
   const [reopenOpen, setReopenOpen] = useState(false);
@@ -87,6 +97,7 @@ export function Chronicle() {
       qc.invalidateQueries({ queryKey: ["chronicle"] }); // status flips back to open
       window.setTimeout(() => setReopenedHint(false), 14000);
     },
+    onError: (e) => toast.error(`Couldn't reopen the chapter: ${(e as Error).message}`),
   });
 
   const isProject = selected !== LIFE;
@@ -115,14 +126,6 @@ export function Chronicle() {
         <p className="mb-3 text-[12.5px] text-muted">
           Writing in the background — it'll appear here shortly.
         </p>
-      )}
-
-      {(run.error || closeChapter.error || reopenChapter.error) && (
-        <ErrorBanner
-          message={`Action failed: ${
-            ((run.error || closeChapter.error || reopenChapter.error) as Error).message
-          }`}
-        />
       )}
 
       {/* Chapter rail */}

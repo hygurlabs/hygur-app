@@ -15,11 +15,13 @@ import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
 import type { Decision } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
+import { useToast } from "../lib/toast";
 import { Button, EmptyState, ErrorBanner, Page, PageHeader, Skeleton } from "../components/ui";
 
 export function Decisions() {
   const qc = useQueryClient();
   const openSource = useOpenSource();
+  const toast = useToast();
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["decisions"],
@@ -50,17 +52,24 @@ export function Decisions() {
       setProjectId("");
       setDecidedOn("");
       invalidate();
+      toast.success("Decision logged.");
     },
+    onError: (e) => toast.error(`Couldn't log the decision: ${(e as Error).message}`),
   });
 
   const confirm = useMutation({
     mutationFn: (id: string) => api.updateDecision(id, { status: "standing" }),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      toast.success("Decision confirmed.");
+    },
+    onError: (e) => toast.error(`Couldn't confirm the decision: ${(e as Error).message}`),
   });
   const supersede = useMutation({
     mutationFn: ({ id, to }: { id: string; to: string }) =>
       api.updateDecision(id, { status: to }),
     onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't update the decision: ${(e as Error).message}`),
   });
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteDecision(id),
@@ -68,6 +77,7 @@ export function Decisions() {
       setConfirmId(null);
       invalidate();
     },
+    onError: (e) => toast.error(`Couldn't remove the decision: ${(e as Error).message}`),
   });
   // Per-row delete confirm for standing decisions (the inline Notes/Tags pattern).
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -83,6 +93,7 @@ export function Decisions() {
       window.setTimeout(() => invalidate(), 20000);
       window.setTimeout(() => setScanning(false), 22000);
     },
+    onError: (e) => toast.error(`Couldn't start the scan: ${(e as Error).message}`),
   });
 
   const decisions = data?.decisions ?? [];
@@ -128,13 +139,6 @@ export function Decisions() {
         <ErrorBanner
           message={`Couldn't load decisions: ${(error as Error).message}`}
           onRetry={() => refetch()}
-        />
-      )}
-      {(confirm.error || scan.error || remove.error || supersede.error) && (
-        <ErrorBanner
-          message={`Action failed: ${
-            ((confirm.error || scan.error || remove.error || supersede.error) as Error).message
-          }`}
         />
       )}
 

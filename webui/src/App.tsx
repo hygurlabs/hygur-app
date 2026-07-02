@@ -7,6 +7,7 @@ import { QuickCapture } from "./views/QuickCapture";
 import { Digest } from "./views/Digest";
 import { DetailPanelProvider } from "./components/DetailPanel";
 import { ActivityProvider } from "./lib/activity";
+import { ToastProvider } from "./lib/toast";
 import { useUpdateAvailable } from "./lib/version";
 import { Ask } from "./views/Ask";
 import { Library } from "./views/Library";
@@ -49,7 +50,8 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
   if (pathname === "/quick") return <QuickCapture />;
 
   return (
-    <ActivityProvider>
+    <ToastProvider>
+      <ActivityProvider>
       <DetailPanelProvider>
         {firstRun ? (
           <FirstRun onDone={() => setFirstRun(false)} />
@@ -143,6 +145,7 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
             mobile browser, not already standalone, not the native shell). */}
         <InstallPrompt />
       </DetailPanelProvider>
-    </ActivityProvider>
+      </ActivityProvider>
+    </ToastProvider>
   );
 }

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "../lib/api";
 import { DEFAULT_TAG_COLOR, srcLabel } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { Tag } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
 import { RecordList, type RecordRow } from "../components/RecordList";
@@ -18,6 +19,7 @@ import {
 
 export function Tags() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [confirmId, setConfirmId] = useState<string | null>(null);
   // When set, drill into a tag's items instead of the tag list.
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
@@ -36,6 +38,7 @@ export function Tags() {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["knowledge-items"] });
     },
+    onError: (e) => toast.error(`Couldn't delete the tag: ${(e as Error).message}`),
   });
 
   const tags: Tag[] = useMemo(
@@ -63,12 +66,6 @@ export function Tags() {
           onRetry={() => refetch()}
         />
       )}
-      {remove.error && (
-        <ErrorBanner
-          message={`Couldn't delete the tag: ${(remove.error as Error).message}`}
-        />
-      )}
-
       {isLoading ? (
         <Skeleton rows={5} />
       ) : tags.length > 0 ? (

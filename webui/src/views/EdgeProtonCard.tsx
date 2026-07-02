@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { getDesktopConfig, setDesktopConfig } from "../lib/desktop";
 import { fmtDateTime, fmtNumber } from "../lib/format";
+import { useToast } from "../lib/toast";
 
 /** Proton "connector" for the cloud desktop thin client. Proton Bridge lives on
  *  THIS device (loopback), so the cloud pod can never reach it — this card talks
@@ -12,6 +13,7 @@ import { fmtDateTime, fmtNumber } from "../lib/format";
  *  Bridge) and when the sidecar isn't a thin client (/edge → 503). */
 export function EdgeProtonCard() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [folders, setFolders] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -43,6 +45,7 @@ export function EdgeProtonCard() {
         void qc.invalidateQueries({ queryKey: ["mail-count"] });
       }, 1500);
     },
+    onError: (e) => toast.error(`Couldn't start the sync: ${(e as Error).message}`),
   });
 
   // Total mail indexed in the library (cloud KB) — the "something is happening"

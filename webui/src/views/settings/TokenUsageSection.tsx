@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { fmtNumber } from "../../lib/format";
+import { useToast } from "../../lib/toast";
 import type {
   TokenPeriodUsage,
   TokenPricing,
@@ -73,6 +74,7 @@ function PriceField({
 
 export function TokenUsageSection({ managed }: { managed: boolean }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data } = useQuery({
     queryKey: ["usage"],
     queryFn: api.getTokenUsage,
@@ -88,6 +90,7 @@ export function TokenUsageSection({ managed }: { managed: boolean }) {
   const save = useMutation({
     mutationFn: (p: TokenPricing) => api.setTokenPricing(p),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["usage"] }),
+    onError: (e) => toast.error(`Couldn't save prices: ${(e as Error).message}`),
   });
 
   if (!data || !price) {
@@ -224,11 +227,6 @@ export function TokenUsageSection({ managed }: { managed: boolean }) {
         />
       </Row>
       <div className="flex items-center justify-end gap-3 px-4 py-3">
-        {save.error && (
-          <span className="text-[12.5px] text-danger">
-            {(save.error as Error).message}
-          </span>
-        )}
         <Button
           onClick={() => save.mutate(price)}
           disabled={!dirty || save.isPending}

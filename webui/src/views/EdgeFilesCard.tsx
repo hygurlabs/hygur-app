@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { getDesktopConfig, setDesktopConfig } from "../lib/desktop";
+import { useToast } from "../lib/toast";
 
 /** Local files for the cloud desktop thin client. The pod can't read this Mac's
  *  filesystem, so a chosen folder is indexed ON-DEVICE by the edge runner and its
@@ -10,6 +11,7 @@ import { getDesktopConfig, setDesktopConfig } from "../lib/desktop";
  *  sidecar (same gate as the Proton card: /edge probe, not isDesktop()). */
 export function EdgeFilesCard() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [path, setPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -30,6 +32,7 @@ export function EdgeFilesCard() {
   const sync = useMutation({
     mutationFn: () => api.edgeSync(),
     onSuccess: () => setTimeout(() => void qc.invalidateQueries({ queryKey: ["edge-status"] }), 1500),
+    onError: (e) => toast.error(`Couldn't start the sync: ${(e as Error).message}`),
   });
 
   const errMsg = statusQ.error instanceof Error ? statusQ.error.message : "";

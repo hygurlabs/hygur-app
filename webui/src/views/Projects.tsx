@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, ArrowLeft, Trash2, X, FolderOpen } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDate, srcLabel } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { Project } from "../lib/types";
 import { useDetail } from "../components/DetailPanel";
 import { RecordList, type RecordRow } from "../components/RecordList";
@@ -20,6 +21,7 @@ import {
 
 export function Projects() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [name, setName] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -34,7 +36,9 @@ export function Projects() {
       setName("");
       qc.invalidateQueries({ queryKey: ["projects"] });
       setOpenId(p.id);
+      toast.success("Project created.");
     },
+    onError: (e) => toast.error(`Couldn't create the project: ${(e as Error).message}`),
   });
 
   if (openId) {
@@ -99,6 +103,7 @@ export function Projects() {
 
 function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const openDetail = useDetail();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -137,6 +142,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const save = useMutation({
     mutationFn: () => api.updateProject(id, { name, description, tags }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+    onError: (e) => toast.error(`Couldn't save the project: ${(e as Error).message}`),
   });
   const remove = useMutation({
     mutationFn: () => api.deleteProject(id),
@@ -144,6 +150,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["projects"] });
       onClose();
     },
+    onError: (e) => toast.error(`Couldn't delete the project: ${(e as Error).message}`),
   });
   const unlink = useMutation({
     mutationFn: (contentId: string) => api.unlinkItemFromProject(contentId),
@@ -151,6 +158,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["project-items", id] });
       qc.invalidateQueries({ queryKey: ["projects"] });
     },
+    onError: (e) => toast.error(`Couldn't unlink the item: ${(e as Error).message}`),
   });
   // Create a note and link it to this project in one step.
   const addNote = useMutation({
@@ -165,6 +173,7 @@ function ProjectDetail({ id, onClose }: { id: string; onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["project-items", id] });
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
+    onError: (e) => toast.error(`Couldn't add the note: ${(e as Error).message}`),
   });
 
   async function openItem(contentId: string, title: string, sourceType: string) {

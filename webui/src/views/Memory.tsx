@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Check, X } from "lucide-react";
 import { api } from "../lib/api";
+import { useToast } from "../lib/toast";
 import {
   Badge,
   Button,
@@ -26,6 +27,7 @@ const typeLabel = (t: string) => TYPE_LABELS[t] ?? t;
 
 export function MemoryView() {
   const qc = useQueryClient();
+  const toast = useToast();
   const invalidate = () => qc.invalidateQueries({ queryKey: ["memories"] });
 
   const list = useQuery({ queryKey: ["memories", "list"], queryFn: () => api.memories() });
@@ -42,17 +44,29 @@ export function MemoryView() {
       setContent("");
       invalidate();
     },
+    onError: (e) => toast.error(`Couldn't add that: ${(e as Error).message}`),
   });
-  const accept = useMutation({ mutationFn: (id: string) => api.acceptMemory(id), onSuccess: invalidate });
-  const discard = useMutation({ mutationFn: (id: string) => api.discardMemory(id), onSuccess: invalidate });
+  const accept = useMutation({
+    mutationFn: (id: string) => api.acceptMemory(id),
+    onSuccess: () => {
+      invalidate();
+      toast.success("Memory kept.");
+    },
+    onError: (e) => toast.error(`Couldn't keep that: ${(e as Error).message}`),
+  });
+  const discard = useMutation({
+    mutationFn: (id: string) => api.discardMemory(id),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't discard that: ${(e as Error).message}`),
+  });
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteMemory(id),
     onSuccess: () => {
       setConfirmId(null);
       invalidate();
     },
+    onError: (e) => toast.error(`Couldn't forget that: ${(e as Error).message}`),
   });
-  const mutErr = add.error || accept.error || discard.error || remove.error;
 
   const memories = list.data?.memories ?? [];
   const pend = pending.data?.memories ?? [];
@@ -104,10 +118,6 @@ export function MemoryView() {
           }}
         />
       )}
-      {mutErr && (
-        <ErrorBanner message={`Couldn't update your memory: ${(mutErr as Error).message}`} />
-      )}
-
       {pend.length > 0 && (
         <section className="mb-7">
           <h2 className="mb-2.5 text-[11.5px] font-medium uppercase tracking-[0.09em] text-faint">

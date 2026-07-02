@@ -18,6 +18,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { Note } from "../lib/types";
 import { RecordList, type RecordRow } from "../components/RecordList";
 import { TagInput } from "../components/TagInput";
@@ -46,6 +47,7 @@ const NOTE_TOOLBAR = [
 
 export function Notes() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [title, setTitle] = useState("");
   const [editing, setEditing] = useState<Note | null>(null);
   // Compact list mode (one line per note), remembered across sessions.
@@ -79,7 +81,9 @@ export function Notes() {
       setTitle("");
       qc.invalidateQueries({ queryKey: ["notes"] });
       setEditing(note);
+      toast.success("Note created.");
     },
+    onError: (e) => toast.error(`Couldn't create the note: ${(e as Error).message}`),
   });
 
   if (editing) {
@@ -138,12 +142,6 @@ export function Notes() {
           onRetry={() => refetch()}
         />
       )}
-      {create.error && (
-        <ErrorBanner
-          message={`Couldn't create the note: ${(create.error as Error).message}`}
-        />
-      )}
-
       {!isLoading && rows.length > 0 && (
         <div className="mb-2 flex justify-end">
           <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12.5px]">
@@ -274,6 +272,7 @@ function NoteEditor({
   }
 
   const qc = useQueryClient();
+  const toast = useToast();
   const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
   const tagsQ = useQuery({ queryKey: ["tags"], queryFn: () => api.tags() });
 
@@ -292,11 +291,13 @@ function NoteEditor({
       onSaved();
       onClose();
     },
+    onError: (e) => toast.error(`Couldn't save the note: ${(e as Error).message}`),
   });
 
   const remove = useMutation({
     mutationFn: () => api.deleteNote(note.id),
     onSuccess: onDeleted,
+    onError: (e) => toast.error(`Couldn't delete the note: ${(e as Error).message}`),
   });
 
   const dirty =
@@ -339,12 +340,6 @@ function NoteEditor({
           </Button>
         </div>
       </div>
-
-      {(save.error || remove.error) && (
-        <ErrorBanner
-          message={`Couldn't save: ${((save.error || remove.error) as Error).message}`}
-        />
-      )}
 
       <input
         value={title}

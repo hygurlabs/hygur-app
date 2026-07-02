@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Sparkles, X, FolderKanban, StickyNote, Mail, FileText } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDateTime } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { Mention } from "../lib/types";
 import { useDetail } from "../components/DetailPanel";
 import {
@@ -153,6 +154,7 @@ function NewBriefingForm({
   onClose: () => void;
   onQueued: () => void;
 }) {
+  const toast = useToast();
   const [instructions, setInstructions] = useState("");
   const [context, setContext] = useState<ContextRef[]>([]);
   const [query, setQuery] = useState("");
@@ -174,7 +176,11 @@ function NewBriefingForm({
         content_ids: context.filter((c) => c.type !== "project").map((c) => c.id),
         instructions: instructions.trim() || undefined,
       }),
-    onSuccess: onQueued,
+    onSuccess: () => {
+      toast.success("Briefing started — it'll appear in the list shortly.");
+      onQueued();
+    },
+    onError: (e) => toast.error(`Couldn't start the briefing: ${(e as Error).message}`),
   });
 
   const canRun = instructions.trim() !== "" || context.length > 0;
@@ -251,10 +257,6 @@ function NewBriefingForm({
           </ul>
         )}
       </div>
-
-      {run.error && (
-        <ErrorBanner message={`Couldn't start briefing: ${(run.error as Error).message}`} />
-      )}
 
       <div className="flex justify-end">
         <Button onClick={() => run.mutate()} disabled={!canRun || run.isPending}>

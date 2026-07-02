@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useToast } from "../lib/toast";
 import { TagInput } from "./TagInput";
 
 /** Editable tags + project for a knowledge item, shown in the document panel
  *  (Library / Search). Changes persist immediately. */
 export function ItemMeta({ contentId }: { contentId: string }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const itemQ = useQuery({
     queryKey: ["kb-item", contentId],
     queryFn: () => api.knowledgeItem(contentId),
@@ -42,6 +44,7 @@ export function ItemMeta({ contentId }: { contentId: string }) {
       invalidate();
       qc.invalidateQueries({ queryKey: ["tags"] });
     },
+    onError: (e) => toast.error(`Couldn't update tags: ${(e as Error).message}`),
   });
 
   const setProject = useMutation({
@@ -50,11 +53,13 @@ export function ItemMeta({ contentId }: { contentId: string }) {
       else await api.unlinkItemFromProject(contentId);
     },
     onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't update the project: ${(e as Error).message}`),
   });
 
   const dismissSuggestion = useMutation({
     mutationFn: () => api.dismissProjectSuggestion(contentId),
     onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't dismiss the suggestion: ${(e as Error).message}`),
   });
 
   // Proactive project suggestion (W4): only when the item has no project yet.

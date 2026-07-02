@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Plus, Check, Settings2, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDateTime } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { ConnectorHealth, ConnectorInstance, MarketplaceItem } from "../lib/types";
 import { ConnectorConfigForm } from "./ConnectorConfigForm";
 import { EdgeProtonCard } from "./EdgeProtonCard";
@@ -27,6 +28,8 @@ function healthColor(h: ConnectorHealth): string {
 
 export function Connectors() {
   const qc = useQueryClient();
+  const toast = useToast();
+  const fail = (e: unknown) => toast.error(`Action failed: ${(e as Error).message}`);
   const [configId, setConfigId] = useState<string | null>(null);
   // Two-step delete confirm (window.confirm() is suppressed inside the native
   // WKWebView shell, so we arm the trash button in-UI instead).
@@ -61,18 +64,22 @@ export function Connectors() {
   const enable = useMutation({
     mutationFn: (id: string) => api.enableConnector(id),
     onSuccess: invalidate,
+    onError: fail,
   });
   const disable = useMutation({
     mutationFn: (id: string) => api.disableConnector(id),
     onSuccess: invalidate,
+    onError: fail,
   });
   const sync = useMutation({
     mutationFn: (id: string) => api.syncConnector(id),
     onSuccess: invalidate,
+    onError: fail,
   });
   const install = useMutation({
     mutationFn: (typeId: string) => api.installConnector(typeId),
     onSuccess: invalidate,
+    onError: fail,
   });
   // Create another account for a multi-instance type, then open its config form
   // so the user can fill in URL/credentials. Created disabled so the empty
@@ -88,6 +95,7 @@ export function Connectors() {
       invalidate();
       setConfigId(id);
     },
+    onError: fail,
   });
   const remove = useMutation({
     mutationFn: (instanceId: string) => api.deleteConnectorInstance(instanceId),
@@ -95,6 +103,7 @@ export function Connectors() {
       setArmedRemove(null);
       invalidate();
     },
+    onError: fail,
   });
 
   const allInstances = instancesQ.data ?? [];
@@ -121,9 +130,6 @@ export function Connectors() {
     (m) => !m.is_installed && !installedTypes.has(m.id),
   );
 
-  const err =
-    enable.error || disable.error || sync.error || install.error || addInstance.error || remove.error;
-
   if (configId) {
     return <ConnectorConfigForm id={configId} onClose={() => setConfigId(null)} />;
   }
@@ -134,8 +140,6 @@ export function Connectors() {
         title="Connectors"
         subtitle="Connect your mail, calendars, files and more — and add new sources from the marketplace."
       />
-
-      {err && <ErrorBanner message={`Action failed: ${(err as Error).message}`} />}
 
       {/* Cloud desktop: local sources (Proton Bridge, filesystem) run on THIS
           device — the pod can't reach them. Each streams to the central KB via the

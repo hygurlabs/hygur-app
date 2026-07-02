@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useToast } from "../lib/toast";
 import type { SidecarConfig, SidecarConfigPatch } from "../lib/types";
 import { PasskeyBanner } from "../components/PasskeyNudge";
 import {
@@ -27,6 +28,7 @@ import { PermissionsSection } from "./settings/PermissionsSection";
 
 export function Settings() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["config"],
     queryFn: () => api.config(),
@@ -82,7 +84,9 @@ export function Settings() {
     onSuccess: () => {
       setApiKey("");
       qc.invalidateQueries({ queryKey: ["config"] });
+      toast.success("Settings saved.");
     },
+    onError: (e) => toast.error(`Couldn't save settings: ${(e as Error).message}`),
   });
 
   // Memoised: only recomputes when the draft, the server config, or the
@@ -133,10 +137,6 @@ export function Settings() {
       />
 
       <PasskeyBanner variant="settings" />
-
-      {save.error && (
-        <ErrorBanner message={`Couldn't save: ${(save.error as Error).message}`} />
-      )}
 
       {/* Connection (endpoint + device key) is an advanced/self-host control; in a
           managed cloud tenant the connection is handled for the user — hide it. */}

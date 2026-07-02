@@ -5,12 +5,14 @@ import remarkGfm from "remark-gfm";
 import { Plus, Check, Trash2, FolderKanban, X, CalendarClock } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { Task } from "../lib/types";
 import { TagInput } from "../components/TagInput";
 import { Button, EmptyState, ErrorBanner, Skeleton, TextInput } from "../components/ui";
 
 export function Tasks() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [title, setTitle] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Per-row delete confirm (the inline pattern used in Notes/Tags).
@@ -32,12 +34,15 @@ export function Tasks() {
       setTitle("");
       invalidate();
       setSelectedId(task.id); // open the new task for body/tags/project/due
+      toast.success("Task created.");
     },
+    onError: (e) => toast.error(`Couldn't add the task: ${(e as Error).message}`),
   });
   const toggle = useMutation({
     mutationFn: (t: Task) =>
       api.updateTask(t.id, { status: t.status === "done" ? "open" : "done" }),
     onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't update the task: ${(e as Error).message}`),
   });
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteTask(id),
@@ -46,6 +51,7 @@ export function Tasks() {
       invalidate();
       if (selectedId === id) setSelectedId(null);
     },
+    onError: (e) => toast.error(`Couldn't delete the task: ${(e as Error).message}`),
   });
 
   // Server orders open-first, due-soonest, newest.
@@ -91,12 +97,6 @@ export function Tasks() {
               onRetry={() => refetch()}
             />
           )}
-          {create.error && (
-            <ErrorBanner
-              message={`Couldn't add the task: ${(create.error as Error).message}`}
-            />
-          )}
-
           {isLoading ? (
             <Skeleton rows={4} />
           ) : tasks.length > 0 ? (
@@ -228,6 +228,7 @@ function TaskEditor({
   onChanged: () => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
   const tagsQ = useQuery({ queryKey: ["tags"], queryFn: () => api.tags() });
 
@@ -253,6 +254,7 @@ function TaskEditor({
       });
     },
     onSuccess: onChanged,
+    onError: (e) => toast.error(`Couldn't save the task: ${(e as Error).message}`),
   });
 
   return (
