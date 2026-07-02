@@ -39,6 +39,39 @@ func NewDB(path string) (*DB, error) {
 	return NewDBWithKey(path, "")
 }
 
+// liveDSN builds the DSN for the live tenant DB opened by NewDBWithKey.
+//
+// The file-backed path gets _journal_mode=WAL (readers and a single writer
+// proceed concurrently, unlike the default rollback journal where a writer
+// blocks readers), _busy_timeout=5000 (a contended connection waits up to 5 s
+// and retries instead of returning "database is locked" immediately — there is
+// no SQLITE_BUSY retry elsewhere in the store), and _synchronous=NORMAL (the
+// safe, standard durability level to pair with WAL). WAL is supported under
+// SQLCipher, so it applies to both the plaintext and encrypted branches.
+//
+// The :memory: path is deliberately left WITHOUT WAL (N/A for an in-memory DB,
+// which NewDBWithKey serialises onto a single connection anyway) and keeps its
+// shared-cache + unique-name form so every NewDB(":memory:") is an isolated DB
+// that all goroutines of that instance share.
+//
+// A non-empty key appends the SQLCipher params, applied on every pooled
+// connection by the driver before any read, so encryption at rest is unchanged.
+func liveDSN(path, key string) string {
+	var dsn string
+	if path != ":memory:" {
+		dsn = fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL", path)
+	} else {
+		// Use shared cache for in-memory databases so all connections (goroutines) see the same data
+		// Use a unique name so each NewDB(":memory:") call creates a separate database
+		uniqueID := uuid.New().String()[:8]
+		dsn = fmt.Sprintf("file:memdb_%s?mode=memory&cache=shared&_foreign_keys=on", uniqueID)
+	}
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	return dsn
+}
+
 // NewDBWithKey is NewDB with optional SQLCipher encryption at rest. When key is
 // non-empty the database is opened encrypted (DSN _pragma_key); an empty key
 // opens a plaintext database — the default — so existing unencrypted files keep
@@ -62,34 +95,31 @@ func NewDBWithKey(path, key string) (*DB, error) {
 		}
 	}
 
-	// Open the database with foreign keys enabled
-	dsn := path
-	if path != ":memory:" {
-		dsn = fmt.Sprintf("file:%s?_foreign_keys=on", path)
-	} else {
-		// Use shared cache for in-memory databases so all connections (goroutines) see the same data
-		// Use a unique name so each NewDB(":memory:") call creates a separate database
-		uniqueID := uuid.New().String()[:8]
-		dsn = fmt.Sprintf("file:memdb_%s?mode=memory&cache=shared&_foreign_keys=on", uniqueID)
-	}
-
-	// Encrypt at rest when a key is supplied. _pragma_key is applied on every
-	// pooled connection by the SQLCipher driver before any read.
-	if key != "" {
-		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
-	}
+	// Build the DSN (file-backed live DB gets WAL + busy_timeout; :memory: does
+	// not — see liveDSN) and open it.
+	dsn := liveDSN(path, key)
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// In-memory SQLite databases deadlock with concurrent connections because
-	// SQLite's shared-cache locking is not compatible with the Go connection
-	// pool's concurrent-connection model. Limit to a single connection so all
-	// accesses are serialised through one handle.
 	if path == ":memory:" {
+		// In-memory SQLite databases deadlock with concurrent connections because
+		// SQLite's shared-cache locking is not compatible with the Go connection
+		// pool's concurrent-connection model. Limit to a single connection so all
+		// accesses are serialised through one handle. (A shared in-memory DB is also
+		// dropped when its last connection closes, so the pool must never shrink to 0.)
 		db.SetMaxOpenConns(1)
+	} else {
+		// File-backed live DB: bound the pool. WAL + busy_timeout (in the DSN) let a
+		// scheduler write concurrent with a chat write proceed / wait-and-retry instead
+		// of failing immediately with "database is locked"; capping the pool at 4
+		// bounds SQLite write contention and amortizes the per-connection SQLCipher KDF.
+		// Lifetime 0 keeps connections (and their derived keys) alive for reuse.
+		db.SetMaxOpenConns(4)
+		db.SetMaxIdleConns(4)
+		db.SetConnMaxLifetime(0)
 	}
 
 	// Verify connection
