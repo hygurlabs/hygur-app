@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   History,
   Paperclip,
   Mic,
   Plus,
+  Square,
   X,
   FolderKanban,
   StickyNote,
@@ -61,6 +63,9 @@ interface Turn {
   // Set when the inference backend was down and only retrieved sources are shown
   // (no AI synthesis). The deterministic layer still answered with the facts.
   degraded?: boolean;
+  // Set when the user hit "Stop" mid-stream: the partial answer is kept and
+  // marked so it's clear it was interrupted, not completed.
+  stopped?: boolean;
   // Attachments carried on a user turn so they persist across the conversation
   // (F1): follow-up questions about an attached image keep its context.
   attachments?: AttachmentRef[];
@@ -435,6 +440,16 @@ export function Ask() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const hidOnStreamRef = useRef(false);
+  // True when the user hit "Stop" (vs. an abort from starting a new chat), so the
+  // finally block can mark the partial turn.
+  const stoppedRef = useRef(false);
+
+  // Smart auto-scroll: the view sticks to the bottom on new tokens ONLY while the
+  // reader is already there. `atBottomRef` tracks that (updated on scroll). When
+  // the reader scrolls up (`detached`) during a live stream, a floating "Jump to
+  // latest" chip appears — so a long answer can stream while they read further up.
+  const atBottomRef = useRef(true);
+  const [detached, setDetached] = useState(false);
 
   // Drag-and-drop attach: a depth counter rides the dragenter/leave bubbling so
   // the overlay doesn't flicker as the pointer crosses child elements.
@@ -445,10 +460,33 @@ export function Ask() {
   const [params, setParams] = useSearchParams();
   const lastQ = useRef<string | null>(null);
 
+  // Track whether the reader is pinned to the bottom (mounted once). Whether the
+  // chip actually shows is derived at render time (`detached && streaming`), so
+  // it clears on its own when the stream ends — no effect needs to reset it.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      atBottomRef.current = atBottom;
+      setDetached(!atBottom);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Stick to the bottom on new content only when the reader hasn't scrolled up.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [turns]);
+
+  function jumpToLatest() {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setDetached(false);
+  }
 
   useEffect(() => {
     const ta = taRef.current;
@@ -495,6 +533,13 @@ export function Ask() {
       copy[copy.length - 1] = patch(copy[copy.length - 1]);
       return copy;
     });
+  }
+
+  // Stop the in-flight stream: abort the request and keep the partial answer,
+  // flagged "stopped" (vs. startNewChat's abort, which clears the turns).
+  function stop() {
+    stoppedRef.current = true;
+    abortRef.current?.abort();
   }
 
   function startNewChat() {
@@ -635,7 +680,13 @@ export function Ask() {
     } catch {
       /* onError surfaced it */
     } finally {
-      patchLast((t) => ({ ...t, activity: undefined }));
+      const wasStopped = stoppedRef.current;
+      stoppedRef.current = false;
+      patchLast((t) => ({
+        ...t,
+        activity: undefined,
+        ...(wasStopped ? { stopped: true } : {}),
+      }));
       setStreaming(false);
       abortRef.current = null;
       // The session now exists/updated server-side — refresh the history list.
@@ -662,24 +713,29 @@ export function Ask() {
 
   // Open an attached document in the right-side preview panel: fetch its
   // extracted/normalised text and render it (Markdown for .md, text for PDF/DOCX).
-  async function openDocument(att: Extract<AttachmentRef, { type: "document" }>) {
-    try {
-      const item = await api.knowledgeItem(att.content_id);
-      openDetail({
-        title: item.title || att.title || "Document",
-        contentId: att.content_id,
-        meta: [srcLabel(item.source_type), fmtDate(item.date)].filter(Boolean),
-        body: item.normalized_text || "_(empty)_",
-      });
-    } catch {
-      openDetail({
-        title: att.title || "Document",
-        contentId: att.content_id,
-        meta: [],
-        body: "_(couldn't load this document)_",
-      });
-    }
-  }
+  // Stable identity (openDetail is itself stable) so the memoized UserTurn skips
+  // re-rendering as later turns stream.
+  const openDocument = useCallback(
+    async (att: Extract<AttachmentRef, { type: "document" }>) => {
+      try {
+        const item = await api.knowledgeItem(att.content_id);
+        openDetail({
+          title: item.title || att.title || "Document",
+          contentId: att.content_id,
+          meta: [srcLabel(item.source_type), fmtDate(item.date)].filter(Boolean),
+          body: item.normalized_text || "_(empty)_",
+        });
+      } catch {
+        openDetail({
+          title: att.title || "Document",
+          contentId: att.content_id,
+          meta: [],
+          body: "_(couldn't load this document)_",
+        });
+      }
+    },
+    [openDetail],
+  );
 
   const isFileDrag = (e: React.DragEvent) =>
     Array.from(e.dataTransfer.types).includes("Files");
@@ -785,7 +841,8 @@ export function Ask() {
           </div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto print:overflow-visible">
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto print:overflow-visible">
           <div className="view-enter mx-auto max-w-[760px] px-4 pb-8 pt-8 sm:px-7">
             {turns.length === 0 ? (
               <div className="pt-8">
@@ -817,89 +874,10 @@ export function Ask() {
               <div className="flex flex-col gap-7">
                 {turns.map((t, i) =>
                   t.role === "user" ? (
-                    <div
-                      key={t.id}
-                      className="group flex max-w-[86%] flex-col items-end gap-1.5 self-end print:max-w-none"
-                    >
-                      {/* Sent images render with the message (and in the print/PDF
-                          transcript) so you can see what the turn is about. */}
-                      {t.attachments?.some((a) => a.type === "image") && (
-                        <div className="flex flex-wrap justify-end gap-2">
-                          {t.attachments
-                            .filter(
-                              (a): a is Extract<AttachmentRef, { type: "image" }> =>
-                                a.type === "image",
-                            )
-                            .map((a, i) => (
-                              <img
-                                key={i}
-                                src={`data:${a.mime_type};base64,${a.data}`}
-                                alt={a.title || "image"}
-                                className="max-h-52 max-w-full rounded-xl border border-border object-contain print:max-h-none"
-                              />
-                            ))}
-                        </div>
-                      )}
-                      {/* Sent audio: an inline player on replay, or a clean
-                          placeholder when the recording was purged by the cap. */}
-                      {t.attachments?.some((a) => a.type === "audio") && (
-                        <div className="flex w-full max-w-[420px] flex-col gap-2 print:hidden">
-                          {t.attachments
-                            .filter(
-                              (a): a is Extract<AttachmentRef, { type: "audio" }> =>
-                                a.type === "audio",
-                            )
-                            .map((a, i) => (
-                              <AudioAttachment key={i} att={a} />
-                            ))}
-                        </div>
-                      )}
-                      {/* Attached documents (PDF/DOCX/MD/…) — click to preview in
-                          the right panel (rendered MD / extracted text). */}
-                      {t.attachments?.some((a) => a.type === "document") && (
-                        <div className="flex w-full max-w-[420px] flex-col gap-2">
-                          {t.attachments
-                            .filter(
-                              (a): a is Extract<AttachmentRef, { type: "document" }> =>
-                                a.type === "document",
-                            )
-                            .map((a, i) => (
-                              <button
-                                key={i}
-                                onClick={() => void openDocument(a)}
-                                className="flex w-full items-center gap-2.5 rounded-xl border border-border bg-surface2 px-3 py-2.5 text-left transition-colors hover:border-accent/50"
-                              >
-                                <FileText
-                                  size={16}
-                                  strokeWidth={1.9}
-                                  className="shrink-0 text-accent"
-                                />
-                                <span className="truncate text-[13px] font-medium">
-                                  {a.title || a.content_id}
-                                </span>
-                                <ChevronRight
-                                  size={14}
-                                  strokeWidth={2}
-                                  className="ml-auto shrink-0 text-faint"
-                                />
-                              </button>
-                            ))}
-                        </div>
-                      )}
-                      {t.content && (
-                        <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
-                          {t.content}
-                        </div>
-                      )}
-                      {t.content && (
-                        <div className="print:hidden">
-                          <CopyButton text={t.content} title="Copy message" />
-                        </div>
-                      )}
-                    </div>
+                    <UserTurn key={i} turn={t} openDocument={openDocument} />
                   ) : (
                     <AssistantTurn
-                      key={t.id}
+                      key={i}
                       turn={t}
                       live={streaming && i === turns.length - 1}
                       openDetail={openDetail}
@@ -909,6 +887,17 @@ export function Ask() {
               </div>
             )}
           </div>
+          </div>
+          {detached && streaming && (
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 py-1.5 text-[12.5px] font-medium text-muted shadow-lg transition-colors hover:text-text print:hidden"
+            >
+              <ArrowDown size={14} strokeWidth={2} />
+              Jump to latest
+            </button>
+          )}
         </div>
 
         {dropError && (
@@ -925,6 +914,7 @@ export function Ask() {
             setInput={setInput}
             onKeyDown={onKeyDown}
             onSend={() => void send()}
+            onStop={stop}
             streaming={streaming}
             taRef={taRef}
             attachments={attachments}
@@ -980,6 +970,7 @@ function Composer({
   setInput,
   onKeyDown,
   onSend,
+  onStop,
   streaming,
   taRef,
   attachments,
@@ -993,6 +984,7 @@ function Composer({
   setInput: (v: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onSend: () => void;
+  onStop: () => void;
   streaming: boolean;
   taRef: React.RefObject<HTMLTextAreaElement | null>;
   attachments: AttachmentRef[];
@@ -1220,14 +1212,25 @@ function Composer({
             </ComposerIcon>
           )}
 
-          <button
-            onClick={onSend}
-            disabled={streaming || !input.trim()}
-            aria-label="Send"
-            className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-white transition-opacity hover:opacity-90 disabled:opacity-30"
-          >
-            <ArrowUp size={18} strokeWidth={2.2} />
-          </button>
+          {streaming ? (
+            <button
+              onClick={onStop}
+              aria-label="Stop"
+              title="Stop generating"
+              className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-white transition-opacity hover:opacity-90"
+            >
+              <Square size={15} strokeWidth={2.2} className="fill-current" />
+            </button>
+          ) : (
+            <button
+              onClick={onSend}
+              disabled={!input.trim()}
+              aria-label="Send"
+              className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+            >
+              <ArrowUp size={18} strokeWidth={2.2} />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1352,34 +1355,32 @@ function SessionsPanel({
         ) : (
           <ul className="flex flex-col gap-0.5">
             {sessions.map((s) => (
-              <li key={s.id}>
+              // Row + trailing action: the whole row is one button; the delete
+              // sits beside it (a real sibling button, not a nested one) and is
+              // revealed on hover/focus.
+              <li key={s.id} className="group relative">
                 <button
                   onClick={() => onPick(s.id)}
-                  className={`group flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                    s.id === activeId
-                      ? "bg-accent-weak"
-                      : "hover:bg-surface2"
+                  className={`flex w-full flex-col items-start gap-0.5 rounded-lg py-2 pl-2.5 pr-9 text-left transition-colors ${
+                    s.id === activeId ? "bg-accent-weak" : "hover:bg-surface2"
                   }`}
                 >
-                  <span className="flex w-full items-center gap-2">
-                    <span className="truncate text-[13.5px] font-medium">
-                      {s.title || "Untitled"}
-                    </span>
-                    <span
-                      onClick={(e) => void remove(s.id, e)}
-                      role="button"
-                      tabIndex={0}
-                      aria-label="Delete conversation"
-                      className="ml-auto rounded p-0.5 text-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                    >
-                      <X size={13} strokeWidth={2} />
-                    </span>
+                  <span className="w-full truncate text-[13.5px] font-medium">
+                    {s.title || "Untitled"}
                   </span>
                   {s.last_message && (
                     <span className="line-clamp-1 text-[12px] text-muted">
                       {s.last_message}
                     </span>
                   )}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => void remove(s.id, e)}
+                  aria-label="Delete conversation"
+                  className="absolute right-1.5 top-1.5 rounded p-0.5 text-faint opacity-0 transition-opacity hover:text-danger focus:opacity-100 group-hover:opacity-100"
+                >
+                  <X size={13} strokeWidth={2} />
                 </button>
               </li>
             ))}
@@ -1444,7 +1445,98 @@ function ContextPanel({
   );
 }
 
-function AssistantTurn({
+// A sent (user) turn. Memoized so it doesn't re-render as later turns stream —
+// its `turn` object keeps referential identity (patchLast only replaces the last
+// element) and `openDocument` is a stable callback.
+const UserTurn = memo(function UserTurn({
+  turn,
+  openDocument,
+}: {
+  turn: Turn;
+  openDocument: (att: Extract<AttachmentRef, { type: "document" }>) => void;
+}) {
+  return (
+    <div className="group flex max-w-[86%] flex-col items-end gap-1.5 self-end print:max-w-none">
+      {/* Sent images render with the message (and in the print/PDF
+          transcript) so you can see what the turn is about. */}
+      {turn.attachments?.some((a) => a.type === "image") && (
+        <div className="flex flex-wrap justify-end gap-2">
+          {turn.attachments
+            .filter(
+              (a): a is Extract<AttachmentRef, { type: "image" }> =>
+                a.type === "image",
+            )
+            .map((a, i) => (
+              <img
+                key={i}
+                src={`data:${a.mime_type};base64,${a.data}`}
+                alt={a.title || "image"}
+                className="max-h-52 max-w-full rounded-xl border border-border object-contain print:max-h-none"
+              />
+            ))}
+        </div>
+      )}
+      {/* Sent audio: an inline player on replay, or a clean
+          placeholder when the recording was purged by the cap. */}
+      {turn.attachments?.some((a) => a.type === "audio") && (
+        <div className="flex w-full max-w-[420px] flex-col gap-2 print:hidden">
+          {turn.attachments
+            .filter(
+              (a): a is Extract<AttachmentRef, { type: "audio" }> =>
+                a.type === "audio",
+            )
+            .map((a, i) => (
+              <AudioAttachment key={i} att={a} />
+            ))}
+        </div>
+      )}
+      {/* Attached documents (PDF/DOCX/MD/…) — click to preview in
+          the right panel (rendered MD / extracted text). */}
+      {turn.attachments?.some((a) => a.type === "document") && (
+        <div className="flex w-full max-w-[420px] flex-col gap-2">
+          {turn.attachments
+            .filter(
+              (a): a is Extract<AttachmentRef, { type: "document" }> =>
+                a.type === "document",
+            )
+            .map((a, i) => (
+              <button
+                key={i}
+                onClick={() => void openDocument(a)}
+                className="flex w-full items-center gap-2.5 rounded-xl border border-border bg-surface2 px-3 py-2.5 text-left transition-colors hover:border-accent/50"
+              >
+                <FileText
+                  size={16}
+                  strokeWidth={1.9}
+                  className="shrink-0 text-accent"
+                />
+                <span className="truncate text-[13px] font-medium">
+                  {a.title || a.content_id}
+                </span>
+                <ChevronRight
+                  size={14}
+                  strokeWidth={2}
+                  className="ml-auto shrink-0 text-faint"
+                />
+              </button>
+            ))}
+        </div>
+      )}
+      {turn.content && (
+        <div className="rounded-xl border border-border bg-surface2 px-3.5 py-2.5 text-[14.5px]">
+          {turn.content}
+        </div>
+      )}
+      {turn.content && (
+        <div className="print:hidden">
+          <CopyButton text={turn.content} title="Copy message" />
+        </div>
+      )}
+    </div>
+  );
+});
+
+const AssistantTurn = memo(function AssistantTurn({
   turn,
   live = false,
   openDetail,
@@ -1516,6 +1608,13 @@ function AssistantTurn({
         </div>
       )}
 
+      {turn.stopped && (
+        <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted">
+          <Square size={11} strokeWidth={2} className="fill-current text-faint" />
+          Stopped
+        </div>
+      )}
+
       {/* Stall hint: the request is still open but has gone quiet — tells the
           user it's working, not stuck, without an alarming error. */}
       {stalled && !turn.error && (
@@ -1568,4 +1667,4 @@ function AssistantTurn({
       )}
     </div>
   );
-}
+});
