@@ -11,6 +11,7 @@ package recognize
 import (
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/hygur/sidecar/internal/identifier"
 )
@@ -87,27 +88,49 @@ func allDigits(s string) bool {
 }
 
 // validNISS validates a Belgian national number (11 digits, YYMMDD·SSS·CC) by its mod-97
-// checksum — with the "2"-prefix variant for births in 2000+ — plus a light date sanity
-// check to cut the ~1% random-checksum collisions.
+// checksum — with the "2"-prefix variant for births in 2000+ — then DECODES the embedded
+// birthdate and rejects it if it is not a plausible human birthdate. The matching checksum
+// branch fixes the century (pre-2000 vs 2000+), so the leading YYMMDD becomes an unambiguous
+// date we can sanity-check. The checksum alone lets ~1% of arbitrary 11-digit windows through
+// (see Recognize); requiring the decoded date to be a real, in-range, non-future calendar date
+// kills the random false positives whose decoded date is nonsense (month 00, day 30 in
+// February, a future or absurd year).
 func validNISS(norm string) (string, bool) {
 	if len(norm) != 11 || !allDigits(norm) {
 		return "", false
 	}
-	mm, _ := strconv.Atoi(norm[2:4])
-	dd, _ := strconv.Atoi(norm[4:6])
-	if mm > 12 || dd > 31 {
-		return "", false
-	}
 	base, _ := strconv.ParseInt(norm[:9], 10, 64)
 	check, _ := strconv.ParseInt(norm[9:], 10, 64)
-	if 97-(base%97) == check { // born < 2000
+	yy, _ := strconv.Atoi(norm[0:2])
+	mm, _ := strconv.Atoi(norm[2:4])
+	dd, _ := strconv.Atoi(norm[4:6])
+	if 97-(base%97) == check && plausibleBirthdate(1900+yy, mm, dd) { // born < 2000
 		return norm, true
 	}
 	base2, _ := strconv.ParseInt("2"+norm[:9], 10, 64) // born >= 2000
-	if 97-(base2%97) == check {
+	if 97-(base2%97) == check && plausibleBirthdate(2000+yy, mm, dd) {
 		return norm, true
 	}
 	return "", false
+}
+
+// plausibleBirthdate reports whether (year, month, day) is a real human birthdate: a valid
+// calendar date (so 31 Feb is rejected), within [1900, this year], and not in the future.
+// It is deliberately strict on the calendar (round-trips through time.Date) because that is
+// exactly what separates a decoded NISS date from a random checksum-passing digit run.
+func plausibleBirthdate(year, month, day int) bool {
+	if month < 1 || month > 12 || day < 1 || day > 31 {
+		return false
+	}
+	now := time.Now()
+	if year < 1900 || year > now.Year() {
+		return false
+	}
+	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	if t.Year() != year || t.Month() != time.Month(month) || t.Day() != day {
+		return false // e.g. 30 February normalized to early March
+	}
+	return !t.After(now)
 }
 
 // validBCE validates a Belgian enterprise/VAT number (10 digits starting 0 or 1, plus an

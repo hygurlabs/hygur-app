@@ -59,6 +59,28 @@ func TestValidators(t *testing.T) {
 	}
 }
 
+// TestValidNISS_BirthdateSanity — a checksum-valid 11-digit run whose DECODED birthdate is not
+// a real, in-range, non-future calendar date is rejected (kills random checksum collisions),
+// while a genuine NISS is still accepted. Fictional bases only.
+func TestValidNISS_BirthdateSanity(t *testing.T) {
+	// Genuine, plausible birthdate (1985-07-01) → accepted.
+	if _, ok := validNISS(mkNISS("850701123", false)); !ok {
+		t.Error("plausible NISS rejected")
+	}
+	// Checksum-valid but impossible calendar date (30 February 1985) → rejected.
+	if _, ok := validNISS(mkNISS("850230123", false)); ok {
+		t.Error("NISS decoding to 30 February was accepted")
+	}
+	// Checksum-valid but month 00 → rejected.
+	if _, ok := validNISS(mkNISS("850001123", false)); ok {
+		t.Error("NISS decoding to month 00 was accepted")
+	}
+	// Checksum-valid but a future birth year (post-2000 branch, year 2099) → rejected.
+	if _, ok := validNISS(mkNISS("990101123", true)); ok {
+		t.Error("NISS decoding to a future year 2099 was accepted")
+	}
+}
+
 func TestRecognize(t *testing.T) {
 	niss := mkNISS("850701123", false)
 	// Format it the way a real document does (dots, colon, dash), amid prose.

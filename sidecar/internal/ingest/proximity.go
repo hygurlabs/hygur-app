@@ -21,7 +21,7 @@ const proxWindow = 300
 // row and correctly declines when one name is flanked by two numbers of the same type.
 // Deterministic.
 func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink {
-	if item == nil {
+	if item == nil || typedIdentifiersSuppressed(item) {
 		return nil
 	}
 	text := item.Title + " " + item.NormalizedText
@@ -71,9 +71,11 @@ func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink 
 		return nil
 	}
 
-	// Assign each identifier to its nearest person (within the window); collect the distinct
-	// identifier values claimed per (type, person).
-	claims := map[string]map[string]bool{} // "type\x1fperson" -> set of id values
+	// Assign each identifier to its nearest person (within the window); track, per (type, person),
+	// the distinct values they claim AND, per (type, value), the distinct persons who claim it —
+	// so we can enforce uniqueness on BOTH sides.
+	claims := map[string]map[string]bool{}      // "type\x1fperson" -> set of id values
+	valueOwners := map[string]map[string]bool{} // "type\x1fvalue"  -> set of person norms
 	for _, t := range typed {
 		idPos := (t.Start + t.End) / 2
 		bestNorm, bestD := "", 1<<30
@@ -87,21 +89,32 @@ func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink 
 		if bestNorm == "" || bestD > proxWindow {
 			continue
 		}
-		key := t.Type + "\x1f" + bestNorm
-		if claims[key] == nil {
-			claims[key] = map[string]bool{}
+		ck := t.Type + "\x1f" + bestNorm
+		if claims[ck] == nil {
+			claims[ck] = map[string]bool{}
 		}
-		claims[key][t.Value] = true
+		claims[ck][t.Value] = true
+		vk := t.Type + "\x1f" + t.Value
+		if valueOwners[vk] == nil {
+			valueOwners[vk] = map[string]bool{}
+		}
+		valueOwners[vk][bestNorm] = true
 	}
 
-	// Emit only unique claims: a person who is the sole nearest to exactly one same-type value.
+	// Emit only doubly-unique claims: a person who is the sole nearest to exactly one same-type
+	// value (per-person uniqueness) AND whose value is claimed by only that one person in this doc
+	// (per-VALUE uniqueness — O2). A value nearest to two DISTINCT persons has contested ownership
+	// here, so it links to NEITHER — this drops the double-owner link at the source (fixes KG-1).
 	var out []store.IdentifierLink
 	for key, vals := range claims {
 		if len(vals) != 1 {
-			continue // 0 or ≥2 → ambiguous
+			continue // 0 or ≥2 → ambiguous by person
 		}
 		typ, pnorm, _ := strings.Cut(key, "\x1f")
 		for v := range vals {
+			if len(valueOwners[typ+"\x1f"+v]) > 1 {
+				continue // value claimed by >1 distinct person in this doc → ambiguous ownership
+			}
 			out = append(out, store.IdentifierLink{PersonNorm: pnorm, IDNorm: v, IDType: typ, Prox: 1.0})
 		}
 	}

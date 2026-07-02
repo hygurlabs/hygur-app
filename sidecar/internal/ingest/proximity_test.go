@@ -61,3 +61,46 @@ func TestIdentifierProximityLinks(t *testing.T) {
 		t.Errorf("number beyond the window should not link, got %v", l)
 	}
 }
+
+// TestIdentifierProximityLinks_DoubleOwner — the value-aware guard (O2). The SAME number sits
+// once next to Alice and once next to Bob; each occurrence is nearest a DIFFERENT person, so
+// the value has contested ownership in this doc → it links to NEITHER (fixes the double-owner).
+func TestIdentifierProximityLinks_DoubleOwner(t *testing.T) {
+	nn := mkNISS("700101123")
+	item := &store.KnowledgeItem{
+		Title: "x",
+		NormalizedText: "Alice Bernard " + fmtNN(nn) + strings.Repeat(" filler", 20) +
+			" " + fmtNN(nn) + " Bob Carter",
+		Metadata: map[string]any{"extracted_persons": []string{"Alice Bernard", "Bob Carter"}},
+	}
+	if l := identifierProximityLinks(item); len(l) != 0 {
+		t.Errorf("value owned by two distinct persons should yield no link, got %v", l)
+	}
+}
+
+// TestTypedIdentifierMentions_MailcatPrior — the document-trust prior (T1). A transactional
+// mail (Invoicing) yields NO typed-identifier node even though its text carries a valid NISS;
+// an ordinary administrative document still extracts it. Fictional NISS only.
+func TestTypedIdentifierMentions_MailcatPrior(t *testing.T) {
+	nn := mkNISS("700101123")
+	body := "Numero national " + fmtNN(nn) + " enregistre."
+	mk := func(cats []string) *store.KnowledgeItem {
+		m := map[string]any{}
+		if cats != nil {
+			m["mail_categories"] = cats
+		}
+		return &store.KnowledgeItem{SourceType: store.SourceTypeMail, NormalizedText: body, Metadata: m}
+	}
+	if got := typedIdentifierMentions(mk([]string{"Invoicing", "Banking & Finance"})); len(got) != 0 {
+		t.Errorf("transactional mail should yield no typed identifier, got %v", got)
+	}
+	found := false
+	for _, m := range typedIdentifierMentions(mk([]string{"Legal & Contracts", "Administrative"})) {
+		if m.EntityNorm == nn && m.Attribute == "id_national_number" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ordinary document should extract the NISS node")
+	}
+}

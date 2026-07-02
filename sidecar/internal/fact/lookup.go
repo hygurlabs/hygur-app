@@ -76,18 +76,14 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	res := Result{Type: idType, Tier: TierNone}
 	attr := "id_" + idType
 
-	// Resolve the name to the graph's person entities (full names). If the query resolves to
-	// MORE THAN ONE distinct person, the subject itself is ambiguous (a bare surname or first
-	// name shared by several people): we must NOT pool them and hand back one person's number
-	// at high confidence. Decline and ask which one — the honest answer to "whose is this?".
+	// Resolve the name to the graph's person/org entities (full names). A query that resolves to
+	// MORE THAN ONE norm is either genuinely ambiguous (a bare surname shared by distinct people)
+	// OR one entity under several name variants (an org renamed, a person's NER reconstructions).
+	// We tell them apart AFTER pooling (Flag 2, below): same-entity variants SHARE one
+	// proximity-linked identifier; distinct people carry distinct ones. So we do not decline yet.
 	resolved, _ := s.ResolvePersonNorms(ctx, query, 20)
-	if len(resolved) > 1 {
-		res.Tier = TierNone
-		res.Reason = ReasonAmbiguousSubject
-		res.Candidates = len(resolved)
-		return res, nil
-	}
-	// Mono (or unresolved) subject: proceed with the resolved person plus the exact query.
+	ambiguous := len(resolved) > 1
+	// Pool the resolved norms plus the exact query.
 	norms := append(resolved, query)
 
 	type cinfo struct {
@@ -145,6 +141,34 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 		}
 	}
 	res.Candidates = len(cands)
+
+	// Flag 2 — collapse same-entity variants. When the query pooled >1 norm, decide whether they
+	// are ONE entity or several. The exception applies ONLY to identifier types that one legal
+	// entity can legitimately carry under several name variants — an ORG's enterprise number /
+	// VAT (an org appears under many trade names, all sharing its number). A national number
+	// identifies exactly one natural person and is NEVER shared, so a person pool is always
+	// genuinely ambiguous → decline (this is the uniqueness invariant). For an org type we
+	// collapse only when the variants converge on EXACTLY ONE proximity value that is itself
+	// SHARED (proximity-linked to ≥2 name variants) — the signature of one entity, not two
+	// distinct orgs each with their own number.
+	if ambiguous {
+		proxVal, proxCount := "", 0
+		for norm, ci := range cands {
+			if ci.prox {
+				proxCount++
+				proxVal = norm
+			}
+		}
+		if !idTypeAllowsVariantCollapse(idType) || proxCount != 1 || ownerCount(ctx, s, proxVal) < 2 {
+			res.Tier = TierNone
+			res.Reason = ReasonAmbiguousSubject
+			res.Candidates = len(resolved)
+			return res, nil
+		}
+		// One shared, multi-owner org value → the variants are one entity; fall through and
+		// resolve it (the shared value dominates the pooled scoring on its proximity weight).
+	}
+
 	if len(cands) == 0 {
 		return res, nil
 	}
@@ -178,7 +202,9 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	// Uniqueness invariant: one value = one owner. If the best value is proximity-linked to
 	// MORE THAN ONE distinct person, its ownership is contested — we cannot say it belongs to
 	// the queried subject. Decline (fail closed), never assert or even hedge a contested value.
-	if ownerCount(ctx, s, best.norm) > 1 {
+	// Skipped in the collapse case (ambiguous): there the several owners ARE the resolved
+	// same-entity variants that share this one value, which we already accepted above.
+	if !ambiguous && ownerCount(ctx, s, best.norm) > 1 {
 		res.Tier = TierNone
 		res.Reason = ReasonAmbiguousOwner
 		res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score
@@ -231,6 +257,19 @@ func ownerCount(ctx context.Context, s Store, idNorm string) int {
 		}
 	}
 	return len(owners)
+}
+
+// idTypeAllowsVariantCollapse reports whether an identifier type may legitimately be shared
+// across several NAME VARIANTS of one entity. True for organisation identifiers (an enterprise
+// number / VAT belongs to a legal entity that appears under many trade names); false for a
+// national number, which identifies exactly one natural person and is never shared — so a query
+// that pools several people stays ambiguous and declines.
+func idTypeAllowsVariantCollapse(idType string) bool {
+	switch idType {
+	case "enterprise_number", "vat":
+		return true
+	}
+	return false
 }
 
 func clamp01(x float64) float64 {

@@ -94,14 +94,18 @@ func TestLookupIdentifier_AmbiguousSubject(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// Even though Alice's number is a perfectly good high-confidence candidate on its own,
-	// the SUBJECT is ambiguous — the query pooled two different people.
+	// Two DISTINCT people sharing the surname, each with their OWN proximity-linked number.
+	// The query pooled both → two distinct proximity values → genuinely ambiguous subject:
+	// decline and clarify, never hand back one person's number at high.
 	f := &fakeStore{
 		resolve:   []string{"alice bernard", "bob bernard"},
-		neighbors: []store.Neighbor{{Norm: "nnalice", Weight: 0.030}},
-		types:     map[string]string{"nnalice": "id_national_number"},
-		links:     map[string][]store.IdentifierLink{"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}}},
-		docs:      map[string][]string{"nnalice": {"d1", "d2", "d3"}},
+		neighbors: []store.Neighbor{{Norm: "nnalice", Weight: 0.030}, {Norm: "nnbob", Weight: 0.028}},
+		types:     map[string]string{"nnalice": "id_national_number", "nnbob": "id_national_number"},
+		links: map[string][]store.IdentifierLink{
+			"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}},
+			"nnbob":   {{PersonNorm: "bob bernard", IDNorm: "nnbob", Prox: 1}},
+		},
+		docs: map[string][]string{"nnalice": {"d1", "d2", "d3"}, "nnbob": {"d4", "d5"}},
 	}
 	r, err := LookupIdentifier(ctx, f, "bernard", "national_number", now)
 	if err != nil {
@@ -177,5 +181,65 @@ func TestLookupIdentifier_ContestedValueNotHigh(t *testing.T) {
 		if r.Reason != ReasonAmbiguousOwner {
 			t.Errorf("contested value for %q: reason = %q, want %q", who, r.Reason, ReasonAmbiguousOwner)
 		}
+	}
+}
+
+// TestLookupIdentifier_CollapseSharedID — Flag 2. A single-token query ("acme") that resolves
+// to several org name-variants which all SHARE ONE enterprise number is ONE entity → resolve,
+// do NOT decline as ambiguous. Fictional Acme Inc. / Acme Corp. (a rename) with one shared BCE.
+func TestLookupIdentifier_CollapseSharedID(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	// Two org norm-variants, both proximity-linked to the SAME enterprise number → same entity.
+	shared := &fakeStore{
+		resolve:   []string{"acme inc", "acme corp"},
+		neighbors: []store.Neighbor{{Norm: "en0", Weight: 0.030}},
+		types:     map[string]string{"en0": "id_enterprise_number"},
+		links: map[string][]store.IdentifierLink{"en0": {
+			{PersonNorm: "acme inc", IDNorm: "en0", Prox: 1},
+			{PersonNorm: "acme corp", IDNorm: "en0", Prox: 1},
+		}},
+		docs: map[string][]string{"en0": {"d1", "d2", "d3"}},
+	}
+	r, err := LookupIdentifier(ctx, shared, "acme", "enterprise_number", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier == TierNone {
+		t.Errorf("shared-id variants should resolve as one entity; got tier=none reason=%q", r.Reason)
+	}
+	if r.Value != "en0" {
+		t.Errorf("value = %q, want en0 (the shared enterprise number)", r.Value)
+	}
+
+	// Contrast: two DISTINCT orgs, each with its OWN enterprise number → distinct values →
+	// genuinely ambiguous subject → decline (mirrors distinct-person national numbers).
+	distinct := &fakeStore{
+		resolve:   []string{"acme inc", "beta llc"},
+		neighbors: []store.Neighbor{{Norm: "en0", Weight: 0.030}, {Norm: "en1", Weight: 0.029}},
+		types:     map[string]string{"en0": "id_enterprise_number", "en1": "id_enterprise_number"},
+		links: map[string][]store.IdentifierLink{
+			"en0": {{PersonNorm: "acme inc", IDNorm: "en0", Prox: 1}},
+			"en1": {{PersonNorm: "beta llc", IDNorm: "en1", Prox: 1}},
+		},
+		docs: map[string][]string{"en0": {"d1"}, "en1": {"d2"}},
+	}
+	if r, _ := LookupIdentifier(ctx, distinct, "acme", "enterprise_number", now); r.Tier != TierNone || r.Reason != ReasonAmbiguousSubject {
+		t.Errorf("distinct orgs must decline as ambiguous_subject; got tier=%q reason=%q", r.Tier, r.Reason)
+	}
+
+	// The bare-surname leak: two distinct people, only ONE with a proximity-linked number (owner
+	// count 1). The single value is that person's OWN, not a shared entity identifier → the pool
+	// is genuinely ambiguous → decline, never collapse to that one number.
+	lone := &fakeStore{
+		resolve:   []string{"alice bernard", "bob bernard"},
+		neighbors: []store.Neighbor{{Norm: "nnalice", Weight: 0.030}, {Norm: "nnbob", Weight: 0.028}},
+		types:     map[string]string{"nnalice": "id_national_number", "nnbob": "id_national_number"},
+		links:     map[string][]store.IdentifierLink{"nnalice": {{PersonNorm: "alice bernard", IDNorm: "nnalice", Prox: 1}}},
+		docs:      map[string][]string{"nnalice": {"d1", "d2", "d3"}, "nnbob": {"d4"}},
+	}
+	if r, _ := LookupIdentifier(ctx, lone, "bernard", "national_number", now); r.Tier != TierNone || r.Reason != ReasonAmbiguousSubject {
+		t.Errorf("single-owner value in a distinct-people pool must decline; got tier=%q reason=%q", r.Tier, r.Reason)
 	}
 }

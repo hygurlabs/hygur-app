@@ -250,12 +250,44 @@ func nerEntityMentions(item *store.KnowledgeItem) []store.EntityMention {
 	return out
 }
 
+// transactionalMailCats are the automated / transactional mailcat buckets whose documents
+// carry machine-generated reference numbers (payment refs, order ids) that can pass a checksum
+// by chance but are NEVER the household's stable identity numbers. The document-trust prior
+// (IDENTIFIER_TRUTH_PLAN §3, T1) skips typed-identifier extraction from them: payment/receipt
+// (Invoicing), notifications (Notifications & Accounts), newsletters (Marketing & Sales,
+// Subscriptions). A real identity number lives in an administrative/legal/contract/banking
+// document, which is never gated here — so this removes the payment-number-as-NISS at the root
+// without dropping any genuine identifier.
+var transactionalMailCats = map[string]bool{
+	"Invoicing":                true,
+	"Notifications & Accounts": true,
+	"Marketing & Sales":        true,
+	"Subscriptions":            true,
+}
+
+// typedIdentifiersSuppressed reports whether an item's mail category is transactional/automated,
+// in which case checksum-typed identifiers are NOT extracted from it. Matches on ANY of the
+// item's (≤2) categories, so a "Paiement réussi" mail tagged [Invoicing, Banking & Finance] is
+// gated. Non-mail items (PDF, note) carry no mailcat → never suppressed.
+func typedIdentifiersSuppressed(item *store.KnowledgeItem) bool {
+	if item == nil {
+		return false
+	}
+	for _, c := range categoriesFromMetadata(item.Metadata) {
+		if transactionalMailCats[c] {
+			return true
+		}
+	}
+	return false
+}
+
 // typedIdentifierMentions extracts checksum-typed identifiers (national number, VAT, IBAN…)
 // from the item's text (recognize.Recognize — deterministic, no LLM) and folds them into
 // entity_mentions as first-class nodes: node key = canonical value, attribute = "id_<type>".
 // So the existing Hebbian graph + NPMI link a person to their identifier by co-occurrence.
+// Skipped entirely for transactional/automated docs (document-trust prior).
 func typedIdentifierMentions(item *store.KnowledgeItem) []store.EntityMention {
-	if item == nil {
+	if item == nil || typedIdentifiersSuppressed(item) {
 		return nil
 	}
 	at := ""
