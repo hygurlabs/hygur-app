@@ -73,7 +73,9 @@ func Judge(ctx context.Context, client *llm.Client, query string, results []Unif
 			{Role: "system", Content: judgeSystemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   judgeMaxTokens,
 	})
 	if err != nil {

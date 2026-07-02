@@ -132,7 +132,7 @@ func (d *DailyBrief) generateCalendarSummary(ctx context.Context, now time.Time,
 			{Role: "system", Content: calSummarySystemPrompt},
 			{Role: "user", Content: sb.String()},
 		},
-		Temperature:        0.2,
+		Temperature:        llm.Temp(0.2),
 		MaxTokens:          600,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

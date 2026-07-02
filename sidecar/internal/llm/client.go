@@ -348,11 +348,24 @@ type ToolCallFunctionDelta struct {
 
 // ChatRequest represents a request to the chat completions endpoint.
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Stream      bool      `json:"stream"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream"`
+	// Temperature is a pointer so a caller can pin temperature=0 and have it
+	// actually reach the wire. As a plain float64 with omitempty, the Go zero
+	// value (0.0) was indistinguishable from "unset" and silently dropped —
+	// every "deterministic" extraction pass decoded at the backend's default
+	// temperature instead. nil now means "omit (backend default)"; a non-nil
+	// *0.0 correctly serializes "temperature":0. Use Temp() to build one.
+	Temperature *float64 `json:"temperature,omitempty"`
+	// TopP pins nucleus sampling (nil = omit). Paired with Temperature on the
+	// deterministic passes (TopP=1 + Temperature=0). Use Temp() to build one.
+	TopP *float64 `json:"top_p,omitempty"`
+	// Seed makes sampling reproducible on backends that honour it (vLLM et al.).
+	// nil = omit. Pinned to a fixed value on the deterministic passes so repeated
+	// extraction runs return the same tokens. Use SeedOf() to build one.
+	Seed      *int `json:"seed,omitempty"`
+	MaxTokens int  `json:"max_tokens,omitempty"`
 	// MaxCompletionTokens is the newer-OpenAI / Infomaniak spelling of MaxTokens.
 	// Callers set MaxTokens; the client converts to this field when the backend
 	// only accepts max_completion_tokens (see Client.useMaxCompletionTokens).
@@ -387,6 +400,16 @@ type StreamOptions struct {
 	// IncludeUsage requests a final SSE chunk carrying token usage.
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }
+
+// Temp returns a pointer to a temperature (or top_p) value, so callers can pin
+// a decoding parameter — including 0 or 1 — that a plain float64 with omitempty
+// would silently drop. Temp(0) => "temperature":0 on the wire; a nil pointer
+// omits the field and lets the backend apply its default.
+func Temp(v float64) *float64 { return &v }
+
+// SeedOf returns a pointer to a sampling seed. nil omits `seed`; SeedOf(42)
+// pins it so backends that honour a seed return reproducible tokens.
+func SeedOf(n int) *int { return &n }
 
 // ChatResponse represents a response from the chat completions endpoint.
 type ChatResponse struct {

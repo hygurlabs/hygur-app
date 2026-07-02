@@ -160,7 +160,9 @@ func (s *MailSummarizer) judgeViaLLM(ctx context.Context, item *store.KnowledgeI
 			{Role: "user", Content: b.String()},
 		},
 		Stream:             false,
-		Temperature:        0,
+		Temperature:        llm.Temp(0),
+		TopP:               llm.Temp(1),
+		Seed:               llm.SeedOf(42),
 		MaxTokens:          120,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})
@@ -251,7 +253,9 @@ func (s *MailSummarizer) summarizeViaLLM(ctx context.Context, item *store.Knowle
 			{Role: "user", Content: b.String()},
 		},
 		Stream:      false,
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   60,
 	})
 	if err != nil {

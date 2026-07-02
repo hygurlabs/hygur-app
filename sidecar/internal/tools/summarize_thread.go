@@ -94,6 +94,9 @@ func (t *SummarizeThreadTool) summarize(ctx context.Context, thread *mail.Thread
 			{Role: "system", Content: summarySystemPrompt},
 			{Role: "user", Content: prompt},
 		},
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to call LLM: %w", err)

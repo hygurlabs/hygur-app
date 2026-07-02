@@ -63,7 +63,9 @@ func classifyMail(ctx context.Context, client *llm.Client, text string) ([]strin
 			{Role: "system", Content: mailCatSystemPrompt()},
 			{Role: "user", Content: body},
 		},
-		Temperature:        0,
+		Temperature:        llm.Temp(0),
+		TopP:               llm.Temp(1),
+		Seed:               llm.SeedOf(42),
 		MaxTokens:          mailCatMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

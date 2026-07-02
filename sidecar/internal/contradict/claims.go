@@ -65,7 +65,9 @@ func ExtractClaims(ctx context.Context, client *llm.Client, text string) ([]Clai
 			{Role: "system", Content: claimsSystemPrompt},
 			{Role: "user", Content: body},
 		},
-		Temperature:        0,
+		Temperature:        llm.Temp(0),
+		TopP:               llm.Temp(1),
+		Seed:               llm.SeedOf(42),
 		MaxTokens:          claimsMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

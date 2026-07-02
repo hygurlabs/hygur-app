@@ -120,7 +120,7 @@ func (d *DailyBrief) generatePositions(ctx context.Context, decs []*store.Decisi
 			{Role: "system", Content: positionsSystemPrompt},
 			{Role: "user", Content: "CONFIRMED DECISIONS:\n" + b.String()},
 		},
-		Temperature:        0.4,
+		Temperature:        llm.Temp(0.4),
 		MaxTokens:          positionsMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	}, func(delta string, _ bool, _ *llm.Usage) error {

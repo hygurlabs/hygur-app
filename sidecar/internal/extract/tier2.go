@@ -103,7 +103,9 @@ func ExtractTier2(ctx context.Context, client *llm.Client, text string) (Tier2En
 			{Role: "system", Content: tier2SystemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   tier2MaxTokens,
 		// Hard-disable reasoning at the chat-template level. The `/no_think`
 		// prefix above is ignored by some models (notably minicpm5), which then

@@ -39,7 +39,7 @@ func (d *DailyBrief) DraftReply(ctx context.Context, item *store.KnowledgeItem) 
 			{Role: "system", Content: replyDraftSystemPrompt},
 			{Role: "user", Content: sb.String()},
 		},
-		Temperature:        0.4,
+		Temperature:        llm.Temp(0.4),
 		MaxTokens:          600,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

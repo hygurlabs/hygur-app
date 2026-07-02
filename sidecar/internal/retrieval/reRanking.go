@@ -96,8 +96,11 @@ func (us *UnifiedSearcher) Rerank(ctx context.Context, query string, results []U
 	defer cancel()
 
 	resp, err := us.llm.Chat(rctx, llm.ChatRequest{
-		Messages: []llm.Message{{Role: "user", Content: sb.String()}},
-		Stream:   false,
+		Messages:    []llm.Message{{Role: "user", Content: sb.String()}},
+		Stream:      false,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to call LLM for re-ranking: %w", err)

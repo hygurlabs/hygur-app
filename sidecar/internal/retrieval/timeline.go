@@ -517,7 +517,9 @@ func (b *TimelineBuilder) titleViaLLM(ctx context.Context, ch TimelineChapter) (
 			{Role: "user", Content: sb.String()},
 		},
 		Stream:      false,
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   60,
 	})
 	if err != nil {

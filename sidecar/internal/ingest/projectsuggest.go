@@ -58,7 +58,9 @@ func suggestProjectID(ctx context.Context, client *llm.Client, item *store.Knowl
 			{Role: "system", Content: system},
 			{Role: "user", Content: sb.String()},
 		},
-		Temperature:        0,
+		Temperature:        llm.Temp(0),
+		TopP:               llm.Temp(1),
+		Seed:               llm.SeedOf(42),
 		MaxTokens:          projSuggestMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

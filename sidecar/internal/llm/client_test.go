@@ -871,8 +871,10 @@ func TestChatWithOptionalParams(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&req)
 
 		// Verify optional params were sent
-		if req.Temperature != 0.7 {
-			t.Errorf("expected temperature 0.7, got %f", req.Temperature)
+		if req.Temperature == nil {
+			t.Errorf("expected temperature 0.7, got nil")
+		} else if *req.Temperature != 0.7 {
+			t.Errorf("expected temperature 0.7, got %f", *req.Temperature)
 		}
 		if req.MaxTokens != 100 {
 			t.Errorf("expected max_tokens 100, got %d", req.MaxTokens)
@@ -892,7 +894,7 @@ func TestChatWithOptionalParams(t *testing.T) {
 	resp, err := client.Chat(ctx, ChatRequest{
 		Model:       "test-model",
 		Messages:    []Message{{Role: "user", Content: "Hello"}},
-		Temperature: 0.7,
+		Temperature: Temp(0.7),
 		MaxTokens:   100,
 	})
 
@@ -1097,5 +1099,48 @@ func TestRerank(t *testing.T) {
 	// Not configured → RerankConfigured false.
 	if NewClient(&config.LMStudioConfig{URL: "x"}).RerankConfigured() {
 		t.Error("RerankConfigured should be false without rerank_url/model")
+	}
+}
+
+// TestChatRequestDecodingParamsWire is the WP14 safety net for the pointer
+// refactor: it proves that a pinned Temperature:0 now actually reaches the wire
+// (the whole point of switching Temperature to *float64), that Seed/TopP
+// serialize when set, and that nil pointers are omitted so callers that don't
+// pin a parameter still get the backend default.
+func TestChatRequestDecodingParamsWire(t *testing.T) {
+	marshal := func(req ChatRequest) string {
+		b, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		return string(b)
+	}
+
+	// Temperature:0 (a non-nil *0.0) MUST appear on the wire — this is the bug
+	// the whole WP14 change fixes.
+	if got := marshal(ChatRequest{Temperature: Temp(0)}); !strings.Contains(got, `"temperature":0`) {
+		t.Errorf("Temp(0) must serialize temperature:0, got %s", got)
+	}
+
+	// A nil Temperature (zero-value ChatRequest) MUST omit the field so
+	// unpinned callers keep hitting the backend default.
+	if got := marshal(ChatRequest{}); strings.Contains(got, `"temperature"`) {
+		t.Errorf("nil temperature must be omitted, got %s", got)
+	}
+
+	// Seed set → present; nil → omitted.
+	if got := marshal(ChatRequest{Seed: SeedOf(42)}); !strings.Contains(got, `"seed":42`) {
+		t.Errorf("SeedOf(42) must serialize seed:42, got %s", got)
+	}
+	if got := marshal(ChatRequest{}); strings.Contains(got, `"seed"`) {
+		t.Errorf("nil seed must be omitted, got %s", got)
+	}
+
+	// TopP set → present; nil → omitted.
+	if got := marshal(ChatRequest{TopP: Temp(1)}); !strings.Contains(got, `"top_p":1`) {
+		t.Errorf("Temp(1) must serialize top_p:1, got %s", got)
+	}
+	if got := marshal(ChatRequest{}); strings.Contains(got, `"top_p"`) {
+		t.Errorf("nil top_p must be omitted, got %s", got)
 	}
 }

@@ -65,7 +65,9 @@ func ReconcileClaimConflict(ctx context.Context, client *llm.Client, c ClaimConf
 			{Role: "system", Content: reconcileSystemPrompt},
 			{Role: "user", Content: b.String()},
 		},
-		Temperature:        0,
+		Temperature:        llm.Temp(0),
+		TopP:               llm.Temp(1),
+		Seed:               llm.SeedOf(42),
 		MaxTokens:          reconcileMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

@@ -247,7 +247,9 @@ If no deadline is found, return [].`
 			{Role: "user", Content: userPrompt},
 		},
 		Stream:      false,
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		// Reasoning models burn the whole budget inside <think> and never emit
 		// JSON if MaxTokens is tiny — give room for a short array, and disable
 		// thinking outright (the /no_think hint alone isn't honored by nemotron).

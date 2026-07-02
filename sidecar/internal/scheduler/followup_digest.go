@@ -280,7 +280,7 @@ func (d *DailyBrief) generateFollowup(ctx context.Context, items []*store.Knowle
 			{Role: "system", Content: followupSystemPrompt},
 			{Role: "user", Content: numberedItemsContext(items)},
 		},
-		Temperature:        0.2,
+		Temperature:        llm.Temp(0.2),
 		MaxTokens:          1200,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})
@@ -491,7 +491,7 @@ func (d *DailyBrief) StreamFollowUpReport(ctx context.Context, projectID string,
 			{Role: "user", Content: numberedItemsContext(items)},
 		},
 		Stream:             true,
-		Temperature:        0.4,
+		Temperature:        llm.Temp(0.4),
 		MaxTokens:          700,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	}, func(delta string, done bool, _ *llm.Usage) error {

@@ -227,7 +227,7 @@ func (w *ChronicleWriter) generateClosing(ctx context.Context, synopsis, note st
 			{Role: "system", Content: chronicleClosingPrompt},
 			{Role: "user", Content: user},
 		},
-		Temperature:        0.5,
+		Temperature:        llm.Temp(0.5),
 		MaxTokens:          chronicleActMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	}, func(delta string, _ bool, _ *llm.Usage) error {
@@ -370,7 +370,7 @@ func (w *ChronicleWriter) generate(ctx context.Context, title, synopsis, traces,
 			{Role: "system", Content: chronicleSystemPrompt},
 			{Role: "user", Content: user},
 		},
-		Temperature:        0.5,
+		Temperature:        llm.Temp(0.5),
 		MaxTokens:          chronicleActMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	}, func(delta string, _ bool, _ *llm.Usage) error {

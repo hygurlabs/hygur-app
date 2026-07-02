@@ -636,11 +636,18 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Build the LLM request
 	llmReq := llm.ChatRequest{
-		Model:       req.Model,
-		Messages:    messages,
-		Stream:      true,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
+		Model:     req.Model,
+		Messages:  messages,
+		Stream:    true,
+		MaxTokens: req.MaxTokens,
+	}
+	// Map the client-supplied temperature to a pointer only when non-zero.
+	// The old float64+omitempty field already dropped 0 on the wire, so this
+	// reproduces today's behavior exactly (0 / absent => backend default) while
+	// forwarding an explicit non-zero value. We never force 0 on the user chat
+	// path — that determinism is reserved for the extraction passes.
+	if req.Temperature != 0 {
+		llmReq.Temperature = llm.Temp(req.Temperature)
 	}
 
 	// Wire registered tools into the request so the model can decide to call

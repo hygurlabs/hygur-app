@@ -136,7 +136,9 @@ func (t *MemoryStoreTool) ExtractMemoriesFromTurn(ctx context.Context, userMessa
 			{Role: "user", Content: userPrompt},
 		},
 		Stream:      false,
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   400,
 	})
 	if err != nil {
@@ -299,7 +301,9 @@ func (t *MemoryStoreTool) ExtractMemoriesFromSession(ctx context.Context, transc
 			{Role: "user", Content: rendered},
 		},
 		Stream:      false,
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   600,
 	})
 	if err != nil {

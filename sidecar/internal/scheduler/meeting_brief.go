@@ -89,7 +89,7 @@ func (m *MeetingBriefer) Generate(ctx context.Context, in MeetingInput) (Meeting
 			{Role: "system", Content: "You prepare a short briefing ahead of a meeting or deadline. Rely ONLY on the provided context, invent nothing. Keep internal reasoning brief. Reply in Markdown, in English, in 3 to 6 bullets maximum."},
 			{Role: "user", Content: prompt},
 		},
-		Temperature: 0.3,
+		Temperature: llm.Temp(0.3),
 		MaxTokens:   2048,
 	})
 	briefText := ""

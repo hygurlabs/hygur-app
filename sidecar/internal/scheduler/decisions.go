@@ -168,7 +168,9 @@ func (s *DecisionScanner) extract(ctx context.Context, text string) []decisionCa
 			{Role: "system", Content: decisionSystemPrompt},
 			{Role: "user", Content: body},
 		},
-		Temperature:        0,
+		Temperature:        llm.Temp(0),
+		TopP:               llm.Temp(1),
+		Seed:               llm.SeedOf(42),
 		MaxTokens:          decisionMaxTokens,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
 	})

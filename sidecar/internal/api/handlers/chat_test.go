@@ -446,8 +446,10 @@ func TestChatHandler_WithOptionalParams(t *testing.T) {
 	if receivedReq.Model != "test-model" {
 		t.Errorf("expected model 'test-model', got '%s'", receivedReq.Model)
 	}
-	if receivedReq.Temperature != 0.7 {
-		t.Errorf("expected temperature 0.7, got %f", receivedReq.Temperature)
+	if receivedReq.Temperature == nil {
+		t.Errorf("expected temperature 0.7, got nil")
+	} else if *receivedReq.Temperature != 0.7 {
+		t.Errorf("expected temperature 0.7, got %f", *receivedReq.Temperature)
 	}
 	if receivedReq.MaxTokens != 100 {
 		t.Errorf("expected max_tokens 100, got %d", receivedReq.MaxTokens)

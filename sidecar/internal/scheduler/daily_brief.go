@@ -224,7 +224,7 @@ func (d *DailyBrief) RunWith(ctx context.Context, opts RunOptions) error {
 			{Role: "system", Content: dailyBriefSystemPrompt},
 			{Role: "user", Content: prompt},
 		},
-		Temperature: 0.3,
+		Temperature: llm.Temp(0.3),
 		// The structured operational+executive prompt produces longer
 		// output (5 sections, ~1.5-2 k tokens) on top of Nemotron's 3-5 k
 		// of reasoning. 12288 leaves headroom; if we observe empty briefs

@@ -90,7 +90,9 @@ Query:`, histLines.String(), latest)
 			{Role: "system", Content: rewriteSystemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0,
+		Temperature: llm.Temp(0),
+		TopP:        llm.Temp(1),
+		Seed:        llm.SeedOf(42),
 		MaxTokens:   rewriteMaxTokens,
 	})
 	if err != nil {
