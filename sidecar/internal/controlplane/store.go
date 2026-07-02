@@ -7,6 +7,7 @@
 package controlplane
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -88,7 +89,7 @@ func (s *Store) migrate() error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS accounts (
   account_number TEXT PRIMARY KEY,
-  email          TEXT NOT NULL UNIQUE,
+  email          TEXT NOT NULL,   -- NOT unique: a new subscription = a new account (WP-SEC1)
   tenant_id      TEXT NOT NULL,
   status         TEXT NOT NULL DEFAULT 'trialing',
   valid_until    TEXT,
@@ -203,6 +204,85 @@ CREATE TABLE IF NOT EXISTS client_errors (
 );
 CREATE INDEX IF NOT EXISTS idx_client_errors_id ON client_errors(id DESC);`); err != nil {
 		return fmt.Errorf("controlplane: migrate usage: %w", err)
+	}
+	if err := s.migrateDropEmailUnique(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateDropEmailUnique removes the legacy UNIQUE constraint on accounts.email.
+// Emails are NOT unique identities: a new subscription always creates a new account
+// (WP-SEC1 — adopting a pre-existing account by the payer-typed checkout email was an
+// account-takeover vector). SQLite cannot DROP a column constraint in place, so we
+// rebuild the table following SQLite's documented safe procedure (one connection, FK
+// enforcement off, verify with foreign_key_check, re-enable). account_number values
+// are preserved, so the child FKs (devices, enroll_codes, …) stay valid after the
+// rename. Idempotent: a no-op once the constraint is gone (fresh DBs, or already run).
+func (s *Store) migrateDropEmailUnique() error {
+	var ddl string
+	err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // no accounts table yet
+	}
+	if err != nil {
+		return fmt.Errorf("controlplane: inspect accounts: %w", err)
+	}
+	if !strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
+		return nil // already migrated (fresh schema has no UNIQUE)
+	}
+
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("controlplane: migrate accounts: %w", err)
+	}
+	defer conn.Close()
+
+	// foreign_keys must be toggled OUTSIDE a transaction and is per-connection, so the
+	// whole rebuild runs on this one connection.
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("controlplane: fk off: %w", err)
+	}
+	fail := func(e error) error {
+		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		_, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
+		return fmt.Errorf("controlplane: rebuild accounts: %w", e)
+	}
+	for _, stmt := range []string{
+		`BEGIN`,
+		`CREATE TABLE accounts_new (
+  account_number TEXT PRIMARY KEY,
+  email          TEXT NOT NULL,
+  tenant_id      TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'trialing',
+  valid_until    TEXT,
+  created_at     TEXT NOT NULL
+)`,
+		`INSERT INTO accounts_new (account_number,email,tenant_id,status,valid_until,created_at)
+   SELECT account_number,email,tenant_id,status,valid_until,created_at FROM accounts`,
+		`DROP TABLE accounts`,
+		`ALTER TABLE accounts_new RENAME TO accounts`,
+	} {
+		if _, e := conn.ExecContext(ctx, stmt); e != nil {
+			return fail(e)
+		}
+	}
+	// Verify no dangling child FK before committing (SQLite's documented check).
+	rows, e := conn.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if e != nil {
+		return fail(e)
+	}
+	violation := rows.Next()
+	_ = rows.Close()
+	if violation {
+		return fail(errors.New("dangling foreign keys after rebuild"))
+	}
+	if _, e := conn.ExecContext(ctx, `COMMIT`); e != nil {
+		return fail(e)
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
+		return fmt.Errorf("controlplane: fk on: %w", err)
 	}
 	return nil
 }
@@ -323,9 +403,10 @@ func scanAccount(row rowScanner) (Account, error) {
 	return a, nil
 }
 
-// GetAccountByEmail resolves an account by its unique email. Operator lookup for
-// support recovery; the email is the verified Stripe identity, never an address
-// supplied in a support request.
+// GetAccountByEmail resolves an account by email. Emails are NOT unique (a new
+// subscription always creates a new account — WP-SEC1), so this returns the most
+// recent account for the address — an operator support convenience (use `account
+// list` to see all). Never an authorization decision.
 func (s *Store) GetAccountByEmail(email string) (Account, error) {
 	return s.getAccountByEmail(strings.ToLower(strings.TrimSpace(email)))
 }

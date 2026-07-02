@@ -121,25 +121,29 @@ func TestBilling_LifecycleSuspends(t *testing.T) {
 	}
 }
 
-// Re-subscribing with the same email while the tenant is still in its reactivation
-// grace ADOPTS the dormant tenant: the new subscription is queued as 'resume'
-// (scale the existing pod back to 1, data + DEK intact), the dormant row is retired
-// to 'superseded', and crucially it is NOT queued as 'pending' — a fresh provision
-// would overwrite the live DEK and orphan the data. One account throughout.
-func TestBilling_ResubscribeAdoptsDormant(t *testing.T) {
+// Re-subscribing with the same email after a full cancellation does NOT adopt the
+// dormant tenant — adopting by the payer-typed checkout email let anyone paying with
+// a victim's email seize the victim's data (WP-SEC1). A new subscription always
+// creates a NEW account/tenant, queued for a FRESH provision ('pending', never
+// 'resume'); the dormant tenant stays dormant until its owner reclaims it via a
+// passkey-authenticated reactivation. Emails are not unique.
+func TestBilling_ResubscribeCreatesNewAccount(t *testing.T) {
 	store := testStore(t)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	b := NewBilling(store, whSecret)
 	b.now = func() time.Time { return now }
 
-	// First subscription, provisioned to a live pod.
+	// First subscription, provisioned to a live pod, then cancelled → dormant.
 	if rec := postWebhook(t, b, paidEvent("sub_1", "a@b.com"), now); rec.Code != http.StatusOK {
 		t.Fatalf("paid sub_1: %d", rec.Code)
+	}
+	acc1, _, err := store.SubscriptionBySession("cs_test_1")
+	if err != nil {
+		t.Fatalf("sub_1 account: %v", err)
 	}
 	if err := store.SetProvisionState("sub_1", "ready"); err != nil {
 		t.Fatalf("mark ready: %v", err)
 	}
-	// Cancel → dormant.
 	if rec := postWebhook(t, b, `{"type":"customer.subscription.deleted","data":{"object":{"id":"sub_1"}}}`, now); rec.Code != http.StatusOK {
 		t.Fatalf("delete sub_1: %d", rec.Code)
 	}
@@ -147,35 +151,85 @@ func TestBilling_ResubscribeAdoptsDormant(t *testing.T) {
 		t.Fatalf("dormant after cancel = %d, want 1", len(dorm))
 	}
 
-	// Re-subscribe with the SAME email but a NEW subscription + session id.
+	// Re-subscribe with the SAME email, a NEW subscription + session id.
 	resub := `{"type":"checkout.session.completed","data":{"object":{` +
 		`"id":"cs_test_2","mode":"subscription","payment_status":"paid",` +
-		`"customer":"cus_1","subscription":"sub_2","customer_details":{"email":"a@b.com"}}}}`
+		`"customer":"cus_2","subscription":"sub_2","customer_details":{"email":"a@b.com"}}}}`
 	if rec := postWebhook(t, b, resub, now); rec.Code != http.StatusOK {
 		t.Fatalf("resubscribe sub_2: %d (%s)", rec.Code, rec.Body.String())
 	}
 
-	// sub_2 adopts the tenant: queued 'resume', never 'pending'.
-	if _, st, err := store.SubscriptionBySession("cs_test_2"); err != nil || st != "resume" {
-		t.Fatalf("sub_2 state = %q (err %v), want resume", st, err)
-	}
-	if pend, _ := store.ListProvisions("pending"); len(pend) != 0 {
-		t.Errorf("re-subscribe must NOT queue a fresh provision; pending = %d, want 0", len(pend))
-	}
-	// The old dormant row is retired; nothing left dormant.
-	if dorm, _ := store.ListProvisions("dormant"); len(dorm) != 0 {
-		t.Errorf("dormant after adoption = %d, want 0", len(dorm))
-	}
-	if sup, _ := store.ListProvisions("superseded"); len(sup) != 1 {
-		t.Errorf("superseded rows = %d, want 1 (the adopted dormant row)", len(sup))
-	}
-	// Still exactly one account, re-activated.
-	acc, err := store.getAccountByEmail("a@b.com")
+	// sub_2 gets a NEW account + tenant (never the dormant one) and a FRESH provision.
+	acc2, st2, err := store.SubscriptionBySession("cs_test_2")
 	if err != nil {
-		t.Fatalf("account: %v", err)
+		t.Fatalf("sub_2 account: %v", err)
 	}
-	if !acc.IsActive(now) {
-		t.Error("account should be active again after re-subscribe")
+	if acc2.AccountNumber == acc1.AccountNumber {
+		t.Fatal("re-subscribe adopted the existing account by email — WP-SEC1 regression")
+	}
+	if acc2.TenantID == acc1.TenantID {
+		t.Fatal("re-subscribe reused the existing tenant — WP-SEC1 regression")
+	}
+	if st2 != "pending" {
+		t.Errorf("sub_2 state = %q, want pending (fresh provision, not resume)", st2)
+	}
+	// The dormant tenant is untouched — still dormant, never superseded/adopted.
+	if dorm, _ := store.ListProvisions("dormant"); len(dorm) != 1 {
+		t.Errorf("dormant after re-subscribe = %d, want 1 (untouched)", len(dorm))
+	}
+	if sup, _ := store.ListProvisions("superseded"); len(sup) != 0 {
+		t.Errorf("superseded rows = %d, want 0 (no adoption)", len(sup))
+	}
+	// Two distinct accounts now share the email.
+	accs, _ := store.ListAccounts()
+	n := 0
+	for _, a := range accs {
+		if a.Email == "a@b.com" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("accounts for a@b.com = %d, want 2 (distinct per subscription)", n)
+	}
+}
+
+// TestBilling_ForeignEmailNoTakeover is the WP-SEC1 proof: paying for a new
+// subscription while TYPING AN EXISTING ACCOUNT'S EMAIL must never grant access to
+// that account's tenant. The attacker's checkout session must resolve to a brand-new
+// account with a DIFFERENT tenant, so any enrollment code the success page mints from
+// that session can only ever reach the attacker's own empty space — never the victim's.
+func TestBilling_ForeignEmailNoTakeover(t *testing.T) {
+	store := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	b := NewBilling(store, whSecret)
+	b.now = func() time.Time { return now }
+
+	// Victim's live subscription (paidEvent uses session cs_test_1, customer cus_1).
+	if rec := postWebhook(t, b, paidEvent("sub_victim", "victim@ex.com"), now); rec.Code != http.StatusOK {
+		t.Fatalf("victim paid: %d", rec.Code)
+	}
+	victim, _, err := store.SubscriptionBySession("cs_test_1")
+	if err != nil {
+		t.Fatalf("victim account: %v", err)
+	}
+
+	// Attacker pays a NEW subscription typing the victim's email (own card/customer).
+	atk := `{"type":"checkout.session.completed","data":{"object":{` +
+		`"id":"cs_attacker","mode":"subscription","payment_status":"paid",` +
+		`"customer":"cus_attacker","subscription":"sub_attacker","customer_details":{"email":"victim@ex.com"}}}}`
+	if rec := postWebhook(t, b, atk, now); rec.Code != http.StatusOK {
+		t.Fatalf("attacker paid: %d (%s)", rec.Code, rec.Body.String())
+	}
+	attacker, _, err := store.SubscriptionBySession("cs_attacker")
+	if err != nil {
+		t.Fatalf("attacker account: %v", err)
+	}
+
+	if attacker.AccountNumber == victim.AccountNumber {
+		t.Fatal("attacker bound to the victim's account — ACCOUNT TAKEOVER (WP-SEC1)")
+	}
+	if attacker.TenantID == victim.TenantID {
+		t.Fatal("attacker's session resolves to the victim's tenant — ACCOUNT TAKEOVER (WP-SEC1)")
 	}
 }
 

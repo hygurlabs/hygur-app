@@ -1,7 +1,9 @@
 package controlplane
 
 import (
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +18,76 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// TestStore_MigrateDropsEmailUnique verifies the WP-SEC1 migration: a legacy DB whose
+// accounts table still carries the old UNIQUE(email) is rebuilt on Open so duplicate
+// emails are allowed (a new subscription = a new account), while existing rows and
+// child foreign keys (a device) survive intact. Idempotent on re-open.
+func TestStore_MigrateDropsEmailUnique(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admin.db")
+	const key = "test-key-0123456789"
+	dsn := fmt.Sprintf("file:%s?_foreign_keys=on&_pragma_key=%s&_pragma_cipher_page_size=4096", path, key)
+
+	// Seed a legacy DB: accounts WITH the old UNIQUE(email) + a child device row.
+	raw, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	if _, err := raw.Exec(`
+CREATE TABLE accounts (
+  account_number TEXT PRIMARY KEY,
+  email          TEXT NOT NULL UNIQUE,
+  tenant_id      TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'trialing',
+  valid_until    TEXT,
+  created_at     TEXT NOT NULL
+);
+CREATE TABLE devices (
+  device_id      TEXT PRIMARY KEY,
+  account_number TEXT NOT NULL REFERENCES accounts(account_number),
+  label          TEXT NOT NULL DEFAULT '',
+  jti            TEXT NOT NULL,
+  refresh_hash   TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  revoked_at     TEXT
+);
+INSERT INTO accounts(account_number,email,tenant_id,status,valid_until,created_at)
+  VALUES('000001','x@y.com','brave-azure-harbor','active',NULL,'2024-01-01T00:00:00Z');
+INSERT INTO devices(device_id,account_number,label,jti,refresh_hash,created_at)
+  VALUES('dev1','000001','web','jti1','hash1','2024-01-01T00:00:00Z');`); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+	_ = raw.Close()
+
+	// Open through the store → migrate() rebuilds accounts without the UNIQUE.
+	s, err := Open(path, key)
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	// Legacy account + its device survived the rebuild (rows + FK preserved).
+	if _, err := s.GetAccount("000001"); err != nil {
+		t.Fatalf("legacy account lost after migration: %v", err)
+	}
+	if devs, err := s.ListDevices("000001"); err != nil || len(devs) != 1 {
+		t.Fatalf("device lost after migration: n=%d err=%v", len(devs), err)
+	}
+	// The UNIQUE is gone: a second account with the SAME email now succeeds.
+	now := time.Unix(1_700_000_000, 0).UTC()
+	if _, err := s.CreateAccount(now, "x@y.com", "active", nil); err != nil {
+		t.Fatalf("duplicate email still rejected after migration: %v", err)
+	}
+	_ = s.Close()
+
+	// Idempotent: re-opening runs migrate() again with no error / no data loss.
+	s2, err := Open(path, key)
+	if err != nil {
+		t.Fatalf("re-Open (idempotent migrate): %v", err)
+	}
+	defer s2.Close()
+	if _, err := s2.GetAccount("000001"); err != nil {
+		t.Fatalf("account lost on second migrate: %v", err)
+	}
 }
 
 func TestAccountLifecycle(t *testing.T) {

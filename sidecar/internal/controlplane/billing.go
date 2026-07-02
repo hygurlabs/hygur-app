@@ -322,21 +322,20 @@ func (s *Store) UpsertSubscriptionAccount(now time.Time, subID, customerID, sess
 		return Account{}, false, fmt.Errorf("controlplane: lookup subscription: %w", err)
 	}
 
-	created := true
-	acc, cerr := s.CreateAccount(now, email, "active", validUntil)
-	if cerr != nil {
-		existing, gerr := s.getAccountByEmail(email)
-		if gerr != nil {
-			return Account{}, false, cerr
-		}
-		acc = existing
-		created = false
-		_ = s.SetSubscription(acc.AccountNumber, "active", validUntil)
+	// A new subscription ALWAYS creates a new account/tenant. We never adopt a
+	// pre-existing account by matching its email: the checkout email is TYPED BY THE
+	// PAYER and is not proof of ownership, so adopting by it let anyone paying with a
+	// victim's email bind to — and take over — the victim's tenant (WP-SEC1).
+	// Recovering a dormant tenant after a full cancellation is a passkey-authenticated
+	// action, never an automatic webhook path. Email is a non-unique contact attribute.
+	acc, err := s.CreateAccount(now, email, "active", validUntil)
+	if err != nil {
+		return Account{}, false, err
 	}
 	if err := s.insertSubscriptionRow(now, subID, acc.AccountNumber, customerID, sessionID); err != nil {
 		return Account{}, false, err
 	}
-	return acc, created, nil
+	return acc, true, nil
 }
 
 // insertSubscriptionRow records the new subscription and decides its initial
@@ -563,7 +562,10 @@ func (s *Store) SubscriptionBySession(sessionID string) (Account, string, error)
 }
 
 func (s *Store) getAccountByEmail(email string) (Account, error) {
+	// Emails are NOT unique identities (a new subscription always creates a new
+	// account — WP-SEC1), so several accounts may share one address. Return the most
+	// recent — an operator support convenience only, never an authorization decision.
 	row := s.db.QueryRow(
-		`SELECT account_number,email,tenant_id,status,valid_until,created_at FROM accounts WHERE email=?`, email)
+		`SELECT account_number,email,tenant_id,status,valid_until,created_at FROM accounts WHERE email=? ORDER BY created_at DESC LIMIT 1`, email)
 	return scanAccount(row)
 }
