@@ -35,10 +35,14 @@ func TestTXTParser_ParseSimple(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// NormalizeText converts to lowercase and collapses whitespace
-	expected := "hello, world! this is a test."
+	// The parser returns RAW text: line breaks + case preserved (normalization
+	// now happens in the ingest layer, not the parser).
+	expected := "Hello, World!\nThis is a test."
 	if text != expected {
 		t.Errorf("expected %q, got %q", expected, text)
+	}
+	if !strings.Contains(text, "\n") {
+		t.Errorf("parser must preserve line breaks, got %q", text)
 	}
 
 	if meta != nil {
@@ -59,7 +63,7 @@ func TestTXTParser_ParseUTF8(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := "bonjour le monde! salut tout le monde."
+	expected := "Bonjour le monde! Salut tout le monde."
 	if text != expected {
 		t.Errorf("expected %q, got %q", expected, text)
 	}
@@ -78,7 +82,7 @@ func TestTXTParser_ParseUTF8WithAccents(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := "les caracteres: e, a, u, c"
+	expected := "Les caracteres: e, a, u, c"
 	if text != expected {
 		t.Errorf("expected %q, got %q", expected, text)
 	}
@@ -145,11 +149,12 @@ func TestTXTParser_ParseContextTimeout(t *testing.T) {
 	}
 }
 
-func TestTXTParser_ParseWhitespaceNormalization(t *testing.T) {
+func TestTXTParser_ParseRawWhitespacePreserved(t *testing.T) {
 	p := NewTXTParser()
 	ctx := context.Background()
 
-	// Test multiple spaces and tabs
+	// The parser no longer normalizes: whitespace + line breaks are preserved
+	// verbatim (the ingest layer collapses them for the index copy).
 	input := "Hello    World\t\tTest\n\nNew paragraph"
 	r := strings.NewReader(input)
 
@@ -158,10 +163,8 @@ func TestTXTParser_ParseWhitespaceNormalization(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// NormalizeText collapses multiple whitespace into single space
-	expected := "hello world test new paragraph"
-	if text != expected {
-		t.Errorf("expected %q, got %q", expected, text)
+	if text != input {
+		t.Errorf("expected raw %q, got %q", input, text)
 	}
 }
 
@@ -169,7 +172,8 @@ func TestTXTParser_ParseControlCharacters(t *testing.T) {
 	p := NewTXTParser()
 	ctx := context.Background()
 
-	// Test control characters (should be removed)
+	// The parser returns raw bytes; control characters are stripped later by
+	// NormalizeText in the ingest layer, not here.
 	input := "Hello\x00World\x01Test"
 	r := strings.NewReader(input)
 
@@ -178,8 +182,7 @@ func TestTXTParser_ParseControlCharacters(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := "helloworldtest"
-	if text != expected {
-		t.Errorf("expected %q, got %q", expected, text)
+	if text != input {
+		t.Errorf("expected raw %q, got %q", input, text)
 	}
 }

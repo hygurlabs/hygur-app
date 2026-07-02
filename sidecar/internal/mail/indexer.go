@@ -169,7 +169,10 @@ func (idx *EmailIndexer) extractAttachmentText(ctx context.Context, messages []M
 			if len(att.Data) == 0 || !IsPDFAttachment(att) {
 				continue
 			}
-			text := parsers.ExtractPDFTextIsolated(ctx, att.Data, parsers.DefaultPDFExtractTimeout)
+			// The PDF parser returns RAW text; collapse it here so mail keeps the
+			// exact normalized attachment text it always stored (mail is unaffected
+			// by the notes/files raw_text change).
+			text := ingest.NormalizeText(parsers.ExtractPDFTextIsolated(ctx, att.Data, parsers.DefaultPDFExtractTimeout))
 			if strings.TrimSpace(text) == "" {
 				continue
 			}

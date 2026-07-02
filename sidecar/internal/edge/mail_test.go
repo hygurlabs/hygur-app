@@ -188,7 +188,9 @@ func TestMailSync_LinksPDFAttachment(t *testing.T) {
 	if !strings.Contains(att.Title, "FID1266295") || !strings.Contains(att.Title, "declaration.pdf") {
 		t.Errorf("attachment title doesn't link to the mail: %q", att.Title)
 	}
-	if !strings.Contains(att.Text, "1234,56 EUR") {
+	// The attachment is a mail-typed item, so its text is normalized (collapsed +
+	// lowercased) exactly as before — mail is unaffected by the raw_text change.
+	if !strings.Contains(att.Text, "1234,56 eur") {
 		t.Errorf("attachment text not the extracted PDF: %q", att.Text)
 	}
 	if att.Metadata["parent"] != "proton:m1" || att.Metadata["attachment"] != true {

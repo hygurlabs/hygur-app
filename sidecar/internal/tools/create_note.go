@@ -78,7 +78,9 @@ func (t *CreateNoteTool) Run(ctx context.Context, req CreateNoteRequest) (*Creat
 	contentID := "note:" + uuid.New().String()
 	now := time.Now()
 
-	// Normalize the content for full-text search
+	// Normalize the content for full-text search (index/embedding/dedup). The
+	// original req.Content is kept verbatim in raw_text so the Library and the LLM
+	// read the note with its line breaks and case intact.
 	normalizedText := ingest.NormalizeText(req.Content)
 
 	// Build metadata
@@ -97,6 +99,7 @@ func (t *CreateNoteTool) Run(ctx context.Context, req CreateNoteRequest) (*Creat
 		SourcePath:     nil, // Notes don't have a source path
 		Title:          req.Title,
 		NormalizedText: normalizedText,
+		RawText:        req.Content,
 		Metadata:       metadata,
 		VersionID:      uuid.New().String(),
 		CreatedAt:      now,

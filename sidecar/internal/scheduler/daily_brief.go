@@ -700,7 +700,7 @@ func buildBriefPrompt(items []briefItem, opts RunOptions, projectName string, du
 		}
 		// Capped excerpt for context. 600 chars gives the model enough to
 		// surface the actionable bits without ballooning the prompt.
-		excerpt := it.NormalizedText
+		excerpt := it.DisplayText()
 		if len(excerpt) > 600 {
 			excerpt = excerpt[:600] + "…"
 		}

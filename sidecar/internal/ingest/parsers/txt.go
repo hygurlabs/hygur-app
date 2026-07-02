@@ -21,8 +21,9 @@ func (p *TXTParser) SupportedExtensions() []string {
 	return []string{".txt", ".text"}
 }
 
-// Parse extracts text content from a plain text file.
-// It normalizes the content using ingest.NormalizeText().
+// Parse extracts text content from a plain text file. It returns the RAW text
+// (line breaks + case preserved) — the ingest layer derives normalized_text via
+// ingest.NormalizeText and stores both.
 func (p *TXTParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Metadata, error) {
 	// Check for context cancellation before reading
 	select {
@@ -43,8 +44,5 @@ func (p *TXTParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Meta
 	default:
 	}
 
-	// Normalize UTF-8 text
-	normalized := ingest.NormalizeText(string(content))
-
-	return normalized, nil, nil
+	return string(content), nil, nil
 }

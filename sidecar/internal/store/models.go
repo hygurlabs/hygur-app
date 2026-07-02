@@ -10,15 +10,34 @@ import (
 // extension. Known values: "markdown", "pdf", "docx", "txt", "html",
 // "note", "email", "thread", "mail", "image", "audio", "file", "unknown".
 type KnowledgeItem struct {
-	ContentID      string
-	SourceType     string
-	SourcePath     *string
-	Title          string
+	ContentID  string
+	SourceType string
+	SourcePath *string
+	Title      string
+	// NormalizedText is the collapsed + lowercased index text. It feeds FTS,
+	// embeddings and the dedup hash; it must never be shown to a human or fed to
+	// an LLM as the item's content (line breaks and case are lost).
 	NormalizedText string
-	Metadata       map[string]any
-	VersionID      string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// RawText is the ORIGINAL text with line breaks and case preserved — what a
+	// note/file body actually looked like. It is what the Library and the LLM
+	// should read as the item's content. Empty for items ingested before the
+	// raw_text column existed (fall back to NormalizedText via DisplayText).
+	RawText   string
+	Metadata  map[string]any
+	VersionID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// DisplayText returns the text to show to a human or feed to an LLM as the
+// item's content: the case- and line-break-preserving RawText when present,
+// falling back to NormalizedText for items ingested before raw_text existed (or
+// for sources — e.g. mail — that keep their formatting in NormalizedText).
+func (k *KnowledgeItem) DisplayText() string {
+	if k.RawText != "" {
+		return k.RawText
+	}
+	return k.NormalizedText
 }
 
 // Chunk represents a chunk of a knowledge item for embedding purposes.

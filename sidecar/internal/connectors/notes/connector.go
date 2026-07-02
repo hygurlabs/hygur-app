@@ -213,7 +213,7 @@ func knowledgeItemToPluginItem(ki *store.KnowledgeItem) plugin.Item {
 		ConnectorID: "notes",
 		SourceType:  "note",
 		Title:       ki.Title,
-		Content:     ki.NormalizedText,
+		Content:     ki.DisplayText(),
 		CreatedAt:   ki.CreatedAt,
 		UpdatedAt:   ki.UpdatedAt,
 	}

@@ -39,12 +39,12 @@ Another paragraph here.`
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should contain the text content
-	if !strings.Contains(text, "hello world") {
-		t.Errorf("expected text to contain 'hello world', got %q", text)
+	// Should contain the text content (raw output: case preserved)
+	if !strings.Contains(text, "Hello World") {
+		t.Errorf("expected text to contain 'Hello World', got %q", text)
 	}
-	if !strings.Contains(text, "this is a paragraph") {
-		t.Errorf("expected text to contain 'this is a paragraph', got %q", text)
+	if !strings.Contains(text, "This is a paragraph") {
+		t.Errorf("expected text to contain 'This is a paragraph', got %q", text)
 	}
 
 	// Should have section_count
@@ -99,11 +99,11 @@ This is the content.`
 	}
 
 	// Content should be present
-	if !strings.Contains(text, "introduction") {
-		t.Errorf("expected text to contain 'introduction', got %q", text)
+	if !strings.Contains(text, "Introduction") {
+		t.Errorf("expected text to contain 'Introduction', got %q", text)
 	}
-	if !strings.Contains(text, "this is the content") {
-		t.Errorf("expected text to contain 'this is the content', got %q", text)
+	if !strings.Contains(text, "This is the content") {
+		t.Errorf("expected text to contain 'This is the content', got %q", text)
 	}
 }
 
@@ -147,7 +147,7 @@ Deep content.`
 	}
 
 	// All headings should be in text
-	expectedTexts := []string{"chapter 1", "section 1.1", "chapter 2", "section 2.1", "subsection 2.1.1"}
+	expectedTexts := []string{"Chapter 1", "Section 1.1", "Chapter 2", "Section 2.1", "Subsection 2.1.1"}
 	for _, expected := range expectedTexts {
 		if !strings.Contains(text, expected) {
 			t.Errorf("expected text to contain %q, got %q", expected, text)
@@ -169,23 +169,23 @@ func TestMarkdownParser_ParseCodeBlocksIncluded(t *testing.T) {
 	}
 
 	// Code content SHOULD be in text (important for RAG on notes with code)
-	// Note: NormalizeText lowercases everything for search
+	// Note: the parser returns raw text; case is preserved.
 	if !strings.Contains(text, "func main") {
 		t.Errorf("code block content should appear in text: %q", text)
 	}
-	if !strings.Contains(text, "println") {
+	if !strings.Contains(text, "Println") {
 		t.Errorf("code block content should appear in text: %q", text)
 	}
 
 	// Surrounding text should be present
-	if !strings.Contains(text, "code example") {
-		t.Errorf("expected text to contain 'code example', got %q", text)
+	if !strings.Contains(text, "Code Example") {
+		t.Errorf("expected text to contain 'Code Example', got %q", text)
 	}
-	if !strings.Contains(text, "here is some code") {
-		t.Errorf("expected text to contain 'here is some code', got %q", text)
+	if !strings.Contains(text, "Here is some code") {
+		t.Errorf("expected text to contain 'Here is some code', got %q", text)
 	}
-	if !strings.Contains(text, "end of example") {
-		t.Errorf("expected text to contain 'end of example', got %q", text)
+	if !strings.Contains(text, "End of example") {
+		t.Errorf("expected text to contain 'End of example', got %q", text)
 	}
 }
 
@@ -203,14 +203,14 @@ func TestMarkdownParser_ParseInlineCodeIncluded(t *testing.T) {
 	}
 
 	// Inline code SHOULD be in text (important for RAG on notes with code)
-	// Note: NormalizeText lowercases everything for search
-	if !strings.Contains(text, "fmt.println") {
+	// Note: the parser returns raw text; case is preserved.
+	if !strings.Contains(text, "fmt.Println") {
 		t.Errorf("inline code should appear in text: %q", text)
 	}
 
 	// Surrounding text should be present
-	if !strings.Contains(text, "use the") {
-		t.Errorf("expected text to contain 'use the', got %q", text)
+	if !strings.Contains(text, "Use the") {
+		t.Errorf("expected text to contain 'Use the', got %q", text)
 	}
 	if !strings.Contains(text, "function to print") {
 		t.Errorf("expected text to contain 'function to print', got %q", text)
@@ -255,8 +255,8 @@ func TestMarkdownParser_ParseImagesTextOnly(t *testing.T) {
 	}
 
 	// Alt text should be present
-	if !strings.Contains(text, "alt text for image") {
-		t.Errorf("expected text to contain 'alt text for image', got %q", text)
+	if !strings.Contains(text, "Alt text for image") {
+		t.Errorf("expected text to contain 'Alt text for image', got %q", text)
 	}
 
 	// Image path should NOT be in text
@@ -327,8 +327,8 @@ title: [invalid yaml
 	}
 
 	// Should still parse content, treating invalid frontmatter as content
-	if !strings.Contains(text, "content") {
-		t.Errorf("expected text to contain 'content', got %q", text)
+	if !strings.Contains(text, "Content") {
+		t.Errorf("expected text to contain 'Content', got %q", text)
 	}
 
 	// Metadata should only have section_count
@@ -364,7 +364,7 @@ func TestMarkdownParser_ParseListItems(t *testing.T) {
 	}
 
 	// List items should be present
-	expectedItems := []string{"apples", "bananas", "oranges", "first item", "second item", "third item"}
+	expectedItems := []string{"Apples", "Bananas", "Oranges", "First item", "Second item", "Third item"}
 	for _, item := range expectedItems {
 		if !strings.Contains(text, item) {
 			t.Errorf("expected text to contain %q, got %q", item, text)
@@ -391,8 +391,8 @@ Regular paragraph after.`
 	}
 
 	// Blockquote content should be present
-	if !strings.Contains(text, "this is a blockquote") {
-		t.Errorf("expected text to contain 'this is a blockquote', got %q", text)
+	if !strings.Contains(text, "This is a blockquote") {
+		t.Errorf("expected text to contain 'This is a blockquote', got %q", text)
 	}
 	if !strings.Contains(text, "spans multiple lines") {
 		t.Errorf("expected text to contain 'spans multiple lines', got %q", text)

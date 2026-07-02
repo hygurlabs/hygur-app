@@ -532,7 +532,7 @@ func (c *FilesConnector) List(ctx context.Context, opts plugin.ListOptions) ([]p
 				ConnectorID: "files",
 				SourceType:  row.SourceType,
 				Title:       row.Title,
-				Content:     row.NormalizedText,
+				Content:     row.DisplayText(),
 				Metadata:    row.Metadata,
 				CreatedAt:   row.CreatedAt,
 				UpdatedAt:   row.UpdatedAt,

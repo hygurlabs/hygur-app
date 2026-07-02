@@ -354,7 +354,10 @@ func (ms *MailSync) attachmentText(ctx context.Context, att mail.Attachment) str
 	if err != nil {
 		return ""
 	}
-	text = strings.TrimSpace(text)
+	// The PDF parser returns RAW text; collapse it so the mail body keeps the
+	// exact normalized attachment text it always carried (mail is left unchanged
+	// by the notes/files raw_text change).
+	text = strings.TrimSpace(ingest.NormalizeText(text))
 	if len(text) > maxAttachmentTextBytes {
 		text = text[:maxAttachmentTextBytes]
 	}

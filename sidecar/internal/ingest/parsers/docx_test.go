@@ -196,9 +196,9 @@ func TestDOCXParser_Parse_Simple(t *testing.T) {
 		t.Fatalf("Parse failed: %v", err)
 	}
 
-	// Check content (normalized to lowercase)
-	if content != "hello world" {
-		t.Errorf("expected 'hello world', got %q", content)
+	// Check content (raw text: case preserved)
+	if content != "Hello World" {
+		t.Errorf("expected 'Hello World', got %q", content)
 	}
 
 	// Check metadata
@@ -222,9 +222,9 @@ func TestDOCXParser_Parse_MultipleParagraphs(t *testing.T) {
 		t.Fatalf("Parse failed: %v", err)
 	}
 
-	// Content should contain all paragraphs separated by spaces (normalized)
+	// Content should contain all paragraphs separated by spaces (raw text: case preserved)
 	for _, p := range paragraphs {
-		if !strings.Contains(content, strings.ToLower(p)) {
+		if !strings.Contains(content, p) {
 			t.Errorf("content should contain %q, got %q", p, content)
 		}
 	}
@@ -357,7 +357,7 @@ func TestDOCXParser_Parse_SpecialCharacters(t *testing.T) {
 	}
 }
 
-func TestDOCXParser_Parse_WhitespaceNormalization(t *testing.T) {
+func TestDOCXParser_Parse_WhitespacePreserved(t *testing.T) {
 	p := NewDOCXParser()
 
 	docxData, err := createTestDOCX("Multiple   spaces   here")
@@ -371,9 +371,10 @@ func TestDOCXParser_Parse_WhitespaceNormalization(t *testing.T) {
 		t.Fatalf("Parse failed: %v", err)
 	}
 
-	// Multiple spaces should be collapsed to single space
-	if strings.Contains(content, "  ") {
-		t.Errorf("content should not have multiple spaces, got %q", content)
+	// The parser returns raw text: multiple spaces are preserved
+	// (normalization happens later in the ingest layer, not here).
+	if !strings.Contains(content, "Multiple   spaces   here") {
+		t.Errorf("content should preserve multiple spaces, got %q", content)
 	}
 }
 

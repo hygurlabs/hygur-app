@@ -83,10 +83,9 @@ func (p *DOCXParser) Parse(ctx context.Context, r io.Reader) (string, ingest.Met
 		return "", nil, fmt.Errorf("extracting text from DOCX: %w", err)
 	}
 
-	// Normalize the extracted text
-	text = ingest.NormalizeText(text)
-
-	if text == "" {
+	// Return the RAW extracted text (line breaks + case preserved). The ingest
+	// layer derives normalized_text via ingest.NormalizeText and stores both.
+	if strings.TrimSpace(text) == "" {
 		return "", nil, ErrEmptyDOCX
 	}
 

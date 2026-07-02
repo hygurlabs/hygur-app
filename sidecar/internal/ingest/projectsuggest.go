@@ -24,7 +24,7 @@ func suggestProjectID(ctx context.Context, client *llm.Client, item *store.Knowl
 	if client == nil || item == nil || len(projects) == 0 {
 		return ""
 	}
-	body := strings.TrimSpace(item.Title + "\n" + item.NormalizedText)
+	body := strings.TrimSpace(item.Title + "\n" + item.DisplayText())
 	if r := []rune(body); len(r) > projSuggestMaxRunes {
 		body = string(r[:projSuggestMaxRunes])
 	}

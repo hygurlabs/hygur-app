@@ -73,10 +73,9 @@ func (p *MarkdownParser) Parse(ctx context.Context, r io.Reader) (string, ingest
 	}
 	metadata["section_count"] = sectionCount
 
-	// Normalize the extracted text
-	normalized := ingest.NormalizeText(textBuilder.String())
-
-	return normalized, metadata, nil
+	// Return the RAW extracted text (case preserved). The ingest layer derives
+	// normalized_text via ingest.NormalizeText and stores both.
+	return textBuilder.String(), metadata, nil
 }
 
 // extractFrontmatter extracts YAML frontmatter from the content.

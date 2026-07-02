@@ -930,9 +930,13 @@ Paragraph text.
 			t.Fatalf("parse failed: %v", err)
 		}
 
-		// NormalizeText converts to lowercase
-		if !strings.Contains(text, "plain text") {
-			t.Errorf("expected parsed text to contain 'plain text', got %q", text)
+		// The parser returns RAW text (case + line breaks preserved); the ingest
+		// layer normalizes for the index copy.
+		if !strings.Contains(text, "Plain text") {
+			t.Errorf("expected parsed text to contain 'Plain text', got %q", text)
+		}
+		if !strings.Contains(text, "\n") {
+			t.Errorf("txt parser must preserve line breaks, got %q", text)
 		}
 	})
 

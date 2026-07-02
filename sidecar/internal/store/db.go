@@ -496,9 +496,9 @@ func (d *DB) InsertKnowledgeItem(ctx context.Context, item *KnowledgeItem) error
 	}
 
 	_, err = d.db.ExecContext(ctx, `
-		INSERT INTO knowledge_items (content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.ContentID, item.SourceType, item.SourcePath, item.Title, item.NormalizedText, string(metadata), item.VersionID, item.CreatedAt, item.UpdatedAt)
+		INSERT INTO knowledge_items (content_id, source_type, source_path, title, normalized_text, raw_text, metadata, version_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.ContentID, item.SourceType, item.SourcePath, item.Title, item.NormalizedText, item.RawText, string(metadata), item.VersionID, item.CreatedAt, item.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert knowledge item: %w", err)
 	}
@@ -513,7 +513,7 @@ func (d *DB) InsertKnowledgeItem(ctx context.Context, item *KnowledgeItem) error
 // GetKnowledgeItem retrieves a knowledge item by its content ID.
 func (d *DB) GetKnowledgeItem(ctx context.Context, contentID string) (*KnowledgeItem, error) {
 	row := d.db.QueryRowContext(ctx, `
-		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		SELECT content_id, source_type, source_path, title, normalized_text, COALESCE(raw_text, ''), metadata, version_id, created_at, updated_at
 		FROM knowledge_items
 		WHERE content_id = ?
 	`, contentID)
@@ -528,6 +528,7 @@ func (d *DB) GetKnowledgeItem(ctx context.Context, contentID string) (*Knowledge
 		&sourcePath,
 		&item.Title,
 		&item.NormalizedText,
+		&item.RawText,
 		&metadataStr,
 		&item.VersionID,
 		&item.CreatedAt,
@@ -665,7 +666,7 @@ func (d *DB) DeleteKnowledgeItem(ctx context.Context, contentID string) error {
 // ListKnowledgeItems returns a paginated list of knowledge items.
 func (d *DB) ListKnowledgeItems(ctx context.Context, limit, offset int) ([]*KnowledgeItem, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		SELECT content_id, source_type, source_path, title, normalized_text, COALESCE(raw_text, ''), metadata, version_id, created_at, updated_at
 		FROM knowledge_items
 		ORDER BY created_at DESC
 		LIMIT ? OFFSET ?
@@ -687,6 +688,7 @@ func (d *DB) ListKnowledgeItems(ctx context.Context, limit, offset int) ([]*Know
 			&sourcePath,
 			&item.Title,
 			&item.NormalizedText,
+			&item.RawText,
 			&metadataStr,
 			&item.VersionID,
 			&item.CreatedAt,
@@ -730,7 +732,7 @@ func (d *DB) ListKnowledgeItemsExcluding(ctx context.Context, excluded []string,
 	}
 	args = append(args, limit, offset)
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		SELECT content_id, source_type, source_path, title, normalized_text, COALESCE(raw_text, ''), metadata, version_id, created_at, updated_at
 		FROM knowledge_items
 		WHERE source_type NOT IN (`+placeholders+`)
 		ORDER BY created_at DESC
@@ -747,7 +749,7 @@ func (d *DB) ListKnowledgeItemsExcluding(ctx context.Context, excluded []string,
 		var metadataStr, sourcePath sql.NullString
 		if err := rows.Scan(
 			&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
-			&item.NormalizedText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
+			&item.NormalizedText, &item.RawText, &metadataStr, &item.VersionID, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan knowledge item: %w", err)
 		}
@@ -774,7 +776,7 @@ func (d *DB) ListKnowledgeItemsSince(ctx context.Context, since time.Time, sourc
 		limit = 100
 	}
 	query := `
-		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		SELECT content_id, source_type, source_path, title, normalized_text, COALESCE(raw_text, ''), metadata, version_id, created_at, updated_at
 		FROM knowledge_items
 		WHERE (created_at >= ? OR updated_at >= ?)
 	`
@@ -803,7 +805,7 @@ func (d *DB) ListKnowledgeItemsSince(ctx context.Context, since time.Time, sourc
 		var sourcePath sql.NullString
 		if err := rows.Scan(
 			&item.ContentID, &item.SourceType, &sourcePath, &item.Title,
-			&item.NormalizedText, &metadataStr, &item.VersionID,
+			&item.NormalizedText, &item.RawText, &metadataStr, &item.VersionID,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -1043,7 +1045,7 @@ func (d *DB) ListEventsInWindow(ctx context.Context, from, to time.Time, limit i
 
 func (d *DB) ListKnowledgeItemsBySourceType(ctx context.Context, sourceType string, limit, offset int) ([]*KnowledgeItem, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT content_id, source_type, source_path, title, normalized_text, metadata, version_id, created_at, updated_at
+		SELECT content_id, source_type, source_path, title, normalized_text, COALESCE(raw_text, ''), metadata, version_id, created_at, updated_at
 		FROM knowledge_items
 		WHERE source_type = ?
 		ORDER BY updated_at DESC
@@ -1066,6 +1068,7 @@ func (d *DB) ListKnowledgeItemsBySourceType(ctx context.Context, sourceType stri
 			&sourcePath,
 			&item.Title,
 			&item.NormalizedText,
+			&item.RawText,
 			&metadataStr,
 			&item.VersionID,
 			&item.CreatedAt,
@@ -1121,9 +1124,9 @@ func (d *DB) UpdateKnowledgeItem(ctx context.Context, item *KnowledgeItem) error
 
 	result, err := d.db.ExecContext(ctx, `
 		UPDATE knowledge_items
-		SET source_type = ?, source_path = ?, title = ?, normalized_text = ?, metadata = ?, version_id = ?, updated_at = ?
+		SET source_type = ?, source_path = ?, title = ?, normalized_text = ?, raw_text = ?, metadata = ?, version_id = ?, updated_at = ?
 		WHERE content_id = ?
-	`, item.SourceType, item.SourcePath, item.Title, item.NormalizedText, string(metadata), item.VersionID, item.UpdatedAt, item.ContentID)
+	`, item.SourceType, item.SourcePath, item.Title, item.NormalizedText, item.RawText, string(metadata), item.VersionID, item.UpdatedAt, item.ContentID)
 	if err != nil {
 		return fmt.Errorf("failed to update knowledge item: %w", err)
 	}

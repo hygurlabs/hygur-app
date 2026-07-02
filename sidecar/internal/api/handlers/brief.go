@@ -151,7 +151,7 @@ func (h *BriefHandler) List(w http.ResponseWriter, r *http.Request) {
 			ContentID: it.ContentID,
 			Title:     it.Title,
 			Kind:      it.SourceType,
-			Content:   it.NormalizedText,
+			Content:   it.DisplayText(),
 			CreatedAt: it.CreatedAt.Format(time.RFC3339),
 		}
 		if when, ok := it.Metadata["when"].(string); ok {
@@ -292,7 +292,7 @@ func (h *BriefHandler) AgendaEvents(w http.ResponseWriter, r *http.Request) {
 		if cd := store.GetCanonicalDate(it); !cd.IsZero() {
 			date = cd.UTC().Format(time.RFC3339)
 		}
-		out = append(out, evt{it.ContentID, it.SourceType, it.Title, it.NormalizedText, it.Metadata, date})
+		out = append(out, evt{it.ContentID, it.SourceType, it.Title, it.DisplayText(), it.Metadata, date})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"events": out})

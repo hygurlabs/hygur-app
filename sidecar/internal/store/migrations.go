@@ -614,6 +614,19 @@ CREATE TABLE IF NOT EXISTS token_usage_pass (
 );
 `,
 	},
+	// Migration 33 adds knowledge_items.raw_text: the ORIGINAL item text with line
+	// breaks + case preserved, stored alongside the collapsed/lowercased
+	// normalized_text so the Library and the LLM read the real content while
+	// FTS/embedding/dedup keep using normalized_text. Nullable — old rows have no
+	// raw (readers fall back to normalized_text via KnowledgeItem.DisplayText).
+	// Handled by applyRawTextV33Migration (PRAGMA-guarded, like v7): schemaSQL v1
+	// already declares the column on fresh installs, so the ALTER runs only when
+	// it is actually missing.
+	{
+		Version: 33,
+		Name:    "knowledge_items_raw_text",
+		SQL:     "", // handled by applyRawTextV33Migration
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.
@@ -656,6 +669,11 @@ func applyMigrations(db *sql.DB) error {
 			}
 		} else if m.Version == 9 {
 			if err := applySectionsAndFTSV9Migration(tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
+			}
+		} else if m.Version == 33 {
+			if err := applyRawTextV33Migration(tx); err != nil {
 				tx.Rollback()
 				return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
 			}
@@ -718,6 +736,26 @@ func applyMemoriesV7Migration(tx *sql.Tx) error {
 	}
 	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_accepted_at ON memories(accepted_at)`); err != nil {
 		return fmt.Errorf("index accepted_at: %w", err)
+	}
+	return nil
+}
+
+// applyRawTextV33Migration adds knowledge_items.raw_text only when it is missing.
+// Fresh installs already see it via schemaSQL (v1), so a blind ALTER would fail
+// with "duplicate column name". We inspect PRAGMA table_info(knowledge_items) and
+// add the column only when absent — idempotent across fresh and upgraded DBs.
+// The column is left NULL for existing rows (no backfill): readers fall back to
+// normalized_text via KnowledgeItem.DisplayText until a row is re-ingested.
+func applyRawTextV33Migration(tx *sql.Tx) error {
+	existing, err := existingColumns(tx, "knowledge_items")
+	if err != nil {
+		return err
+	}
+	if _, ok := existing["raw_text"]; ok {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE knowledge_items ADD COLUMN raw_text TEXT`); err != nil {
+		return fmt.Errorf("add knowledge_items.raw_text: %w", err)
 	}
 	return nil
 }

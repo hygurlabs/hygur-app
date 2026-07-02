@@ -97,10 +97,15 @@ func (i *Ingestor) extractClaimsForItem(ctx context.Context, item *store.Knowled
 	if !claimsEligible(item, cats) {
 		return nil, false
 	}
-	if i.llmClient == nil || strings.TrimSpace(item.NormalizedText) == "" {
+	// Extract claims from the display text (raw when available): line breaks + case
+	// help the LLM read the content correctly; falls back to normalized_text for
+	// pre-raw_text items. The entity keys it derives are re-normalized downstream,
+	// so the associative/identifier index stays stable.
+	content := item.DisplayText()
+	if i.llmClient == nil || strings.TrimSpace(content) == "" {
 		return nil, false
 	}
-	got, err := contradict.ExtractClaims(ctx, i.llmClient, item.NormalizedText)
+	got, err := contradict.ExtractClaims(ctx, i.llmClient, content)
 	if err != nil {
 		log.Printf("[ingest] claim extraction failed for %s: %v", item.ContentID, err)
 		return nil, false

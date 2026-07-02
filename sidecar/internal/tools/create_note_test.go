@@ -299,6 +299,56 @@ func TestCreateNoteTool_Run_NormalizesContent(t *testing.T) {
 	}
 }
 
+func TestCreateNoteTool_Run_PreservesRawText(t *testing.T) {
+	db, err := store.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	tool := NewCreateNoteTool(db)
+	ctx := context.Background()
+
+	// Fictional note body with line breaks + case that NormalizeText would destroy.
+	body := "650€\nORES\nmission X"
+	req := CreateNoteRequest{Title: "Facture", Content: body}
+
+	resp, err := tool.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	item, err := db.GetKnowledgeItem(ctx, resp.ContentID)
+	if err != nil {
+		t.Fatalf("GetKnowledgeItem() failed: %v", err)
+	}
+	if item == nil {
+		t.Fatal("note not saved")
+	}
+
+	// raw_text keeps the original line breaks + case.
+	if item.RawText != body {
+		t.Errorf("RawText = %q, want %q", item.RawText, body)
+	}
+	if !strings.Contains(item.RawText, "\n") {
+		t.Errorf("RawText must keep line breaks, got %q", item.RawText)
+	}
+	if !strings.Contains(item.RawText, "ORES") {
+		t.Errorf("RawText must keep case, got %q", item.RawText)
+	}
+
+	// normalized_text is still the collapsed, lowercased index copy (FTS/embedding/dedup).
+	wantNorm := "650€ ores mission x"
+	if item.NormalizedText != wantNorm {
+		t.Errorf("NormalizedText = %q, want %q", item.NormalizedText, wantNorm)
+	}
+
+	// The display/LLM path reads the raw text.
+	if item.DisplayText() != body {
+		t.Errorf("DisplayText() = %q, want raw %q", item.DisplayText(), body)
+	}
+}
+
 func TestCreateNoteTool_ToolDefinition(t *testing.T) {
 	tool := &CreateNoteTool{}
 	def := tool.ToolDefinition()

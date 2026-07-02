@@ -15,7 +15,9 @@ func (d *DailyBrief) ExtractClaims(ctx context.Context, item *store.KnowledgeIte
 	if d == nil || d.llm == nil || item == nil {
 		return nil, nil
 	}
-	claims, err := contradict.ExtractClaims(ctx, d.llm, item.NormalizedText)
+	// Read the display text (raw when available; falls back to normalized_text for
+	// pre-raw_text items), matching the ingest-time claim extraction.
+	claims, err := contradict.ExtractClaims(ctx, d.llm, item.DisplayText())
 	if err != nil {
 		return nil, err
 	}

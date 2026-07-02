@@ -113,7 +113,7 @@ func (h *ExportHandler) buildZip(ctx context.Context) ([]byte, error) {
 					ContentID:  it.ContentID,
 					SourceType: it.SourceType,
 					Title:      it.Title,
-					Text:       it.NormalizedText,
+					Text:       it.DisplayText(),
 					Metadata:   it.Metadata,
 					CreatedAt:  it.CreatedAt.UTC().Format(time.RFC3339),
 					UpdatedAt:  it.UpdatedAt.UTC().Format(time.RFC3339),
@@ -129,7 +129,7 @@ func (h *ExportHandler) buildZip(ctx context.Context) ([]byte, error) {
 				if title == "" {
 					title = "(untitled)"
 				}
-				if _, err := fmt.Fprintf(fw, "# %s\n\n_%s · %s_\n\n%s\n", title, st, ei.CreatedAt, it.NormalizedText); err != nil {
+				if _, err := fmt.Fprintf(fw, "# %s\n\n_%s · %s_\n\n%s\n", title, st, ei.CreatedAt, it.DisplayText()); err != nil {
 					return nil, err
 				}
 			}

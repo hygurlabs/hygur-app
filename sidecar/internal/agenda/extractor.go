@@ -225,10 +225,11 @@ func (e *Extractor) extractViaLLM(ctx context.Context, items []store.KnowledgeIt
 			break
 		}
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", item.ContentID, item.Title))
-		if len(item.NormalizedText) > 200 {
-			sb.WriteString(item.NormalizedText[:200])
+		body := item.DisplayText()
+		if len(body) > 200 {
+			sb.WriteString(body[:200])
 		} else {
-			sb.WriteString(item.NormalizedText)
+			sb.WriteString(body)
 		}
 		sb.WriteString("\n\n")
 	}

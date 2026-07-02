@@ -310,6 +310,9 @@ func (h *NotesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		item.NormalizedText = ingest.NormalizeText(*req.Content)
+		// Keep the original body (line breaks + case) for the Library + LLM; the
+		// normalized copy above still feeds FTS/embedding/dedup.
+		item.RawText = *req.Content
 		contentChanged = true
 	}
 
@@ -429,7 +432,7 @@ func (h *NotesHandler) itemToNoteResponse(ctx context.Context, item *store.Knowl
 	return NoteResponse{
 		ID:        item.ContentID,
 		Title:     item.Title,
-		Content:   item.NormalizedText,
+		Content:   item.DisplayText(),
 		ProjectID: projectID,
 		Tags:      tagResponses,
 		CreatedAt: item.CreatedAt.Format(time.RFC3339),

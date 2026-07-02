@@ -290,7 +290,9 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 		return nil, fmt.Errorf("failed to parse file: %w", err)
 	}
 
-	// Normalize the content
+	// Normalize the content for the index (FTS/embedding/dedup). The parser
+	// returns the RAW extracted text (line breaks + case preserved); we keep that
+	// in raw_text (below) for the Library + LLM and derive normalized_text here.
 	normalized := NormalizeText(content)
 	if normalized == "" {
 		// Fail-soft for source types that may legitimately produce no text
@@ -351,6 +353,7 @@ func (i *Ingestor) Ingest(ctx context.Context, path string, opts IngestOptions) 
 			SourcePath:     &path,
 			Title:          filepath.Base(path),
 			NormalizedText: normalized,
+			RawText:        content,
 			Metadata: map[string]any{
 				"content_hash":   contentHash,
 				"file_size":      info.Size(),
@@ -477,15 +480,32 @@ type IngestTextInput struct {
 // no-op ("duplicate"). On embed failure the item is kept (FTS-searchable) rather
 // than rolled back — a failed embed must never delete content (RELIABILITY R2).
 func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestResult, error) {
-	text := strings.TrimSpace(in.Text)
-	if text == "" {
+	raw := strings.TrimSpace(in.Text)
+	if raw == "" {
 		return nil, ErrEmptyContent
 	}
 	if i.store == nil {
 		return nil, fmt.Errorf("store not configured")
 	}
 
-	contentHash := hashContent(text)
+	sourceType := strings.TrimSpace(in.SourceType)
+	if sourceType == "" {
+		sourceType = "text"
+	}
+
+	// Mail keeps its body verbatim in normalized_text (it already preserves line
+	// breaks — leave it untouched). Every other pushed source (files/text) stores
+	// the collapsed index text in normalized_text and the original in raw_text, so
+	// the Library + LLM read line breaks + case while FTS/embedding/dedup use the
+	// normalized form. hashContent runs on normalized_text so dedup is unchanged.
+	normalized := raw
+	rawText := ""
+	if !store.IsMailSourceType(sourceType) {
+		normalized = NormalizeText(raw)
+		rawText = raw
+	}
+
+	contentHash := hashContent(normalized)
 	now := time.Now()
 	created := now
 	if !in.CreatedAt.IsZero() {
@@ -516,13 +536,9 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 		}
 	}
 
-	sourceType := strings.TrimSpace(in.SourceType)
-	if sourceType == "" {
-		sourceType = "text"
-	}
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
-		title = text
+		title = raw
 		if nl := strings.IndexByte(title, '\n'); nl >= 0 {
 			title = title[:nl]
 		}
@@ -553,14 +569,17 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 		}
 	}
 
-	// Tier 1 entity extraction (regex) for entity_search parity with file/mail ingest.
-	extract.EnrichMetadataWithTier1(metadata, text)
+	// Tier 1 entity extraction (regex) for entity_search parity with file/mail
+	// ingest. Runs on the raw text: IBAN/VAT regexes need the uppercase country
+	// prefixes that NormalizeText would have lowercased.
+	extract.EnrichMetadataWithTier1(metadata, raw)
 
 	item := &store.KnowledgeItem{
 		ContentID:      contentID,
 		SourceType:     sourceType,
 		Title:          title,
-		NormalizedText: text,
+		NormalizedText: normalized,
+		RawText:        rawText,
 		Metadata:       metadata,
 		VersionID:      contentHash[:16],
 		CreatedAt:      created,
@@ -579,7 +598,7 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 		i.TagItem(ctx, item, true)
 	}
 
-	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, text, DefaultChunkTokenBudget, now)
+	_, chunkCount, idxErr := IndexSections(ctx, i.store, i.embeddingService, contentID, normalized, DefaultChunkTokenBudget, now)
 	if idxErr != nil {
 		// Keep the item (chunks are FTS-indexed); do NOT roll back on embed
 		// failure — that would delete content. A re-push or re-embed fills vectors.

@@ -147,11 +147,10 @@ func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (content string, met
 		}
 	}
 
-	// Join pages with double newlines
+	// Join pages with double newlines. This is the RAW extracted text (line
+	// breaks + case preserved); the ingest layer derives normalized_text via
+	// ingest.NormalizeText and stores both.
 	content = strings.Join(pageTexts, "\n\n")
-
-	// Normalize the text
-	content = ingest.NormalizeText(content)
 
 	metadata := ingest.Metadata{
 		"page_count": pageCount,
@@ -176,7 +175,7 @@ func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (content string, met
 			"page_count", pageCount, "content_len", len(content))
 		ocrText := p.ocrFallback(ctx, data)
 		if ocrText != "" {
-			content = ingest.NormalizeText(ocrText)
+			content = ocrText
 			metadata["ocr_attempted"] = true
 		} else {
 			metadata["ocr_attempted"] = false

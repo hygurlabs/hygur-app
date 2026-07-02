@@ -410,7 +410,7 @@ func buildNumberedTraces(items []*store.KnowledgeItem) (string, []string) {
 		if t := store.GetCanonicalDate(it); !t.IsZero() {
 			date = t.Format("2006-01-02")
 		}
-		snippet := strings.ReplaceAll(strings.TrimSpace(it.NormalizedText), "\n", " ")
+		snippet := strings.ReplaceAll(strings.TrimSpace(it.DisplayText()), "\n", " ")
 		if len(snippet) > chronicleTraceCharCap {
 			snippet = snippet[:chronicleTraceCharCap] + "…"
 		}

@@ -280,11 +280,13 @@ func TestPDFParser_Parse_EmptyPDF(t *testing.T) {
 	}
 }
 
-// TestPDFParser_Parse_NormalizedOutput verifies the output is normalized.
-func TestPDFParser_Parse_NormalizedOutput(t *testing.T) {
+// TestPDFParser_Parse_RawOutput verifies the parser returns raw text:
+// case is preserved and multiple spaces are not collapsed (normalization
+// happens later in the ingest layer, not in the parser).
+func TestPDFParser_Parse_RawOutput(t *testing.T) {
 	p := NewPDFParser()
 
-	// Create PDF with text that has multiple spaces
+	// Create PDF with text that has mixed case and multiple spaces
 	minimalPDF := createMinimalPDF("Test   Content")
 
 	ctx := context.Background()
@@ -294,14 +296,14 @@ func TestPDFParser_Parse_NormalizedOutput(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Output should be lowercase (from normalization)
-	if strings.Contains(content, "Test") {
-		t.Error("content should be normalized to lowercase")
+	// Case should be preserved (no lowercasing at the parser layer)
+	if !strings.Contains(content, "Test") {
+		t.Errorf("case should be preserved, got %q", content)
 	}
 
-	// Multiple spaces should be collapsed
-	if strings.Contains(content, "   ") {
-		t.Error("multiple spaces should be collapsed")
+	// Multiple spaces should be preserved (no collapsing at the parser layer)
+	if !strings.Contains(content, "   ") {
+		t.Errorf("multiple spaces should be preserved, got %q", content)
 	}
 }
 

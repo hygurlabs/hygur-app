@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
     source_type TEXT NOT NULL,  -- markdown, pdf, docx, txt, email, thread
     source_path TEXT,
     title TEXT NOT NULL,
-    normalized_text TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,  -- collapsed + lowercased index text (FTS/embedding/dedup)
+    raw_text TEXT,  -- original text, line breaks + case preserved (display + LLM); NULL for pre-migration rows
     metadata TEXT,  -- JSON
     version_id TEXT NOT NULL DEFAULT 'v1',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -242,4 +243,4 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 `
 
 // CurrentSchemaVersion is the current schema version number.
-const CurrentSchemaVersion = 32
+const CurrentSchemaVersion = 33
