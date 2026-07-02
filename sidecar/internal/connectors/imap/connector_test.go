@@ -17,7 +17,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_Info(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	info := c.Info()
 
 	assert.Equal(t, "imap", info.ID)
@@ -34,7 +34,7 @@ func TestIMAPConnector_Info(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_Capabilities(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	caps := c.Capabilities()
 
 	assert.True(t, caps.CanSync, "CanSync must be true")
@@ -48,7 +48,7 @@ func TestIMAPConnector_Capabilities(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_ConfigSchema(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	schema := c.ConfigSchema()
 
 	require.NotEmpty(t, schema.Groups)
@@ -86,7 +86,7 @@ func TestIMAPConnector_ConfigSchema(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_SecretFieldKeys(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	keys := c.SecretFieldKeys()
 	assert.Contains(t, keys, "password", "password must be declared as a secret field")
 }
@@ -154,7 +154,7 @@ func TestIMAPConnector_Configure_ValidatesRequiredFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := imapconn.New(nil, nil, nil, zerolog.Nop())
+			c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 			err := c.Init(context.Background(), tt.cfg)
 			if tt.wantErr {
 				require.Error(t, err)
@@ -179,7 +179,7 @@ func TestIMAPConnector_Configure_ValidatesRequiredFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_Health_InitialState(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	h := c.Health()
 
 	assert.Equal(t, plugin.StatusUnconfigured, h.Status)
@@ -192,7 +192,7 @@ func TestIMAPConnector_Health_InitialState(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_Stop_WhenNotStarted(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	err := c.Stop(context.Background())
 	assert.NoError(t, err, "Stop must be a no-op when not started")
 }
@@ -202,7 +202,7 @@ func TestIMAPConnector_Stop_WhenNotStarted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_Start_NoOp(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	err := c.Start(context.Background())
 	assert.NoError(t, err, "Start must be a no-op (connections are per-Sync)")
 }
@@ -212,7 +212,7 @@ func TestIMAPConnector_Start_NoOp(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIMAPConnector_Sync_NilDB_ReturnsError(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	// Sync without Init → host is empty → immediate error.
 	_, err := c.Sync(context.Background(), plugin.SyncOptions{})
 	require.Error(t, err)
@@ -232,7 +232,7 @@ func TestIMAPConnector_Sync_NilDB_ReturnsError(t *testing.T) {
 // after a successful Init with required fields, confirming it progresses past
 // StatusUnconfigured without performing any network IO.
 func TestIMAPConnector_Init_StatusConnecting(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	err := c.Init(context.Background(), plugin.ConnectorConfig{
 		Settings: map[string]string{
 			"host":     "imap.gmail.com",
@@ -249,7 +249,7 @@ func TestIMAPConnector_Init_StatusConnecting(t *testing.T) {
 // TestIMAPConnector_Init_EmptyHost_Error validates that Init returns an error
 // when the host setting is entirely absent.
 func TestIMAPConnector_Init_EmptyHost_Error(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	err := c.Init(context.Background(), plugin.ConnectorConfig{
 		Settings: map[string]string{
 			"username": "user@example.com",
@@ -262,7 +262,7 @@ func TestIMAPConnector_Init_EmptyHost_Error(t *testing.T) {
 // TestIMAPConnector_Init_EmptyUsername_Error validates that Init returns an
 // error when the username setting is absent (even if host is set).
 func TestIMAPConnector_Init_EmptyUsername_Error(t *testing.T) {
-	c := imapconn.New(nil, nil, nil, zerolog.Nop())
+	c := imapconn.New(nil, nil, nil, zerolog.Nop(), false)
 	err := c.Init(context.Background(), plugin.ConnectorConfig{
 		Settings: map[string]string{
 			"host": "imap.example.com",

@@ -199,6 +199,12 @@ func setDefaults(v *viper.Viper) {
 
 	// Empty default so the key is known (owner identity; excluded from subjects).
 	v.SetDefault("identity.owner_names", []string{})
+
+	// Connector SSRF guard: default FALSE (blocks internal targets in managed
+	// cloud). Registered so AutomaticEnv binds HYGUR_CONNECTOR_SECURITY_ALLOW_
+	// PRIVATE_TARGETS (viper only env-binds keys it already knows). Self-hosters
+	// set it true for a LAN CalDAV/IMAP server.
+	v.SetDefault("connector_security.allow_private_targets", false)
 }
 
 // SaveConnectorsConfig persiste la map des ConnectorSettings dans config.yaml

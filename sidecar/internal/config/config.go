@@ -50,6 +50,23 @@ type Config struct {
 
 	// Identity declares who the owner is, so the psyché can tell self from others.
 	Identity IdentityConfig `mapstructure:"identity" yaml:"identity,omitempty"`
+
+	// ConnectorSecurity holds connector-wide security toggles. These are
+	// OPERATOR/global settings — they are NEVER sourced from the tenant-editable
+	// per-connector settings, so a tenant cannot defeat the SSRF guard.
+	ConnectorSecurity ConnectorSecurityConfig `mapstructure:"connector_security" yaml:"connector_security,omitempty"`
+}
+
+// ConnectorSecurityConfig holds connector-wide (global) security settings.
+type ConnectorSecurityConfig struct {
+	// AllowPrivateTargets, when true, lets the outbound connectors (CalDAV, IMAP)
+	// reach private / loopback / link-local addresses. Default FALSE: in managed
+	// multi-tenant cloud a tenant-supplied URL/host must never reach internal
+	// services (cloud metadata 169.254.169.254, k8s API, other tenants).
+	// Self-hosters may set it true for a LAN CalDAV/Nextcloud or IMAP server.
+	// It is a GLOBAL operator setting (config.yaml / HYGUR_CONNECTOR_SECURITY_
+	// ALLOW_PRIVATE_TARGETS) — it must NEVER be read from plugin.ConnectorConfig.
+	AllowPrivateTargets bool `mapstructure:"allow_private_targets" yaml:"allow_private_targets,omitempty"`
 }
 
 // IdentityConfig declares the owner's own identity.

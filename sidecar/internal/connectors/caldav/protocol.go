@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/hygur/sidecar/internal/netguard"
 )
 
 // This file implements just enough of the CalDAV protocol (RFC 4791) to read a
@@ -29,8 +31,8 @@ const (
 
 // multistatus mirrors the DAV: 207 Multi-Status envelope (only the bits we read).
 type multistatus struct {
-	XMLName   xml.Name       `xml:"DAV: multistatus"`
-	Responses []davResponse  `xml:"DAV: response"`
+	XMLName   xml.Name      `xml:"DAV: multistatus"`
+	Responses []davResponse `xml:"DAV: response"`
 }
 
 type davResponse struct {
@@ -224,6 +226,15 @@ func resolveRef(base, ref string) string {
 // with a username is read via the CalDAV protocol (PROPFIND discovery + REPORT),
 // with a direct-GET fallback if the protocol path fails.
 func (c *Connector) fetchCalendar(ctx context.Context, rawURL, username, password string) (string, error) {
+	// Enforce the scheme allowlist (only http/https after webcal→https
+	// normalization) and reject a non-public IP-literal target up front. The
+	// dial-time guard (c.http = netguard.Client) is authoritative for hostnames
+	// that resolve internal + every redirect/CalDAV-discovered hop; this rejects
+	// obviously-bad URLs (file://, gopher://, http://169.254.169.254) before any
+	// request leaves the host.
+	if _, err := netguard.ValidateURL(normalizeCalURL(rawURL), c.allowPrivate, "http", "https"); err != nil {
+		return "", err
+	}
 	if useCalDAV(rawURL, username) {
 		if ics, err := c.syncCalDAV(ctx, rawURL, username, password); err == nil {
 			return ics, nil

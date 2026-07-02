@@ -15,6 +15,7 @@ import (
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/llm"
+	"github.com/hygur/sidecar/internal/netguard"
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -42,6 +43,11 @@ type Connector struct {
 	log    zerolog.Logger
 	http   *http.Client
 
+	// allowPrivate mirrors the GLOBAL config.ConnectorSecurity.AllowPrivateTargets.
+	// It is threaded in at construction and NEVER read from the tenant-editable
+	// ConnectorConfig, so a tenant cannot flip it to defeat the SSRF guard.
+	allowPrivate bool
+
 	mu       sync.RWMutex
 	cfg      plugin.ConnectorConfig
 	health   plugin.HealthStatus
@@ -50,14 +56,18 @@ type Connector struct {
 
 // New creates a CalDAV/ICS connector. db is required; emb may be nil (events
 // are then stored without embeddings — still listed, but not RAG-searchable).
-func New(db *store.DB, emb *llm.EmbeddingService, broker *events.Broker, log zerolog.Logger) *Connector {
+// allowPrivate comes from the global operator config (never from the tenant): it
+// routes every fetch through the netguard SSRF client, which refuses non-public
+// addresses unless allowPrivate is set (self-host LAN CalDAV/Nextcloud).
+func New(db *store.DB, emb *llm.EmbeddingService, broker *events.Broker, log zerolog.Logger, allowPrivate bool) *Connector {
 	return &Connector{
-		db:     db,
-		emb:    emb,
-		broker: broker,
-		log:    log.With().Str("connector", "caldav").Logger(),
-		http:   &http.Client{Timeout: fetchTimeout},
-		health: plugin.HealthStatus{Status: plugin.StatusUnconfigured},
+		db:           db,
+		emb:          emb,
+		broker:       broker,
+		log:          log.With().Str("connector", "caldav").Logger(),
+		http:         netguard.Client(fetchTimeout, allowPrivate),
+		allowPrivate: allowPrivate,
+		health:       plugin.HealthStatus{Status: plugin.StatusUnconfigured},
 	}
 }
 

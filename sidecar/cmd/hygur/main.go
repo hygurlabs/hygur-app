@@ -504,8 +504,12 @@ func main() {
 
 	notesConn := notesconnector.New(createNoteTool, db, embeddingService)
 	filesConn := filesconnector.New(ingestor, db)
-	imapConn := imapconnector.New(db, embeddingService, nil, logger) // broker wired below after events setup
-	caldavConn := caldavconnector.New(db, embeddingService, nil, logger)
+	// allowPrivate is a GLOBAL operator setting (never the tenant's): it lets the
+	// outbound connectors reach LAN/loopback targets. Default false blocks internal
+	// SSRF targets in managed cloud.
+	allowPrivateTargets := cfg.ConnectorSecurity.AllowPrivateTargets
+	imapConn := imapconnector.New(db, embeddingService, nil, logger, allowPrivateTargets) // broker wired below after events setup
+	caldavConn := caldavconnector.New(db, embeddingService, nil, logger, allowPrivateTargets)
 	_ = pluginManager.Register(protonConn)
 	_ = pluginManager.Register(gmailConn)
 	_ = pluginManager.Register(mailappConn)
@@ -517,13 +521,13 @@ func main() {
 	// Register IMAP factory for multi-instance support.
 	// Broker is nil here; dynamic instances get it wired below via SetBroker iteration.
 	pluginManager.RegisterFactory("imap", func() plugin.Connector {
-		return imapconnector.New(db, embeddingService, nil, logger)
+		return imapconnector.New(db, embeddingService, nil, logger, allowPrivateTargets)
 	})
 
 	// Register CalDAV factory for multi-instance support (multi-compte +).
 	// Dynamic instances get the broker wired below via the SetBroker iteration.
 	pluginManager.RegisterFactory("caldav", func() plugin.Connector {
-		return caldavconnector.New(db, embeddingService, nil, logger)
+		return caldavconnector.New(db, embeddingService, nil, logger, allowPrivateTargets)
 	})
 
 	// Migrate a legacy unified "mail" connector config (written by pre-split

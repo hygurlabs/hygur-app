@@ -28,6 +28,7 @@ import (
 	"github.com/hygur/sidecar/internal/ingest"
 	"github.com/hygur/sidecar/internal/llm"
 	mailpkg "github.com/hygur/sidecar/internal/mail"
+	"github.com/hygur/sidecar/internal/netguard"
 	"github.com/hygur/sidecar/internal/plugin"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -35,8 +36,8 @@ import (
 
 // Compile-time assertions.
 var (
-	_ plugin.Connector        = (*Connector)(nil)
-	_ plugin.Syncer           = (*Connector)(nil)
+	_ plugin.Connector           = (*Connector)(nil)
+	_ plugin.Syncer              = (*Connector)(nil)
 	_ plugin.SecretFieldProvider = (*Connector)(nil)
 )
 
@@ -58,6 +59,12 @@ type Connector struct {
 	broker *events.Broker
 	log    zerolog.Logger
 
+	// allowPrivate mirrors the GLOBAL config.ConnectorSecurity.AllowPrivateTargets.
+	// Threaded in at construction (never from the tenant-editable ConnectorConfig):
+	// when false the dial is routed through a netguard dialer that refuses a
+	// tenant-supplied host resolving to a non-public address.
+	allowPrivate bool
+
 	mu       sync.RWMutex
 	cfg      plugin.ConnectorConfig
 	health   plugin.HealthStatus
@@ -73,12 +80,16 @@ type Connector struct {
 // db is required for InsertKnowledgeItem; emb chunks+embeds each message so it
 // is searchable (may be nil — items are stored without embeddings then); broker
 // may be nil and can be set later via SetBroker (events skipped when nil).
-func New(db *store.DB, emb *llm.EmbeddingService, broker *events.Broker, log zerolog.Logger) *Connector {
+// allowPrivate comes from the global operator config (never from the tenant): it
+// routes the IMAP dial through the netguard dialer, which refuses non-public
+// addresses unless allowPrivate is set (self-host LAN IMAP server).
+func New(db *store.DB, emb *llm.EmbeddingService, broker *events.Broker, log zerolog.Logger, allowPrivate bool) *Connector {
 	return &Connector{
-		db:     db,
-		emb:    emb,
-		broker: broker,
-		log:    log.With().Str("connector", "imap").Logger(),
+		db:           db,
+		emb:          emb,
+		broker:       broker,
+		log:          log.With().Str("connector", "imap").Logger(),
+		allowPrivate: allowPrivate,
 		health: plugin.HealthStatus{
 			Status: plugin.StatusUnconfigured,
 		},
@@ -707,12 +718,21 @@ func imapDialOptions() *imapclient.Options {
 	return &imapclient.Options{DebugWriter: imapDebugWriter{w: os.Stderr}}
 }
 
-// dial opens an IMAP connection with TLS or STARTTLS depending on useTLS.
+// dial opens an IMAP connection with TLS or STARTTLS depending on useTLS. The
+// dialer is a netguard dialer whose Control hook validates the RESOLVED IP
+// before connecting, so a tenant-supplied host that resolves to a non-public
+// address is refused unless allowPrivate is set. Both DialTLS and DialStartTLS
+// establish the raw TCP connection through this dialer, so both are covered.
 func (c *Connector) dial(_ context.Context, address string, useTLS bool) (*imapclient.Client, error) {
-	if useTLS {
-		return imapclient.DialTLS(address, imapDialOptions())
+	opts := imapDialOptions()
+	if opts == nil {
+		opts = &imapclient.Options{}
 	}
-	return imapclient.DialStartTLS(address, imapDialOptions())
+	opts.Dialer = netguard.Dialer(dialTimeout, c.allowPrivate)
+	if useTLS {
+		return imapclient.DialTLS(address, opts)
+	}
+	return imapclient.DialStartTLS(address, opts)
 }
 
 // searchUIDs returns the list of UIDs to fetch.
@@ -969,8 +989,8 @@ func stripHTMLTags(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	inTag := false
-	readingName := false  // accumulating the tag name right after '<'
-	skip := 0             // >0 while inside <style>/<script> content
+	readingName := false // accumulating the tag name right after '<'
+	skip := 0            // >0 while inside <style>/<script> content
 	var name []byte
 	for i := 0; i < len(s); i++ {
 		r := s[i]

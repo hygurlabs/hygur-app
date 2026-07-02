@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hygur/sidecar/internal/netguard"
 	"golang.org/x/net/html"
 )
 
@@ -19,77 +20,25 @@ import (
 // untrusted HTML into bounded plain text. Prompt-injection defence proper (the
 // "tainted context" that disables side-effecting tools once web content is in
 // play) lives in the chat loop, not here.
+//
+// The SSRF primitives now live in internal/netguard, shared with the outbound
+// connectors so there is ONE implementation. The web tools always pin
+// allowPrivate=false: fetch_url/web_search must NEVER reach private targets.
 
-// isDisallowedIP reports whether an IP must never be dialed by a web tool:
-// loopback, private (RFC1918 + ULA), link-local (incl. 169.254.169.254 metadata),
-// CGNAT, unspecified, and multicast.
-func isDisallowedIP(ip net.IP) bool {
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	// Carrier-grade NAT 100.64.0.0/10 (sometimes routes to cloud metadata/infra).
-	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-		return true
-	}
-	return false
-}
+// isDisallowedIP reports whether an IP must never be dialed by a web tool.
+// Thin wrapper over netguard so behaviour stays identical.
+func isDisallowedIP(ip net.IP) bool { return netguard.IsDisallowedIP(ip) }
 
-// safeDialContext resolves the target at DIAL time and refuses if any resolved IP
-// is disallowed — closing the DNS-rebinding/TOCTOU window (a name that resolves
-// public at validation but internal at connect). Re-runs on every redirect hop.
-func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve %q: %w", host, err)
-	}
-	for _, ip := range ips {
-		if isDisallowedIP(ip) {
-			return nil, fmt.Errorf("refusing to connect to non-public address %s (%s)", ip, host)
-		}
-	}
-	d := &net.Dialer{Timeout: 5 * time.Second}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
-}
-
-// safeHTTPClient builds an HTTP client that only ever connects to public hosts
-// (via safeDialContext), bounds the time, and re-validates every redirect hop.
+// safeHTTPClient builds an HTTP client that only ever connects to public hosts,
+// bounds the time, and re-validates every redirect hop (allowPrivate=false).
 func safeHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{DialContext: safeDialContext, MaxIdleConns: 4},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil // each hop still dials through safeDialContext
-		},
-	}
+	return netguard.Client(timeout, false)
 }
 
 // validatePublicURL parses raw, enforces http/https, and fails fast if the host
-// resolves to a non-public address. (Defence in depth — safeDialContext is the
-// authoritative guard, but this rejects obviously-bad URLs before any request.)
+// is a non-public IP literal. The web tools never allow private targets.
 func validatePublicURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("only http/https URLs are allowed (got %q)", u.Scheme)
-	}
-	host := u.Hostname()
-	if host == "" {
-		return nil, fmt.Errorf("URL has no host")
-	}
-	if ip := net.ParseIP(host); ip != nil && isDisallowedIP(ip) {
-		return nil, fmt.Errorf("refusing non-public address %s", host)
-	}
-	return u, nil
+	return netguard.ValidateURL(raw, false, "http", "https")
 }
 
 // fetchText GETs u (public-only, size-bounded) and returns the page title + its
@@ -125,7 +74,7 @@ func htmlToText(r io.Reader, maxChars int) (title, text string, err error) {
 	}
 	z := html.NewTokenizer(r)
 	var b strings.Builder
-	skipDepth := 0          // inside script/style/head/noscript
+	skipDepth := 0 // inside script/style/head/noscript
 	inTitle := false
 	var titleB strings.Builder
 	// NB: do not skip <head> wholesale — its <title> is wanted (captured below) and
