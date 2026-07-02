@@ -205,6 +205,13 @@ func setDefaults(v *viper.Viper) {
 	// PRIVATE_TARGETS (viper only env-binds keys it already knows). Self-hosters
 	// set it true for a LAN CalDAV/IMAP server.
 	v.SetDefault("connector_security.allow_private_targets", false)
+
+	// Files connector confinement root: default "" = permissive (self-host / the
+	// operator's own instance may index arbitrary local folders). Registered so
+	// AutomaticEnv binds HYGUR_CONNECTOR_SECURITY_FILES_ROOT (viper only env-binds
+	// keys it already knows). Managed provisioning sets it to the tenant's data
+	// root to block local file disclosure.
+	v.SetDefault("connector_security.files_root", "")
 }
 
 // SaveConnectorsConfig persiste la map des ConnectorSettings dans config.yaml

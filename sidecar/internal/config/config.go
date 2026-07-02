@@ -67,6 +67,18 @@ type ConnectorSecurityConfig struct {
 	// It is a GLOBAL operator setting (config.yaml / HYGUR_CONNECTOR_SECURITY_
 	// ALLOW_PRIVATE_TARGETS) — it must NEVER be read from plugin.ConnectorConfig.
 	AllowPrivateTargets bool `mapstructure:"allow_private_targets" yaml:"allow_private_targets,omitempty"`
+
+	// FilesRoot confines the local files connector. When non-empty, the
+	// tenant-supplied folder path AND every file walked during sync must resolve
+	// (after symlink evaluation) inside this directory; anything outside is
+	// rejected. Default "" = permissive: the operator's own / self-host instance
+	// may index arbitrary local folders (unchanged behaviour). Managed
+	// provisioning sets it to the tenant's data root so a tenant cannot point the
+	// connector at /, /etc, /proc, or another tenant's data (local file
+	// disclosure). It is a GLOBAL operator setting (config.yaml /
+	// HYGUR_CONNECTOR_SECURITY_FILES_ROOT) — it must NEVER be read from
+	// plugin.ConnectorConfig.
+	FilesRoot string `mapstructure:"files_root" yaml:"files_root,omitempty"`
 }
 
 // IdentityConfig declares the owner's own identity.

@@ -63,7 +63,7 @@ func setupConnectorServer(t *testing.T) (*api.Server, *plugin.Manager) {
 	manager := plugin.NewManager(nil, logger)
 	_ = manager.Register(mailconnector.New(nil, nil, nil, nil, nil, nil, logger))
 	_ = manager.Register(notesconnector.New(nil, db, nil))
-	_ = manager.Register(filesconnector.New(ing, db))
+	_ = manager.Register(filesconnector.New(ing, db, "")) // "" = permissive (no files_root confinement)
 
 	// Write a real temp config.yaml so SaveConnectorsConfig has somewhere to write.
 	configDir := t.TempDir()

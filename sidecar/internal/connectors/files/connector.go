@@ -47,16 +47,30 @@ type FilesConnector struct {
 	ingestor *ingest.Ingestor
 	db       *store.DB
 	config   plugin.ConnectorConfig
-	health   plugin.HealthStatus
-	lastSync time.Time
-	mu       sync.RWMutex
+	// filesRoot is the OPERATOR-set confinement root. It is a GLOBAL setting
+	// sourced from config (connector_security.files_root); it is NEVER read from
+	// the tenant-editable plugin.ConnectorConfig, so a tenant cannot widen it.
+	// Empty ("") = permissive: no confinement (self-host / the operator's own
+	// instance may index arbitrary local folders). Set once at construction and
+	// never mutated, so it is read without holding mu.
+	filesRoot string
+	health    plugin.HealthStatus
+	lastSync  time.Time
+	mu        sync.RWMutex
 }
 
 // New creates a new FilesConnector.
-func New(ingestor *ingest.Ingestor, db *store.DB) *FilesConnector {
+//
+// filesRoot is the operator-set confinement root (config
+// connector_security.files_root): when non-empty, the configured path and every
+// file walked during sync must resolve inside it. Empty means permissive (the
+// pre-existing behaviour). It must come from the global config, never from the
+// tenant-editable plugin.ConnectorConfig.
+func New(ingestor *ingest.Ingestor, db *store.DB, filesRoot string) *FilesConnector {
 	return &FilesConnector{
-		ingestor: ingestor,
-		db:       db,
+		ingestor:  ingestor,
+		db:        db,
+		filesRoot: filesRoot,
 		health: plugin.HealthStatus{
 			Status: plugin.StatusUnconfigured,
 		},
@@ -179,6 +193,17 @@ func (c *FilesConnector) Init(_ context.Context, cfg plugin.ConnectorConfig) err
 			}
 			return fmt.Errorf("invalid configuration: path %q is not a directory", path)
 		}
+
+		// Operator confinement: when a files_root is set, the tenant-supplied
+		// folder must resolve inside it (traversal- and symlink-safe). No-op
+		// when confinement is disabled (empty root).
+		if err := c.confine(path); err != nil {
+			c.health = plugin.HealthStatus{
+				Status:  plugin.StatusUnconfigured,
+				Message: fmt.Sprintf("path is outside the permitted root: %v", err),
+			}
+			return fmt.Errorf("invalid configuration: %w", err)
+		}
 	}
 
 	c.health = plugin.HealthStatus{
@@ -204,6 +229,67 @@ func parsePaths(raw string) []string {
 		}
 	}
 	return out
+}
+
+// confine reports whether path is allowed under the operator's confinement root.
+//
+// When filesRoot is empty confinement is DISABLED (the permissive self-host
+// default): any accessible path is allowed and confine returns nil. Otherwise
+// path must resolve INSIDE filesRoot; anything outside is rejected. This is the
+// single choke-point applied at Init (the configured dir), during the sync walk
+// (each entry, so a symlink inside the dir cannot point out), and at Index.
+//
+// path must exist on disk: containment resolves symlinks with
+// filepath.EvalSymlinks, which requires the target to exist.
+func (c *FilesConnector) confine(path string) error {
+	if c.filesRoot == "" {
+		return nil
+	}
+	ok, err := pathWithinRoot(c.filesRoot, path)
+	if err != nil {
+		return fmt.Errorf("path %q could not be validated against files_root: %w", path, err)
+	}
+	if !ok {
+		return fmt.Errorf("path %q resolves outside the configured files_root", path)
+	}
+	return nil
+}
+
+// pathWithinRoot reports whether cand resolves inside root. It defeats both
+// ".." traversal and symlink escape by fully resolving each side with
+// filepath.Abs + filepath.EvalSymlinks before a separator-aware containment
+// check. Both root and cand must exist on disk (EvalSymlinks requirement).
+// A cand equal to root itself is considered within.
+func pathWithinRoot(root, cand string) (bool, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false, err
+	}
+	realRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return false, err
+	}
+
+	absCand, err := filepath.Abs(cand)
+	if err != nil {
+		return false, err
+	}
+	realCand, err := filepath.EvalSymlinks(absCand)
+	if err != nil {
+		return false, err
+	}
+
+	rel, err := filepath.Rel(realRoot, realCand)
+	if err != nil {
+		return false, err
+	}
+	// rel == "." means cand IS root (allowed). rel == ".." or a "../" prefix
+	// means cand climbed above root (rejected). The separator-aware prefix check
+	// avoids matching sibling dirs like "..foo".
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Start counts already-indexed files and updates the item count in health.
@@ -306,6 +392,15 @@ func (c *FilesConnector) Sync(ctx context.Context, opts plugin.SyncOptions) (*pl
 				return nil
 			}
 
+			// Operator confinement: reject any entry resolving outside files_root.
+			// filepath.Walk lstats entries, so a symlinked file inside the dir is
+			// visited here; resolving it catches a symlink pointing out. No-op
+			// when confinement is disabled (empty root).
+			if err := c.confine(path); err != nil {
+				skipped++
+				return nil
+			}
+
 			if opts.Limit > 0 && indexed >= opts.Limit {
 				return filepath.SkipAll
 			}
@@ -365,6 +460,12 @@ func (c *FilesConnector) Index(ctx context.Context, itemID string) error {
 
 	if _, err := os.Stat(itemID); err != nil {
 		return fmt.Errorf("index: inaccessible file %q: %w", itemID, err)
+	}
+
+	// Operator confinement: a single Index target must also stay inside
+	// files_root. No-op when confinement is disabled (empty root).
+	if err := c.confine(itemID); err != nil {
+		return fmt.Errorf("index: %w", err)
 	}
 
 	result, err := c.ingestor.Ingest(ctx, itemID, ingest.IngestOptions{})

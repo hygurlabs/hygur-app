@@ -503,7 +503,11 @@ func main() {
 	mailHandler.SetAccountCounts(db)
 
 	notesConn := notesconnector.New(createNoteTool, db, embeddingService)
-	filesConn := filesconnector.New(ingestor, db)
+	// filesRoot is a GLOBAL operator setting (never the tenant's): when non-empty
+	// it confines the files connector to that directory (path + every walked file
+	// must resolve inside it), blocking local file disclosure in managed cloud.
+	// Empty (default) keeps the permissive self-host behaviour.
+	filesConn := filesconnector.New(ingestor, db, cfg.ConnectorSecurity.FilesRoot)
 	// allowPrivate is a GLOBAL operator setting (never the tenant's): it lets the
 	// outbound connectors reach LAN/loopback targets. Default false blocks internal
 	// SSRF targets in managed cloud.
