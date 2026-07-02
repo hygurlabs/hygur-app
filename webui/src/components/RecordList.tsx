@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { FolderKanban } from "lucide-react";
+import { DEFAULT_TAG_COLOR } from "../lib/format";
 import { Badge } from "./ui";
 
 export interface RecordRow {
@@ -37,7 +38,7 @@ function RowPills({ row }: { row: RecordRow }) {
           <span
             aria-hidden
             className="size-2 shrink-0 rounded-full"
-            style={{ background: t.color || "#3B82F6" }}
+            style={{ background: t.color || DEFAULT_TAG_COLOR }}
           />
           <span className="truncate">{t.name}</span>
         </span>

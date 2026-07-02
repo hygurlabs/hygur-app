@@ -6,7 +6,7 @@ import { BookCheck, BookOpen, ChevronLeft, ChevronRight, Sparkles } from "lucide
 import { api } from "../lib/api";
 import type { ChronicleAct } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
-import { Button, EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
+import { Button, EmptyState, ErrorBanner, Page, PageHeader, Skeleton } from "../components/ui";
 
 const LIFE = "life";
 
@@ -115,6 +115,14 @@ export function Chronicle() {
         <p className="mb-3 text-[12.5px] text-muted">
           Writing in the background — it'll appear here shortly.
         </p>
+      )}
+
+      {(run.error || closeChapter.error || reopenChapter.error) && (
+        <ErrorBanner
+          message={`Action failed: ${
+            ((run.error || closeChapter.error || reopenChapter.error) as Error).message
+          }`}
+        />
       )}
 
       {/* Chapter rail */}

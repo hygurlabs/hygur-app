@@ -5,14 +5,17 @@ import remarkGfm from "remark-gfm";
 import { BookOpen, CalendarClock, CheckSquare, Compass, Gavel, Scale } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
-import { EmptyState, Page, PageHeader, Skeleton } from "../components/ui";
+import { EmptyState, ErrorBanner, Page, PageHeader, Skeleton } from "../components/ui";
 
 /** The daily "state of your world": Hygur assembles what it already knows —
  *  where things stand, what's contradictory, what needs a decision, what's due —
  *  into one calm surface. Composition, not generation: each row links to its
  *  full view. */
 export function Digest() {
-  const { data, isLoading } = useQuery({ queryKey: ["digest"], queryFn: () => api.digest() });
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ["digest"],
+    queryFn: () => api.digest(),
+  });
 
   const synopsis = data?.synopsis?.trim() ?? "";
   const positions = data?.positions?.trim() ?? "";
@@ -37,6 +40,11 @@ export function Digest() {
 
       {isLoading ? (
         <Skeleton rows={6} />
+      ) : error ? (
+        <ErrorBanner
+          message={`Couldn't load your day: ${(error as Error).message}`}
+          onRetry={() => refetch()}
+        />
       ) : nothing ? (
         <EmptyState
           title="Nothing needs you right now"

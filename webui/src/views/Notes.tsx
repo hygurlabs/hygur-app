@@ -41,7 +41,7 @@ const NOTE_TOOLBAR = [
   { key: "ol", icon: ListOrdered, label: "Numbered list" },
   { key: "quote", icon: Quote, label: "Quote" },
   { key: "code", icon: Code, label: "Code" },
-  { key: "link", icon: LinkIcon, label: "Lien" },
+  { key: "link", icon: LinkIcon, label: "Link" },
 ] as const;
 
 export function Notes() {
@@ -218,7 +218,7 @@ function NoteEditor({
   }
 
   // Wraps the current selection (or a placeholder) with Markdown delimiters.
-  function surround(before: string, after = before, placeholder = "texte") {
+  function surround(before: string, after = before, placeholder = "text") {
     const ta = taRef.current;
     if (!ta) return;
     const { selectionStart: s, selectionEnd: e } = ta;
@@ -233,7 +233,7 @@ function NoteEditor({
     if (!ta) return;
     const { selectionStart: s, selectionEnd: e } = ta;
     const lineStart = content.lastIndexOf("\n", s - 1) + 1;
-    const block = content.slice(lineStart, e) || "texte";
+    const block = content.slice(lineStart, e) || "text";
     const replaced = block.replace(/^/gm, prefix);
     setContent(content.slice(0, lineStart) + replaced + content.slice(e));
     selectAfterRender(lineStart, lineStart + replaced.length);
@@ -243,7 +243,7 @@ function NoteEditor({
     const ta = taRef.current;
     if (!ta) return;
     const { selectionStart: s, selectionEnd: e } = ta;
-    const sel = content.slice(s, e) || "texte";
+    const sel = content.slice(s, e) || "text";
     const snippet = `[${sel}](url)`;
     setContent(content.slice(0, s) + snippet + content.slice(e));
     const urlStart = s + sel.length + 3; // after "[sel]("

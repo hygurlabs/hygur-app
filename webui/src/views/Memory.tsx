@@ -33,6 +33,8 @@ export function MemoryView() {
 
   const [type, setType] = useState<string>("fact");
   const [content, setContent] = useState("");
+  // Per-row delete confirm (the inline pattern used in Notes/Tags).
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const add = useMutation({
     mutationFn: () => api.storeMemory({ type, content: content.trim() }),
@@ -43,7 +45,14 @@ export function MemoryView() {
   });
   const accept = useMutation({ mutationFn: (id: string) => api.acceptMemory(id), onSuccess: invalidate });
   const discard = useMutation({ mutationFn: (id: string) => api.discardMemory(id), onSuccess: invalidate });
-  const remove = useMutation({ mutationFn: (id: string) => api.deleteMemory(id), onSuccess: invalidate });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.deleteMemory(id),
+    onSuccess: () => {
+      setConfirmId(null);
+      invalidate();
+    },
+  });
+  const mutErr = add.error || accept.error || discard.error || remove.error;
 
   const memories = list.data?.memories ?? [];
   const pend = pending.data?.memories ?? [];
@@ -94,6 +103,9 @@ export function MemoryView() {
             pending.refetch();
           }}
         />
+      )}
+      {mutErr && (
+        <ErrorBanner message={`Couldn't update your memory: ${(mutErr as Error).message}`} />
       )}
 
       {pend.length > 0 && (
@@ -152,14 +164,33 @@ export function MemoryView() {
                 </div>
                 <p className="text-[14px] text-text">{m.content}</p>
               </div>
-              <button
-                onClick={() => remove.mutate(m.memory_id)}
-                aria-label="Forget"
-                title="Forget"
-                className="shrink-0 rounded-md p-1.5 text-faint opacity-0 transition-all hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
-              >
-                <Trash2 size={15} strokeWidth={1.75} />
-              </button>
+              {confirmId === m.memory_id ? (
+                <span className="flex shrink-0 items-center gap-1.5 text-[12.5px]">
+                  <span className="text-muted">Delete?</span>
+                  <button
+                    onClick={() => remove.mutate(m.memory_id)}
+                    disabled={remove.isPending}
+                    className="rounded-md px-2 py-0.5 font-medium text-danger transition-colors hover:bg-danger/10"
+                  >
+                    {remove.isPending ? "…" : "Yes"}
+                  </button>
+                  <button
+                    onClick={() => setConfirmId(null)}
+                    className="rounded-md px-2 py-0.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  onClick={() => setConfirmId(m.memory_id)}
+                  aria-label="Forget"
+                  title="Forget"
+                  className="shrink-0 rounded-md p-1.5 text-faint opacity-0 transition-all hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
+                >
+                  <Trash2 size={15} strokeWidth={1.75} />
+                </button>
+              )}
             </li>
           ))}
         </ul>

@@ -143,7 +143,7 @@ export function Library() {
         <>
           {slow && (
             <div className="mb-3 flex items-center gap-2 text-[12.5px] text-muted">
-              <span className="size-1.5 rounded-full bg-amber-500" />
+              <span className="size-1.5 rounded-full bg-warn" />
               {searching ? "Still searching your knowledge base…" : "Still loading…"}
             </div>
           )}

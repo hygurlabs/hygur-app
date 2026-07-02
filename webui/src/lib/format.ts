@@ -23,6 +23,14 @@ export function fmtDateTime(value?: string | null): string {
   });
 }
 
+/** Locale-stable grouped number (en-GB → "1,234"). */
+export function fmtNumber(n: number): string {
+  return n.toLocaleString("en-GB");
+}
+
+/** Fallback dot colour for a tag with no colour of its own. */
+export const DEFAULT_TAG_COLOR = "#3B82F6";
+
 const SOURCE_LABELS: Record<string, string> = {
   mail: "mail",
   email: "mail",

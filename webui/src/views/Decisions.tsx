@@ -64,8 +64,13 @@ export function Decisions() {
   });
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteDecision(id),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setConfirmId(null);
+      invalidate();
+    },
   });
+  // Per-row delete confirm for standing decisions (the inline Notes/Tags pattern).
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   // The scan calls the LLM in the background (202) — flag it and refetch as
   // proposals land.
@@ -123,6 +128,13 @@ export function Decisions() {
         <ErrorBanner
           message={`Couldn't load decisions: ${(error as Error).message}`}
           onRetry={() => refetch()}
+        />
+      )}
+      {(confirm.error || scan.error || remove.error || supersede.error) && (
+        <ErrorBanner
+          message={`Action failed: ${
+            ((confirm.error || scan.error || remove.error || supersede.error) as Error).message
+          }`}
         />
       )}
 
@@ -310,14 +322,32 @@ export function Decisions() {
                             <Gavel size={15} strokeWidth={1.75} />
                           )}
                         </button>
-                        <button
-                          onClick={() => remove.mutate(d.id)}
-                          disabled={remove.isPending}
-                          aria-label="Delete decision"
-                          className="rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
-                        >
-                          <Trash2 size={15} strokeWidth={1.75} />
-                        </button>
+                        {confirmId === d.id ? (
+                          <span className="flex items-center gap-1.5 text-[12.5px]">
+                            <span className="text-muted">Delete?</span>
+                            <button
+                              onClick={() => remove.mutate(d.id)}
+                              disabled={remove.isPending}
+                              className="rounded-md px-2 py-0.5 font-medium text-danger transition-colors hover:bg-danger/10"
+                            >
+                              {remove.isPending ? "…" : "Yes"}
+                            </button>
+                            <button
+                              onClick={() => setConfirmId(null)}
+                              className="rounded-md px-2 py-0.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmId(d.id)}
+                            aria-label="Delete decision"
+                            className="rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                          >
+                            <Trash2 size={15} strokeWidth={1.75} />
+                          </button>
+                        )}
                       </div>
                     </li>
                   );

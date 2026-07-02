@@ -98,6 +98,11 @@ export function FirstRun({ onDone }: { onDone: () => void }) {
                 <Sparkles size={16} strokeWidth={1.9} />
                 {runBrief.isPending ? "Preparing your brief…" : "Generate your first brief"}
               </Button>
+              {runBrief.error && (
+                <p className="text-[12.5px] text-danger">
+                  Couldn't start your brief — please try again.
+                </p>
+              )}
               <button
                 onClick={onDone}
                 className="text-[13px] text-muted transition-colors hover:text-text"

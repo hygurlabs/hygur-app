@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { X, MessageSquareText, ListPlus, Reply, Copy, Check } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -37,8 +38,10 @@ const isMail = (st?: string) => st === "mail" || st === "email";
 
 export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [data, setData] = useState<DetailData | null>(null);
   const [taskDone, setTaskDone] = useState(false);
+  const [taskError, setTaskError] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [drafting, setDrafting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -46,6 +49,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const open = useCallback((d: DetailData) => {
     setData(d);
     setTaskDone(false);
+    setTaskError(false);
     setDraft(null);
     setDrafting(false);
     setCopied(false);
@@ -64,15 +68,17 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
 
   const createTask = useCallback(async () => {
     if (!data) return;
+    setTaskError(false);
     try {
       await api.createTask({
         title: data.title || "Untitled",
       });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
       setTaskDone(true);
     } catch {
-      /* surfaced by the disabled→retry affordance; keep panel usable */
+      setTaskError(true);
     }
-  }, [data]);
+  }, [data, qc]);
 
   const draftReply = useCallback(async () => {
     if (!data?.contentId) return;
@@ -168,14 +174,18 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                 )}
                 <button
                   onClick={createTask}
-                  className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-accent-weak px-3.5 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-accent-weak/70"
+                  className={`inline-flex min-h-9 items-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-medium transition-colors ${
+                    taskError
+                      ? "bg-danger/10 text-danger hover:bg-danger/20"
+                      : "bg-accent-weak text-accent hover:bg-accent-weak/70"
+                  }`}
                 >
                   {taskDone ? (
                     <Check size={15} strokeWidth={2.2} />
                   ) : (
                     <ListPlus size={15} strokeWidth={2} />
                   )}
-                  {taskDone ? "Task added" : "Make a task"}
+                  {taskDone ? "Task added" : taskError ? "Couldn't add — retry" : "Make a task"}
                 </button>
               </div>
             )}

@@ -90,7 +90,7 @@ export function Contradictions() {
         <>
           {slow && (
             <div className="mb-3 flex items-center gap-2 text-[12.5px] text-muted">
-              <span className="size-1.5 rounded-full bg-amber-500" />
+              <span className="size-1.5 rounded-full bg-warn" />
               Still analysing your sources…
             </div>
           )}

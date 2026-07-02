@@ -19,10 +19,6 @@ import { Settings } from "./views/Settings";
 import { Tags } from "./views/Tags";
 import { Calendar } from "./views/Calendar";
 import { FollowUp } from "./views/FollowUp";
-import { Contradictions } from "./views/Contradictions";
-import { Decisions } from "./views/Decisions";
-import { Chronicle } from "./views/Chronicle";
-import { MemoryView } from "./views/Memory";
 import { Mind } from "./views/Mind";
 import { Tasks } from "./views/Tasks";
 import { FirstRun } from "./views/FirstRun";
@@ -107,10 +103,13 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
                 <Route path="/follow-up" element={<FollowUp />} />
                 <Route path="/mind" element={<Mind />} />
                 <Route path="/engrams" element={<Engrams />} />
-                <Route path="/contradictions" element={<Contradictions />} />
-                <Route path="/decisions" element={<Decisions />} />
-                <Route path="/chronicle" element={<Chronicle />} />
-                <Route path="/memory" element={<MemoryView />} />
+                {/* Decisions / Contradictions / Chronicle / Memory live inside the
+                    Mind hub — redirect the bare routes to the matching tab so they
+                    keep the Mind chrome (gauge + tabs + active sidebar item). */}
+                <Route path="/contradictions" element={<Navigate to="/mind?tab=contradictions" replace />} />
+                <Route path="/decisions" element={<Navigate to="/mind?tab=decisions" replace />} />
+                <Route path="/chronicle" element={<Navigate to="/mind?tab=chronicle" replace />} />
+                <Route path="/memory" element={<Navigate to="/mind?tab=memory" replace />} />
                 <Route path="/connectors" element={<Connectors />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

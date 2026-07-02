@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { Brain, Info } from "lucide-react";
 import { api } from "../lib/api";
 import type { LearningProgress } from "../lib/types";
@@ -22,10 +23,19 @@ const TABS: { key: Tab; label: string }[] = [
 // corrects. The tabs mount the existing self-contained views unchanged; their
 // per-item actions feed the gauge (it polls /insights/learning-progress).
 export function Mind() {
-  const [tab, setTab] = useState<Tab>("decisions");
+  // Orphan routes (/decisions, /contradictions, …) redirect here as
+  // /mind?tab=<name>; read that and open the matching tab.
+  const [params] = useSearchParams();
+  const paramTab = params.get("tab");
+  const isTab = (v: string | null): v is Tab => TABS.some((t) => t.key === v);
+  const [tab, setTab] = useState<Tab>(isTab(paramTab) ? paramTab : "decisions");
   const [showWhy, setShowWhy] = useState(false);
 
-  const { data: lp } = useQuery<LearningProgress>({
+  useEffect(() => {
+    if (paramTab && TABS.some((t) => t.key === paramTab)) setTab(paramTab as Tab);
+  }, [paramTab]);
+
+  const { data: lp, isError: lpError } = useQuery<LearningProgress>({
     queryKey: ["learning-progress"],
     queryFn: () => api.learningProgress(),
     refetchInterval: 8000,
@@ -43,7 +53,12 @@ export function Mind() {
                 <Brain size={17} strokeWidth={1.75} className="text-accent" />
                 Hygur knows you
               </div>
-              <div className="tnum text-[15px] font-semibold text-accent">{pct}%</div>
+              <div
+                className="tnum text-[15px] font-semibold text-accent"
+                title={lpError ? "Couldn't load your progress right now." : undefined}
+              >
+                {lpError ? "—%" : `${pct}%`}
+              </div>
             </div>
             <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-border">
               <div

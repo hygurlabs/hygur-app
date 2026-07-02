@@ -228,7 +228,12 @@ export function Calendar() {
            shell (web, cloud, desktop). Primary calendar surface. --- */}
       <SectionLabel>Upcoming events</SectionLabel>
 
-      {upcomingSynced.length > 0 ? (
+      {syncedEvents.error ? (
+        <ErrorBanner
+          message={`Couldn't load your calendar: ${(syncedEvents.error as Error).message}`}
+          onRetry={() => syncedEvents.refetch()}
+        />
+      ) : upcomingSynced.length > 0 ? (
         renderEventList(upcomingSynced)
       ) : syncedEvents.isLoading || calConnectors.isLoading ? (
         <Skeleton rows={3} />

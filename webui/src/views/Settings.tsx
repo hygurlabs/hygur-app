@@ -10,6 +10,7 @@ import { ModePicker } from "../onboarding/ModePicker";
 import { PasskeyBanner } from "../components/PasskeyNudge";
 import { usePasskeyCount, useAddPasskey } from "../lib/usePasskey";
 import { passkeysSupported } from "../lib/passkey";
+import { fmtDate, fmtNumber } from "../lib/format";
 import type {
   SidecarConfig,
   SidecarConfigPatch,
@@ -55,7 +56,7 @@ function GaugeRow({
   over: boolean;
   color: string;
 }) {
-  const f = (n: number) => n.toLocaleString("fr-FR");
+  const f = (n: number) => fmtNumber(n);
   return (
     <div className="mb-2.5 last:mb-0">
       <div className="mb-1 flex items-baseline justify-between text-[12px]">
@@ -254,12 +255,12 @@ function BillingSection() {
             ? "Canceled"
             : b.status;
   const until = b.valid_until
-    ? ` · ${b.active ? "renews" : "ends"} ${new Date(b.valid_until).toLocaleDateString()}`
+    ? ` · ${b.active ? "renews" : "ends"} ${fmtDate(b.valid_until)}`
     : "";
   return (
     <Section title="Billing">
       <Row label="Plan" hint={`Hygur Cloud — Personal${until}`}>
-        <span className={`text-[13px] font-medium ${b.active ? "text-green-600" : "text-danger"}`}>
+        <span className={`text-[13px] font-medium ${b.active ? "text-success" : "text-danger"}`}>
           {label}
         </span>
       </Row>
@@ -1036,7 +1037,7 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
   }
 
   const cur = price.currency || data.currency || "€";
-  const fmtTok = (n: number) => n.toLocaleString("fr-FR");
+  const fmtTok = (n: number) => fmtNumber(n);
   const money = (n: number) => `${n.toFixed(n > 0 && n < 1 ? 4 : 2)} ${cur}`;
   const chatCost = (p: TokenPeriodUsage) =>
     (p.chat_in / 1e6) * price.chat_in_per_1m +
@@ -1061,7 +1062,7 @@ function TokenUsageSection({ managed }: { managed: boolean }) {
   const gauge = (used: number, budget: number) => {
     const pct = budget > 0 ? Math.min(used / budget, 1) : 0;
     const over = budget > 0 && used > budget;
-    const color = over ? "bg-danger" : pct >= 0.75 ? "bg-amber-500" : "bg-green-500";
+    const color = over ? "bg-danger" : pct >= 0.75 ? "bg-warn" : "bg-success";
     return { pct, over, color };
   };
   const inG = gauge(wk.total_in, weekBudget(MONTHLY_IN));

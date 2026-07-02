@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { getDesktopConfig, setDesktopConfig } from "../lib/desktop";
+import { fmtDateTime, fmtNumber } from "../lib/format";
 
 /** Proton "connector" for the cloud desktop thin client. Proton Bridge lives on
  *  THIS device (loopback), so the cloud pod can never reach it — this card talks
@@ -70,8 +71,8 @@ export function EdgeProtonCard() {
     errMsg || st?.last_error || (st && st.errors > 0)
       ? "bg-danger"
       : healthy
-        ? "bg-green-500"
-        : "bg-amber-500";
+        ? "bg-success"
+        : "bg-warn";
   const statusLine = statusQ.isLoading
     ? "Checking on-device sync…"
     : errMsg
@@ -80,7 +81,7 @@ export function EdgeProtonCard() {
         ? "Syncing…"
         : st?.last_error
           ? st.last_error
-          : `Last synced ${st?.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : "never"}${st?.mail_pushed ? ` · ${st.mail_pushed} pushed last run` : ""}`;
+          : `Last synced ${st?.last_sync_at ? fmtDateTime(st.last_sync_at) : "never"}${st?.mail_pushed ? ` · ${st.mail_pushed} pushed last run` : ""}`;
   const syncing = !!st?.running;
   const userVal = user ?? cfgQ.data?.proton_user ?? "";
   const pwSet = !!cfgQ.data?.proton_password_set;
@@ -185,7 +186,7 @@ export function EdgeProtonCard() {
               Proton Mail · this device
               {typeof mailCountQ.data?.total === "number" && (
                 <span className="ml-2 rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
-                  {mailCountQ.data.total.toLocaleString("fr-FR")} mails indexed
+                  {fmtNumber(mailCountQ.data.total)} mails indexed
                 </span>
               )}
             </h3>
@@ -267,7 +268,7 @@ export function EdgeProtonCard() {
           >
             Save login
           </button>
-          {saved && <span className="ml-2 text-[12px] text-green-600">Saved — applies on next sync.</span>}
+          {saved && <span className="ml-2 text-[12px] text-success">Saved — applies on next sync.</span>}
         </div>
       )}
 
@@ -310,7 +311,7 @@ export function EdgeProtonCard() {
             >
               Save selection
             </button>
-            {saved && <span className="text-[12px] text-green-600">Saved — applies on next sync.</span>}
+            {saved && <span className="text-[12px] text-success">Saved — applies on next sync.</span>}
           </div>
         </div>
       )}

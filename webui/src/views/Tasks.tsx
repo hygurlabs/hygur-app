@@ -13,6 +13,8 @@ export function Tasks() {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Per-row delete confirm (the inline pattern used in Notes/Tags).
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["tasks"],
@@ -40,6 +42,7 @@ export function Tasks() {
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteTask(id),
     onSuccess: (_d, id) => {
+      setConfirmId(null);
       invalidate();
       if (selectedId === id) setSelectedId(null);
     },
@@ -149,13 +152,32 @@ export function Tasks() {
                           </div>
                         )}
                       </button>
-                      <button
-                        onClick={() => remove.mutate(t.id)}
-                        aria-label="Delete task"
-                        className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
-                      >
-                        <Trash2 size={15} strokeWidth={1.75} />
-                      </button>
+                      {confirmId === t.id ? (
+                        <span className="flex shrink-0 items-center gap-1.5 text-[12.5px]">
+                          <span className="text-muted">Delete?</span>
+                          <button
+                            onClick={() => remove.mutate(t.id)}
+                            disabled={remove.isPending}
+                            className="rounded-md px-2 py-0.5 font-medium text-danger transition-colors hover:bg-danger/10"
+                          >
+                            {remove.isPending ? "…" : "Yes"}
+                          </button>
+                          <button
+                            onClick={() => setConfirmId(null)}
+                            className="rounded-md px-2 py-0.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmId(t.id)}
+                          aria-label="Delete task"
+                          className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                        >
+                          <Trash2 size={15} strokeWidth={1.75} />
+                        </button>
+                      )}
                     </li>
                   );
                 })}

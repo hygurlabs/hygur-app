@@ -283,6 +283,11 @@ export function Connectors() {
       </h2>
       {marketQ.isLoading ? (
         <Skeleton rows={3} />
+      ) : marketQ.error ? (
+        <ErrorBanner
+          message={`Couldn't load the marketplace: ${(marketQ.error as Error).message}`}
+          onRetry={() => marketQ.refetch()}
+        />
       ) : available.length === 0 ? (
         <EmptyState
           title="Everything's installed"

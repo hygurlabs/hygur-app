@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "../lib/api";
-import { srcLabel } from "../lib/format";
+import { DEFAULT_TAG_COLOR, srcLabel } from "../lib/format";
 import type { Tag } from "../lib/types";
 import { useOpenSource } from "../components/ContradictionList";
 import { RecordList, type RecordRow } from "../components/RecordList";
@@ -81,7 +81,7 @@ export function Tags() {
               <span
                 aria-hidden
                 className="size-2.5 shrink-0 rounded-full"
-                style={{ background: t.color || "#3B82F6" }}
+                style={{ background: t.color || DEFAULT_TAG_COLOR }}
               />
               <button
                 onClick={() => setSelected({ id: t.id, name: t.name })}
@@ -100,19 +100,19 @@ export function Tags() {
               </span>
               {confirmId === t.id ? (
                 <span className="flex items-center gap-1.5 text-[12.5px]">
-                  <span className="text-muted">Supprimer&nbsp;?</span>
+                  <span className="text-muted">Delete?</span>
                   <button
                     onClick={() => remove.mutate(t.id)}
                     disabled={remove.isPending}
                     className="rounded-md px-2 py-0.5 font-medium text-danger transition-colors hover:bg-danger/10"
                   >
-                    {remove.isPending ? "…" : "Oui"}
+                    {remove.isPending ? "…" : "Yes"}
                   </button>
                   <button
                     onClick={() => setConfirmId(null)}
                     className="rounded-md px-2 py-0.5 text-muted transition-colors hover:bg-surface2 hover:text-text"
                   >
-                    Annuler
+                    Cancel
                   </button>
                 </span>
               ) : (

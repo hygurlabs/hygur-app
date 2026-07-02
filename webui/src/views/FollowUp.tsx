@@ -271,7 +271,7 @@ function ReportStream({ projectId }: { projectId?: string }) {
       {/* Stall hint: still synthesizing, just gone quiet — reassures it's working. */}
       {stalled && !reportErr && (
         <div className="mt-2 flex items-center gap-2 text-[12.5px] text-muted">
-          <span className="size-1.5 rounded-full bg-amber-500" />
+          <span className="size-1.5 rounded-full bg-warn" />
           Still working — taking longer than usual…
         </div>
       )}

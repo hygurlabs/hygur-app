@@ -43,8 +43,8 @@ export function EdgeFilesCard() {
     errMsg || st?.last_error || (st && st.errors > 0)
       ? "bg-danger"
       : healthy
-        ? "bg-green-500"
-        : "bg-amber-500";
+        ? "bg-success"
+        : "bg-warn";
   const statusLine = statusQ.isLoading
     ? "Checking on-device sync…"
     : errMsg
@@ -120,7 +120,7 @@ export function EdgeFilesCard() {
         </button>
       </div>
       {err && <p className="mt-2 text-[12px] text-danger">{err}</p>}
-      {saved && <p className="mt-2 text-[12px] text-green-600">Saved — indexes on next sync.</p>}
+      {saved && <p className="mt-2 text-[12px] text-success">Saved — indexes on next sync.</p>}
     </div>
   );
 }

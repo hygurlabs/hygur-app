@@ -215,7 +215,7 @@ function AudioAttachment({
 
 /** Renders the conversation as Markdown for export. */
 function buildChatMarkdown(turns: Turn[]): string {
-  const out: string[] = ["# Conversation Hygur", ""];
+  const out: string[] = ["# Hygur conversation", ""];
   for (const t of turns) {
     const images = (t.attachments ?? []).filter(
       (a): a is Extract<AttachmentRef, { type: "image" }> => a.type === "image",
@@ -226,10 +226,10 @@ function buildChatMarkdown(turns: Turn[]): string {
     if (!t.content && images.length === 0 && audios.length === 0) continue;
     out.push(t.role === "user" ? "## 🧑 You" : "## 🤖 Hygur", "");
     for (const a of images) {
-      out.push(`_[Image jointe : ${a.title || "image"}]_`, "");
+      out.push(`_[Attached image: ${a.title || "image"}]_`, "");
     }
     for (const a of audios) {
-      out.push(`_[Audio joint : ${a.title || "audio"}]_`, "");
+      out.push(`_[Attached audio: ${a.title || "audio"}]_`, "");
     }
     if (t.content) out.push(t.content, "");
     if (t.role === "assistant" && t.sources?.length) {
@@ -1106,7 +1106,7 @@ function Composer({
     attachments.length > 0 || focusProjects.length > 0 || focusTags.length > 0;
 
   return (
-    <div className="border-t border-border bg-bg/85 px-4 py-4 backdrop-blur sm:px-7">
+    <div className="border-t border-border bg-bg/85 px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-7">
       <div className="relative mx-auto max-w-[760px]">
         {mentionQuery !== null && (
           <ul className="absolute bottom-full z-30 mb-2 max-h-64 w-full overflow-auto rounded-xl border border-border bg-surface py-1 shadow-lg">
@@ -1485,11 +1485,11 @@ function AssistantTurn({
       {turn.activity && (
         <div
           className={`mb-2 flex items-center gap-2 text-[13px] ${
-            turn.activityWeb ? "text-amber-600" : "text-muted"
+            turn.activityWeb ? "text-warn" : "text-muted"
           }`}
         >
           {turn.activityWeb ? (
-            <Globe size={13} strokeWidth={2.2} className="shrink-0 text-amber-500" />
+            <Globe size={13} strokeWidth={2.2} className="shrink-0 text-warn" />
           ) : (
             <span className="size-1.5 animate-pulse rounded-full bg-accent" />
           )}
@@ -1499,7 +1499,7 @@ function AssistantTurn({
 
       {turn.degraded && (
         <div className="mb-2 flex items-center gap-2 text-[12.5px] text-muted">
-          <span className="size-1.5 rounded-full bg-amber-500" />
+          <span className="size-1.5 rounded-full bg-warn" />
           Offline mode — AI synthesis paused; showing what Hygur found.
         </div>
       )}
@@ -1520,7 +1520,7 @@ function AssistantTurn({
           user it's working, not stuck, without an alarming error. */}
       {stalled && !turn.error && (
         <div className="mt-2 flex items-center gap-2 text-[12.5px] text-muted">
-          <span className="size-1.5 rounded-full bg-amber-500" />
+          <span className="size-1.5 rounded-full bg-warn" />
           Still working — taking longer than usual…
         </div>
       )}

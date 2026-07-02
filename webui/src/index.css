@@ -15,6 +15,8 @@
   --color-accent: var(--accent);
   --color-accent-weak: var(--accent-weak);
   --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-success: var(--success);
   --font-display: ui-serif, Georgia, "Times New Roman", serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -30,6 +32,8 @@
   --accent: #2e6a57;
   --accent-weak: #e9f1ed;
   --danger: #9b3d2e;
+  --warn: #d97706;
+  --success: #16a34a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -44,6 +48,8 @@
     --accent: #6fb89e;
     --accent-weak: #20281f;
     --danger: #c4664f;
+    --warn: #fbbf24;
+    --success: #4ade80;
   }
 }
 
