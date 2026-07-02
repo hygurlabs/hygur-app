@@ -56,9 +56,11 @@ export function Connect() {
   // native app (deep link) instead of using the session here; otherwise reload.
   const finish = async () => {
     if (DESKTOP_STATE) {
-      await desktopHandoff(DESKTOP_STATE);
+      const claim = await desktopHandoff();
       setHandedOff(true);
-      window.location.href = `hygur://auth?state=${encodeURIComponent(DESKTOP_STATE)}`;
+      // `state` = the desktop's correlation nonce (CSRF match); `claim` = the
+      // server-issued one-time handle the desktop redeems.
+      window.location.href = `hygur://auth?state=${encodeURIComponent(DESKTOP_STATE)}&claim=${encodeURIComponent(claim)}`;
       return;
     }
     window.location.reload();

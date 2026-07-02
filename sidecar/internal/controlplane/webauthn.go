@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -244,22 +245,24 @@ type desktopReq struct {
 	State string `json:"state"`
 }
 
-// handleDesktopHandoff: the web shell, right after a passkey login, calls this with
-// the desktop-generated `state` to stash a fresh LONG-LIVED desktop token for the
-// native app. Authed by the shell's access token. The bundle is parked one-time
-// under `state` (5-min TTL); the desktop claims it via the deep-link. The raw token
-// NEVER travels in the deep-link URL — only `state` does (anti scheme-hijack).
+// handleDesktopHandoff: the web shell, right after a passkey login, calls this to
+// stash a fresh LONG-LIVED desktop token for the native app. Authed by the shell's
+// access token. The SERVER generates the one-time `state` (crypto/rand) and binds
+// the parked bundle to it under the initiator's account (5-min TTL); the state is
+// returned in the response so the shell can put it in the hygur:// deep-link. The
+// client no longer chooses `state` — a caller-supplied value can't fix a bundle
+// onto a predictable/guessable handle. The raw token NEVER travels in the deep-link
+// URL — only the server-issued `state` does (anti scheme-hijack).
 func (a *WebAuthnService) handleDesktopHandoff(w http.ResponseWriter, r *http.Request) {
 	acc, err := a.accountFromToken(r)
 	if err != nil {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	// Body is optional and any client-supplied `state` is ignored — the server
+	// issues its own. Decode leniently so an empty/absent body is fine.
 	var in desktopReq
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.State) == "" {
-		writeErr(w, http.StatusBadRequest, "state required")
-		return
-	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
 	now := a.clock()
 	if !acc.IsActive(now) {
 		writeErr(w, http.StatusForbidden, "subscription inactive")
@@ -282,16 +285,19 @@ func (a *WebAuthnService) handleDesktopHandoff(w http.ResponseWriter, r *http.Re
 		TenantID:     acc.TenantID,
 		ExpiresIn:    90 * 24 * 3600,
 	})
-	if err := a.store.PutWebauthnSession(in.State, acc.AccountNumber, "desktop", bundle, now.Add(5*time.Minute)); err != nil {
+	state := newSessionID() // 24 bytes of crypto/rand entropy, server-issued.
+	if err := a.store.PutWebauthnSession(state, acc.AccountNumber, "desktop", bundle, now.Add(5*time.Minute)); err != nil {
 		writeErr(w, http.StatusInternalServerError, "stash")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state})
 }
 
-// handleDesktopClaim: the native app posts the `state` from the deep-link and gets
-// the stashed token bundle (one-time, expiry-checked). No auth — `state` is the
-// short-lived, desktop-generated secret.
+// handleDesktopClaim: the native app posts the server-issued `state` from the
+// deep-link and gets the stashed token bundle (one-time, expiry-checked). No auth —
+// the state is the short-lived, server-generated secret. An unknown/forged state
+// (never issued by handoff) or a wrong-purpose session is rejected, so a deep-link
+// carrying an attacker-chosen state can't redeem a bundle.
 func (a *WebAuthnService) handleDesktopClaim(w http.ResponseWriter, r *http.Request) {
 	var in desktopReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.State) == "" {
@@ -537,9 +543,7 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			o := r.Header.Get("Origin")
-			lo := strings.ToLower(o)
-			if o != "" && (allow[lo] ||
-				strings.HasPrefix(lo, "http://localhost") || strings.HasPrefix(lo, "http://127.0.0.1")) {
+			if o != "" && originAllowed(allow, o) {
 				w.Header().Set("Access-Control-Allow-Origin", o)
 				w.Header().Add("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -554,4 +558,27 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// originAllowed decides whether an Origin may be reflected with credentials. It
+// EXACT-matches: either the origin is in the configured allowlist (prod shells),
+// or it is a loopback dev origin whose HOST is exactly "localhost" / "127.0.0.1"
+// over http. The host is parsed (not prefix-tested) so a look-alike like
+// http://localhost.evil.com — whose host is "localhost.evil.com" — is rejected,
+// and https://cloud.hygur.ai.evil.com (not in the allowlist) is rejected too.
+// Mirrors the main sidecar's strict form (api/middleware.go).
+func originAllowed(allow map[string]bool, origin string) bool {
+	lo := strings.ToLower(strings.TrimSpace(origin))
+	if lo == "" {
+		return false
+	}
+	if allow[lo] {
+		return true
+	}
+	u, err := url.Parse(lo)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname() // host without port, userinfo excluded
+	return host == "localhost" || host == "127.0.0.1"
 }

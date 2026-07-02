@@ -140,10 +140,14 @@ export function ModePicker({
           return; // not a URL we recognize
         }
         if (parsed.searchParams.get("state") !== state) return; // stale / unrelated deep link
+        // The console issues its own one-time claim handle; redeem THAT, not our
+        // correlation nonce (which only proves this deep link is ours).
+        const claim = parsed.searchParams.get("claim");
+        if (!claim) return;
         settled = true;
         unlistenRef.current?.();
         unlistenRef.current = null;
-        void desktopClaim(state)
+        void desktopClaim(claim)
           .then((b) => {
             setServer(b.endpoint);
             setToken(b.access_token);

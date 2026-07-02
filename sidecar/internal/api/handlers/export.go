@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -46,11 +47,12 @@ type exportRequest struct {
 // passphrase. The tenant DEK never leaves the server; the passphrase is never
 // stored; the archive is streamed, never written to disk server-side.
 //
-// Envelope = OpenSSL-compatible AES-256-CBC + PBKDF2 (SHA-256, 10k iters), so the
-// client decrypts with a universal one-liner — no Hygur tool required:
-//
-//	openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:YOUR_PASSPHRASE \
-//	  -in hygur-export-YYYY-MM-DD.zip.enc -out hygur-export.zip
+// Envelope = authenticated AES-256-GCM keyed by PBKDF2 (SHA-256, 600k iters), in a
+// self-describing versioned container (see encryptExport): a 5-byte magic+version
+// header, then the random salt + nonce, then the GCM ciphertext+tag. GCM detects
+// any tampering; the raised KDF slows an offline passphrase guess. Decrypt with the
+// documented format (magic "HYGR" + version 0x01 | salt[16] | nonce[12] | ct||tag),
+// mirrored by decryptExport for any future in-app import.
 func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	var req exportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -68,7 +70,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not build the export", http.StatusInternalServerError)
 		return
 	}
-	enc, err := encryptOpenSSL(archive, req.Passphrase)
+	enc, err := encryptExport(archive, req.Passphrase)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("encrypt export archive")
 		http.Error(w, "could not encrypt the export", http.StatusInternalServerError)
@@ -201,9 +203,123 @@ func safeName(title, id string) string {
 	return s + "-" + short
 }
 
+// Versioned export envelope. The container is self-describing so the format can
+// evolve without ambiguity: a fixed magic + a single version byte prefix a v1
+// AES-256-GCM payload. Version 0 is the legacy OpenSSL AES-256-CBC ("Salted__")
+// format still produced by encryptOpenSSL (kept for reference/fixtures).
+const (
+	exportMagic     = "HYGR" // 4-byte marker; distinguishes from the legacy "Salted__"
+	exportVersionV1 = 0x01   // AES-256-GCM + PBKDF2-SHA256 (600k)
+	exportKDFIters  = 600_000
+	exportSaltLen   = 16
+)
+
+// encryptExport wraps plaintext in the v1 authenticated envelope:
+//
+//	"HYGR" | 0x01 | salt[16] | nonce[12] | AES-256-GCM(ciphertext||tag)
+//
+// The 32-byte key is PBKDF2-SHA256(passphrase, salt, 600k). The 5-byte magic+version
+// header is fed to GCM as additional authenticated data, so a version/downgrade
+// flip is detected alongside any ciphertext tamper. Salt and nonce are fresh random
+// per export and stored in the header.
+func encryptExport(plaintext []byte, passphrase string) ([]byte, error) {
+	salt := make([]byte, exportSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+	key := pbkdf2.Key([]byte(passphrase), salt, exportKDFIters, 32, sha256.New)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	header := append([]byte(exportMagic), exportVersionV1)
+	ct := gcm.Seal(nil, nonce, plaintext, header)
+
+	out := make([]byte, 0, len(header)+len(salt)+len(nonce)+len(ct))
+	out = append(out, header...)
+	out = append(out, salt...)
+	out = append(out, nonce...)
+	out = append(out, ct...)
+	return out, nil
+}
+
+// decryptExport reverses encryptExport, dispatching on the marker: the v1 GCM
+// container ("HYGR"|0x01) or the legacy OpenSSL AES-256-CBC ("Salted__") format.
+// No handler reads exports back today (export is one-way, for GDPR portability), so
+// this exists for round-trip/tamper tests and any future in-app import path — the
+// dual dispatch means already-produced legacy files stay decryptable.
+func decryptExport(blob []byte, passphrase string) ([]byte, error) {
+	if len(blob) >= 5 && string(blob[:4]) == exportMagic {
+		if blob[4] != exportVersionV1 {
+			return nil, errors.New("export: unsupported version")
+		}
+		rest := blob[5:]
+		block, err := aes.NewCipher(pbkdf2.Key([]byte(passphrase), safeSlice(rest, 0, exportSaltLen), exportKDFIters, 32, sha256.New))
+		if err != nil {
+			return nil, err
+		}
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			return nil, err
+		}
+		ns := gcm.NonceSize()
+		if len(rest) < exportSaltLen+ns {
+			return nil, errors.New("export: truncated header")
+		}
+		nonce := rest[exportSaltLen : exportSaltLen+ns]
+		ct := rest[exportSaltLen+ns:]
+		return gcm.Open(nil, nonce, ct, blob[:5]) // AAD = magic+version
+	}
+	return decryptOpenSSLCBC(blob, passphrase)
+}
+
+// safeSlice returns b[lo:hi] clamped to len(b) (callers validate lengths after).
+func safeSlice(b []byte, lo, hi int) []byte {
+	if hi > len(b) {
+		hi = len(b)
+	}
+	if lo > hi {
+		lo = hi
+	}
+	return b[lo:hi]
+}
+
+// decryptOpenSSLCBC decrypts the legacy OpenSSL AES-256-CBC ("Salted__") envelope
+// produced by encryptOpenSSL / `openssl enc -aes-256-cbc -pbkdf2` (10k iters).
+func decryptOpenSSLCBC(blob []byte, passphrase string) ([]byte, error) {
+	if len(blob) < 16 || string(blob[:8]) != "Salted__" {
+		return nil, errors.New("export: bad header")
+	}
+	salt, ct := blob[8:16], blob[16:]
+	dk := pbkdf2.Key([]byte(passphrase), salt, 10000, 48, sha256.New)
+	block, err := aes.NewCipher(dk[:32])
+	if err != nil {
+		return nil, err
+	}
+	if len(ct) == 0 || len(ct)%block.BlockSize() != 0 {
+		return nil, errors.New("export: bad ciphertext length")
+	}
+	pt := make([]byte, len(ct))
+	cipher.NewCBCDecrypter(block, dk[32:48]).CryptBlocks(pt, ct)
+	pad := int(pt[len(pt)-1])
+	if pad <= 0 || pad > block.BlockSize() || pad > len(pt) {
+		return nil, errors.New("export: bad padding")
+	}
+	return pt[:len(pt)-pad], nil
+}
+
 // encryptOpenSSL wraps plaintext in the OpenSSL `enc` envelope: "Salted__" + 8-byte
 // salt + AES-256-CBC ciphertext (PKCS#7), with key+IV derived by PBKDF2-SHA256
-// (10000 iters) — byte-compatible with `openssl enc -aes-256-cbc -pbkdf2`.
+// (10000 iters) — byte-compatible with `openssl enc -aes-256-cbc -pbkdf2`. Legacy
+// v0 format; superseded by encryptExport (kept to produce/verify legacy fixtures).
 func encryptOpenSSL(plaintext []byte, passphrase string) ([]byte, error) {
 	salt := make([]byte, 8)
 	if _, err := rand.Read(salt); err != nil {

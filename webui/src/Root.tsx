@@ -74,10 +74,12 @@ export function Root() {
   // which runs the same handoff after login — so this only covers the gap.
   useEffect(() => {
     if (!DESKTOP_STATE || booting || handoff !== "idle" || !apiKey()) return;
-    void desktopHandoff(DESKTOP_STATE)
-      .then(() => {
+    void desktopHandoff()
+      .then((claim) => {
         setHandoff("done");
-        window.location.href = `hygur://auth?state=${encodeURIComponent(DESKTOP_STATE)}`;
+        // `state` = the desktop's correlation nonce (CSRF match); `claim` = the
+        // server-issued one-time handle the desktop redeems.
+        window.location.href = `hygur://auth?state=${encodeURIComponent(DESKTOP_STATE)}&claim=${encodeURIComponent(claim)}`;
       })
       .catch((e: unknown) => {
         setHandoffErr(e instanceof Error ? e.message : String(e));

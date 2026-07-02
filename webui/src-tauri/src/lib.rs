@@ -311,8 +311,21 @@ fn sign_out_desktop(app: AppHandle) -> Result<(), String> {
 /// Open a URL in the user's default SYSTEM browser (not the loopback webview) —
 /// used by the desktop passkey sign-in to launch cloud.hygur.ai, where the WebAuthn
 /// ceremony can run (it can't on the 127.0.0.1 webview origin).
+///
+/// Scheme allowlist (fail-closed): only `https:` and `mailto:` may reach the system
+/// opener. This IPC is reachable from the webview (which renders untrusted content —
+/// mail, LLM output), so an injected link must not be able to launch `file:`,
+/// `gopher:`, `javascript:`, or any exotic scheme handler.
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    let scheme = url
+        .trim()
+        .split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if scheme != "https" && scheme != "mailto" {
+        return Err("unsupported URL scheme".into());
+    }
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 

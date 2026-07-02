@@ -31,7 +31,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8420 http://localhost:8420 https://console.hygur.ai https://cloud.hygur.ai https://*.hygur.ai https://*.hygur.eu; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
     }
   },
   "bundle": {

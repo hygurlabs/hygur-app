@@ -126,23 +126,29 @@ export async function passkeyCount(): Promise<number> {
 
 // --- Desktop handback ----------------------------------------------------
 // The desktop webview (loopback origin) can't run WebAuthn, so passkey sign-in
-// happens in the system browser (cloud.hygur.ai). Once the browser is logged in
-// it stashes a short-lived bundle under a random `state`; the desktop is woken
-// via the hygur:// deep link and claims it. The state is the only thing on the
-// wire — the token bundle never travels through the deep-link URL.
+// happens in the system browser (cloud.hygur.ai). Once the browser is logged in it
+// stashes a short-lived bundle under a SERVER-issued `state` (the console generates
+// it with crypto/rand — the client no longer chooses it); the desktop is woken via
+// the hygur:// deep link and claims it with that state. The state is the only thing
+// on the wire — the token bundle never travels through the deep-link URL.
 
-/** Browser side: stash the current session as a one-time bundle keyed by `state`,
- *  authorized by the just-obtained access token. */
-export async function desktopHandoff(state: string): Promise<void> {
+/** Browser side: stash the current session as a one-time bundle, authorized by the
+ *  just-obtained access token. The console generates the one-time `state` and
+ *  returns it; the caller carries it in the hygur:// deep link for the desktop to
+ *  claim. */
+export async function desktopHandoff(): Promise<string> {
   const token = apiKey();
   if (!token) throw new Error("Not signed in.");
-  const r = await consolePost("/desktop/handoff", { state }, token);
+  const r = await consolePost("/desktop/handoff", {}, token);
   if (!r.ok) throw new Error("Could not prepare the desktop sign-in.");
+  const { state } = (await r.json()) as { state?: string };
+  if (!state) throw new Error("Could not prepare the desktop sign-in.");
+  return state;
 }
 
-/** Desktop side: redeem the one-time `state` for the token bundle. Returns it for
- *  the caller to apply — on the native app this goes into the desktop config
- *  (cloud engine mode), NOT the browser's localStorage. */
+/** Desktop side: redeem the one-time server-issued `state` for the token bundle.
+ *  Returns it for the caller to apply — on the native app this goes into the
+ *  desktop config (cloud engine mode), NOT the browser's localStorage. */
 export async function desktopClaim(state: string): Promise<TokenBundle> {
   const r = await consolePost("/desktop/claim", { state });
   if (!r.ok) throw new Error("Desktop sign-in expired — try again.");

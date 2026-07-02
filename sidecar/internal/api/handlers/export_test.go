@@ -4,10 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/sha256"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,12 +17,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
-	"golang.org/x/crypto/pbkdf2"
 )
 
-// TestExportHandler_RoundTrip builds an export, decrypts it the same way
-// `openssl enc -d -aes-256-cbc -pbkdf2` would, and checks the archive holds the
-// notes + briefs (as Markdown + data.json) and EXCLUDES mail-derived items.
+// TestExportHandler_RoundTrip builds an export, decrypts it via the versioned
+// decryptExport (v1 AES-256-GCM), and checks the archive holds the notes + briefs
+// (as Markdown + data.json) and EXCLUDES mail-derived items.
 func TestExportHandler_RoundTrip(t *testing.T) {
 	db, err := store.NewDB(":memory:")
 	if err != nil {
@@ -66,7 +61,12 @@ func TestExportHandler_RoundTrip(t *testing.T) {
 		t.Fatalf("export status %d: %s", rec.Code, rec.Body.String())
 	}
 
-	plain, err := decryptOpenSSL(rec.Body.Bytes(), pass)
+	out := rec.Body.Bytes()
+	// The envelope must be the self-describing v1 GCM container.
+	if len(out) < 5 || string(out[:4]) != exportMagic || out[4] != exportVersionV1 {
+		t.Fatalf("export is not the v1 GCM container: % x", out[:min(5, len(out))])
+	}
+	plain, err := decryptExport(out, pass)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
@@ -133,24 +133,48 @@ func TestEncryptOpenSSL_OpenSSLCompat(t *testing.T) {
 	}
 }
 
-func decryptOpenSSL(blob []byte, passphrase string) ([]byte, error) {
-	if len(blob) < 16 || string(blob[:8]) != "Salted__" {
-		return nil, errors.New("bad header")
-	}
-	salt, ct := blob[8:16], blob[16:]
-	dk := pbkdf2.Key([]byte(passphrase), salt, 10000, 48, sha256.New)
-	block, err := aes.NewCipher(dk[:32])
+// TestExport_GCMRoundTripAndTamper proves the v1 envelope round-trips and that GCM
+// authentication rejects a single flipped ciphertext byte (no MAC-less CBC any more).
+func TestExport_GCMRoundTripAndTamper(t *testing.T) {
+	const pass = "correct horse battery"
+	plain := []byte("sensitive export bytes — fictional data only\n")
+	blob, err := encryptExport(plain, pass)
 	if err != nil {
-		return nil, err
+		t.Fatalf("encryptExport: %v", err)
 	}
-	if len(ct) == 0 || len(ct)%block.BlockSize() != 0 {
-		return nil, errors.New("bad ciphertext length")
+	got, err := decryptExport(blob, pass)
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("round-trip: got %q err %v", got, err)
 	}
-	pt := make([]byte, len(ct))
-	cipher.NewCBCDecrypter(block, dk[32:48]).CryptBlocks(pt, ct)
-	pad := int(pt[len(pt)-1])
-	if pad <= 0 || pad > block.BlockSize() || pad > len(pt) {
-		return nil, errors.New("bad padding")
+	// Wrong passphrase → GCM tag fails.
+	if _, err := decryptExport(blob, "wrong passphrase"); err == nil {
+		t.Fatal("wrong passphrase should fail the GCM tag")
 	}
-	return pt[:len(pt)-pad], nil
+	// Flip a byte in the ciphertext region (past the 5+16+12 header) → tamper caught.
+	tampered := append([]byte(nil), blob...)
+	tampered[len(tampered)-1] ^= 0x01
+	if _, err := decryptExport(tampered, pass); err == nil {
+		t.Fatal("a flipped ciphertext byte must fail the GCM tag")
+	}
+	// Flip the version byte (AAD) → downgrade/tamper caught.
+	verFlip := append([]byte(nil), blob...)
+	verFlip[4] ^= 0x01
+	if _, err := decryptExport(verFlip, pass); err == nil {
+		t.Fatal("a flipped version byte must be rejected")
+	}
+}
+
+// TestExport_DecryptDispatchesLegacyCBC proves the marker dispatch keeps the legacy
+// OpenSSL AES-256-CBC ("Salted__") format decryptable (already-produced exports).
+func TestExport_DecryptDispatchesLegacyCBC(t *testing.T) {
+	const pass = "a strong passphrase"
+	plain := []byte("older CBC-format export\n")
+	legacy, err := encryptOpenSSL(plain, pass)
+	if err != nil {
+		t.Fatalf("encryptOpenSSL: %v", err)
+	}
+	got, err := decryptExport(legacy, pass) // dispatch → CBC branch
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("legacy dispatch: got %q err %v", got, err)
+	}
 }

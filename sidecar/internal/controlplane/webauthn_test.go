@@ -138,6 +138,118 @@ func TestWebAuthn_LoginBegin(t *testing.T) {
 	}
 }
 
+// TestCORSMiddleware_ExactHostMatch: legit prod + loopback origins are reflected;
+// unanchored look-alikes (localhost.evil.com, cloud.hygur.ai.evil.com) are NOT.
+func TestCORSMiddleware_ExactHostMatch(t *testing.T) {
+	mw := CORSMiddleware([]string{"https://cloud.hygur.ai", "https://console.hygur.ai"})
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	acao := func(origin string) string {
+		req := httptest.NewRequest(http.MethodGet, "/passkey/count", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Header().Get("Access-Control-Allow-Origin")
+	}
+
+	for _, o := range []string{
+		"https://cloud.hygur.ai", "https://console.hygur.ai",
+		"http://localhost", "http://localhost:5173", "http://127.0.0.1:8420",
+	} {
+		if got := acao(o); got != o {
+			t.Errorf("legit origin %q: ACAO=%q, want it reflected", o, got)
+		}
+	}
+
+	for _, o := range []string{
+		"http://localhost.evil.com", "https://cloud.hygur.ai.evil.com",
+		"https://evil.com", "http://127.0.0.1.evil.com", "http://localhost@evil.com",
+		"https://localhost", // https loopback is not a configured dev origin
+	} {
+		if got := acao(o); got != "" {
+			t.Errorf("look-alike origin %q: ACAO=%q, want empty (rejected)", o, got)
+		}
+	}
+}
+
+// TestWebAuthn_DesktopHandoffServerIssuesState: the server generates the one-time
+// `state` (client value ignored); a claim with the server-issued state succeeds
+// once; a replay or a forged/unknown state is rejected.
+func TestWebAuthn_DesktopHandoffServerIssuesState(t *testing.T) {
+	s := testStore(t)
+	wa := testWebAuthn(t, s)
+	now := time.Now()
+	acc, err := s.CreateAccount(now, "owner@example.com", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	dev, _, err := s.CreateDeviceForAccount(now, acc.AccountNumber, "web")
+	if err != nil {
+		t.Fatalf("CreateDeviceForAccount: %v", err)
+	}
+	tok, err := wa.svc.mintAccess(now, acc, dev)
+	if err != nil {
+		t.Fatalf("mintAccess: %v", err)
+	}
+
+	r := chi.NewRouter()
+	wa.Register(r)
+
+	// Handoff: the client sends a bogus/absent state; the server issues its own.
+	body, _ := json.Marshal(desktopReq{State: "client-chosen-should-be-ignored"})
+	req := httptest.NewRequest(http.MethodPost, "/desktop/handoff", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handoff status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var hr struct {
+		OK    bool   `json:"ok"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &hr); err != nil {
+		t.Fatalf("decode handoff: %v", err)
+	}
+	if !hr.OK || hr.State == "" {
+		t.Fatalf("handoff must return a server-issued state, got %+v", hr)
+	}
+	if hr.State == "client-chosen-should-be-ignored" {
+		t.Fatal("server must NOT echo the client-supplied state")
+	}
+
+	claim := func(state string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(desktopReq{State: state})
+		rq := httptest.NewRequest(http.MethodPost, "/desktop/claim", bytes.NewReader(b))
+		rc := httptest.NewRecorder()
+		r.ServeHTTP(rc, rq)
+		return rc
+	}
+
+	// Server-issued state → claim succeeds and returns the tenant bundle.
+	okRec := claim(hr.State)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("valid claim status = %d, body %s", okRec.Code, okRec.Body.String())
+	}
+	var bundle tokenResp
+	if err := json.Unmarshal(okRec.Body.Bytes(), &bundle); err != nil {
+		t.Fatalf("decode bundle: %v", err)
+	}
+	if bundle.AccessToken == "" || bundle.TenantID != acc.TenantID {
+		t.Fatalf("claim bundle wrong: %+v", bundle)
+	}
+
+	// Replay of the same (already consumed) state → rejected.
+	if replay := claim(hr.State); replay.Code != http.StatusUnauthorized {
+		t.Fatalf("replayed state status = %d, want 401", replay.Code)
+	}
+	// A forged/unknown state the server never issued → rejected.
+	if forged := claim("deadbeefdeadbeefdeadbeefdeadbeef"); forged.Code != http.StatusUnauthorized {
+		t.Fatalf("forged state status = %d, want 401", forged.Code)
+	}
+}
+
 func TestWebAuthn_RegisterBeginRequiresToken(t *testing.T) {
 	s := testStore(t)
 	wa := testWebAuthn(t, s)
