@@ -765,6 +765,12 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// then binds identifier VALUES to this layer only — raw excerpts stay untrusted prose. This is
 	// ADDITIVE: it never removes retrieval, so non-identifier Q&A is unchanged. Best-effort: any
 	// error is logged and the turn proceeds without the layer.
+	// determinedValues is the set of engine-verified identifier values for this query's subjects.
+	// It is the ONLY membership oracle the output guard trusts: any identifier-grade value the LLM
+	// writes that is NOT in this set is unverified and must never be shown (P=0). Stays empty when
+	// the engine determined nothing (e.g. "my phone number" with no determined phone) — which is
+	// exactly when an invented number in the prose must be caught.
+	var determinedValues map[string]bool
 	if h.factsDB != nil && h.ownerMatcher != nil && latestUserQuery != "" {
 		fctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		facts, err := retrieval.AssembleQueryFacts(fctx, h.factsDB, latestUserQuery, time.Now().UTC(), h.ownerMatcher, h.ownerSubject)
@@ -774,6 +780,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(facts) > 0 {
 			messages = injectDeterminedFacts(messages, facts)
+			determinedValues = determinedValueSet(facts)
 		}
 	}
 
@@ -939,9 +946,11 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if clean != "" {
 					roundContent.WriteString(clean)
 					assistantBuf.WriteString(clean)
-					if err := writeSSE(map[string]any{"delta": clean, "done": false}); err != nil {
-						return err
-					}
+					// P=0 output guard: the user-facing answer is BUFFERED, never streamed
+					// token-by-token, so the deterministic guard can scan the whole text for an
+					// unverified identifier-grade value BEFORE anything is shown. (The engine's
+					// verified value already streams instantly as the determined_answer card, so
+					// the prose can afford to arrive as one guarded block.) Emitted after the loop.
 				}
 			}
 			return nil
@@ -949,7 +958,6 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if tail := harmony.Flush(); tail != "" {
 			roundContent.WriteString(tail)
 			assistantBuf.WriteString(tail)
-			_ = writeSSE(map[string]any{"delta": tail, "done": false})
 		}
 
 		if err != nil {
@@ -1066,6 +1074,16 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Ensure the keepalive goroutine exits even if no token was received.
 	stopOnce.Do(func() { close(stopKeepalive) })
 
+	// P=0 OUTPUT GUARD. The full user-facing answer is now buffered (nothing was streamed live).
+	// Scan it deterministically for identifier-grade values and, on any value the engine did NOT
+	// determine, replace the whole answer with an honest decline — so no unverified identifier can
+	// EVER be shown. Verified values (also on the card) and ordinary numbers pass through. This is
+	// the text we emit, persist, and feed to session/memory below.
+	answer, guardDeclined := guardAnswer(assistantBuf.String(), determinedValues)
+	if guardDeclined {
+		h.logger.Warn().Msg("output guard: unverified identifier-grade value in answer → honest decline")
+	}
+
 	if streamErr != nil {
 		// Client disconnect — don't log as error.
 		if r.Context().Err() != nil {
@@ -1082,7 +1100,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn().Err(streamErr).Int("sources", len(turnSources)).
 				Msg("chat degraded: LLM unavailable, returning retrieved sources only")
 			msg := degradedChatMessage(len(turnSources) > 0)
-			assistantBuf.WriteString(msg)
+			answer = msg // canned fail-soft text (no identifier) supersedes any partial buffer
 			_ = writeSSE(map[string]any{"delta": msg, "done": false})
 			_ = writeSSE(map[string]any{"degraded": true, "done": true})
 		} else {
@@ -1091,7 +1109,12 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	} else {
-		// Final `done` event with usage, mirroring the pre-tool-loop wire format.
+		// Emit the guarded answer as the answer delta, then the terminal `done` (with usage,
+		// mirroring the pre-tool-loop wire format). The client concatenates `delta` events, so a
+		// single guarded block is wire-compatible with the previous token-by-token stream.
+		if answer != "" {
+			_ = writeSSE(map[string]any{"delta": answer, "done": false})
+		}
 		doneEvent := map[string]any{"done": true}
 		if lastUsage != nil {
 			doneEvent["usage"] = map[string]int{
@@ -1106,9 +1129,9 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Persist the assistant answer + its citations to the durable transcript.
 	// Detached context so it survives a client disconnect after streaming. Even
 	// a partial answer (mid-stream failure) is worth keeping.
-	if req.SessionID != "" && h.chatStore != nil && assistantBuf.Len() > 0 {
+	if req.SessionID != "" && h.chatStore != nil && answer != "" {
 		pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
-		h.persistAssistantTurn(pctx, req.SessionID, assistantBuf.String(), turnSources)
+		h.persistAssistantTurn(pctx, req.SessionID, answer, turnSources)
 		pcancel()
 	}
 
@@ -1137,8 +1160,8 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Post-stream: extract entities from the assistant answer and append a
 	// ResolvedQuery so the next turn's direct-answer check has fresh context.
 	// Skip when the session is transient (no SessionID) or the answer is empty.
-	if req.SessionID != "" && assistantBuf.Len() > 0 {
-		updateSessionPostSynthesis(sessionCtx, latestUserQuery, assistantBuf.String(), req.RecentSourceIDs)
+	if req.SessionID != "" && answer != "" {
+		updateSessionPostSynthesis(sessionCtx, latestUserQuery, answer, req.RecentSourceIDs)
 	}
 
 	// Per-turn memory extraction, run synchronously so each autonomous write can
@@ -1147,7 +1170,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// LLM (1-3 s); we hold the stream open that bit longer, after the terminal
 	// `done`, and emit before returning. Storage semantics are unchanged (rows land
 	// pending, source='extracted') — this only surfaces the write.
-	h.emitMemoryWrites(writeSSE, latestUserQuery, assistantBuf.String(), req.SessionID)
+	h.emitMemoryWrites(writeSSE, latestUserQuery, answer, req.SessionID)
 }
 
 // emitMemoryWrites extracts durable memories from the just-finished turn, persists
@@ -1438,9 +1461,12 @@ func injectDeterminedFacts(messages []llm.Message, subjects []retrieval.Determin
 		if !s.HasFacts() {
 			continue
 		}
+		// PII: never spell the owner's own raw name into the prompt. The model does not need it to
+		// voice "your VAT is X" — the values below are already scoped to the owner. A named
+		// non-owner subject keeps its label (the user asked about them, so it is not new PII).
 		header := s.Subject.Norm
 		if s.IsOwner {
-			header += " — the user (owner)"
+			header = "the user (owner)"
 		}
 		b.WriteString("\n### ")
 		b.WriteString(header)

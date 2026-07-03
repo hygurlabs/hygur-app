@@ -205,6 +205,30 @@ type value struct {
 	start, end int
 }
 
+// Value is an identifier-grade token located in text: its canonical (identifier.Normalize'd)
+// form, the raw substring as written, and its byte offsets in the source.
+type Value struct {
+	Norm  string
+	Raw   string
+	Start int
+	End   int
+}
+
+// IdentifierGradeValues returns every identifier-grade value in text, using the SAME value-grade
+// notion the extractor binds to labels (see findValues/valueGrade): a ≥9-digit run, an IBAN shape,
+// or a mixed alphanumeric code ≥8 chars with ≥4 digits — and deliberately NOT short monetary
+// amounts, 8-digit dates, counts, percentages or years. Exposed so a caller (the chat output
+// guard) reuses the exact deterministic detector instead of re-deriving a value-shape test. This
+// is value-SHAPE detection only — no label routing, no type list.
+func IdentifierGradeValues(text string) []Value {
+	vs := findValues(text)
+	out := make([]Value, len(vs))
+	for i, v := range vs {
+		out[i] = Value{Norm: v.norm, Raw: v.raw, Start: v.start, End: v.end}
+	}
+	return out
+}
+
 // findValues returns the identifier-grade values in text (≥9 digits, an IBAN shape, or a mixed
 // alphanumeric code ≥8 chars with ≥4 digits), non-overlapping, longest-at-position preferred. It
 // excludes short amounts, 8-digit dates (YYYYMMDD) and plain words.

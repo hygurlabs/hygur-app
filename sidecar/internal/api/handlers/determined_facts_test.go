@@ -61,6 +61,48 @@ func TestInjectDeterminedFacts_BlockAndRule(t *testing.T) {
 	}
 }
 
+// PII: the assembled prompt for the OWNER's own identifier question must never spell the owner's
+// raw name — only a neutral "the user (owner)" label. The value is still voiced from the block.
+func TestInjectDeterminedFacts_OwnerNameNotInPrompt(t *testing.T) {
+	in := []llm.Message{
+		{Role: "system", Content: "PERSONA"},
+		{Role: "user", Content: "what is my VAT?"},
+	}
+	subjects := []retrieval.DeterminedFacts{{
+		Subject: retrieval.EngramSubject{Norm: "alex martin", Type: "person"},
+		IsOwner: true,
+		Identity: []retrieval.EngramIdentifier{
+			{Type: "enterprise_number", Label: "enterprise number", Value: "0000000097", Tier: "high"},
+		},
+	}}
+	sys := injectDeterminedFacts(in, subjects)[0].Content
+	if strings.Contains(strings.ToLower(sys), "alex martin") {
+		t.Errorf("owner's raw name leaked into the assembled prompt:\n%s", sys)
+	}
+	if !strings.Contains(sys, "the user (owner)") {
+		t.Errorf("neutral owner label missing:\n%s", sys)
+	}
+	if !strings.Contains(sys, "enterprise number: 0000000097") {
+		t.Errorf("owner's value must still be voiced from the block:\n%s", sys)
+	}
+}
+
+// A NAMED non-owner subject keeps its label (the user asked about them — not new PII).
+func TestInjectDeterminedFacts_NonOwnerKeepsLabel(t *testing.T) {
+	in := []llm.Message{{Role: "user", Content: "what is ACME's VAT?"}}
+	subjects := []retrieval.DeterminedFacts{{
+		Subject: retrieval.EngramSubject{Norm: "acme sprl", Type: "org"},
+		IsOwner: false,
+		Identity: []retrieval.EngramIdentifier{
+			{Type: "enterprise_number", Label: "enterprise number", Value: "0000000097", Tier: "high"},
+		},
+	}}
+	sys := injectDeterminedFacts(in, subjects)[0].Content
+	if !strings.Contains(sys, "acme sprl") {
+		t.Errorf("named non-owner subject label should be present:\n%s", sys)
+	}
+}
+
 // Empty subjects → the messages pass through untouched (additive layer; non-identifier turns
 // with no resolvable subject are unaffected).
 func TestInjectDeterminedFacts_EmptyNoop(t *testing.T) {
