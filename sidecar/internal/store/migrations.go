@@ -627,6 +627,33 @@ CREATE TABLE IF NOT EXISTS token_usage_pass (
 		Name:    "knowledge_items_raw_text",
 		SQL:     "", // handled by applyRawTextV33Migration
 	},
+	// Migration 34 — figure_nodes: labelled MONETARY figures as engram NODES with typed CONTEXT
+	// EDGES (FIGURES_TRUTH_PLAN §3 / F1). The NODE is (value, unit); the EDGES are entity_norm
+	// (whose figure — the same canonical key the entity graph uses), period, direction and
+	// content_id (source). Written at ingest by the deterministic figure extractor + proximity
+	// attribution; read by a deterministic traversal (filter label+direction, order by period,
+	// pick latest / decline). The composite PK lets one document carry several figures of the same
+	// label that differ by period or direction ("TVA à payer Q1" vs "TVA remboursée Q2").
+	{
+		Version: 34,
+		Name:    "figure_nodes",
+		SQL: `
+CREATE TABLE IF NOT EXISTS figure_nodes (
+    content_id  TEXT NOT NULL,
+    entity_norm TEXT NOT NULL,
+    label       TEXT NOT NULL DEFAULT '',
+    value       TEXT NOT NULL DEFAULT '',
+    raw         TEXT NOT NULL DEFAULT '',
+    unit        TEXT NOT NULL DEFAULT '',
+    period      TEXT NOT NULL DEFAULT '',
+    direction   TEXT NOT NULL DEFAULT '',
+    prox        REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (content_id, entity_norm, label, value, period, direction)
+);
+CREATE INDEX IF NOT EXISTS idx_figure_nodes_entity ON figure_nodes(entity_norm);
+CREATE INDEX IF NOT EXISTS idx_figure_nodes_label ON figure_nodes(label);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

@@ -173,6 +173,11 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	if lerr := i.store.ReplaceIdentifierLinks(ctx, item.ContentID, identifierProximityLinks(item)); lerr != nil {
 		log.Printf("[ingest] identifier-link sync failed for %s: %v", item.ContentID, lerr)
 	}
+	// Figure nodes (labelled monetary figures ← FIGURES_TRUTH_PLAN F1): extract + attribute to the
+	// nearest entity, so "the owner's VAT to pay" resolves by a deterministic traversal. Best-effort.
+	if ferr := i.store.ReplaceFigureNodes(ctx, item.ContentID, figureNodes(item)); ferr != nil {
+		log.Printf("[ingest] figure-node sync failed for %s: %v", item.ContentID, ferr)
+	}
 }
 
 // entityMentionsFromClaims derives the distinct (entity, attribute) index rows
@@ -400,6 +405,7 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 					log.Printf("[ingest] entity-index backfill failed for %s: %v", it.ContentID, rerr)
 				}
 				_ = i.store.ReplaceIdentifierLinks(ctx, it.ContentID, identifierProximityLinks(it))
+				_ = i.store.ReplaceFigureNodes(ctx, it.ContentID, figureNodes(it))
 				processed++
 			}
 			if len(page) < batch {

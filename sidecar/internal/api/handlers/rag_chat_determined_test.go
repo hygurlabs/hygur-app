@@ -51,7 +51,30 @@ func TestDeterminedAnswerFromToolResult(t *testing.T) {
 
 	t.Run("other tools render nothing", func(t *testing.T) {
 		if _, ok := determinedAnswerFromToolResult("search_knowledge_base", mk(map[string]any{"x": 1})); ok {
-			t.Error("only lookup_identifier should produce a determined_answer")
+			t.Error("only the engine lookups should produce a determined_answer")
+		}
+	})
+
+	t.Run("figure high value is rendered from the engine", func(t *testing.T) {
+		res := mk(tools.FigureResponse{Label: "VAT to pay · Q3 2026", Subject: "you",
+			Value: "7 421,85 €", Unit: "EUR", Period: "2026-Q3", Direction: "payable", Tier: "high"})
+		evt, ok := determinedAnswerFromToolResult("lookup_figure", res)
+		if !ok {
+			t.Fatal("expected a determined_answer event for lookup_figure")
+		}
+		if evt.Value != "7 421,85 €" || evt.Confidence != "high" || evt.Label != "VAT to pay · Q3 2026" {
+			t.Errorf("unexpected figure event: %+v", evt)
+		}
+	})
+
+	t.Run("figure decline renders no value", func(t *testing.T) {
+		res := mk(tools.FigureResponse{Label: "VAT", Subject: "you", Tier: "none", Reason: "ambiguous_direction"})
+		evt, ok := determinedAnswerFromToolResult("lookup_figure", res)
+		if !ok {
+			t.Fatal("expected a determined_answer event on figure decline")
+		}
+		if evt.Value != "" || evt.Confidence != "none" || evt.Message == "" {
+			t.Errorf("figure decline should be none + honest message, no value: %+v", evt)
 		}
 	})
 }

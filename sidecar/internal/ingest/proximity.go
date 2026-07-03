@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/figure"
 	"github.com/hygur/sidecar/internal/labelfact"
 	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
@@ -149,4 +150,97 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// figureNodes extracts the labelled MONETARY figures in a document (figure.Extract) and attributes
+// each to its nearest ENTITY — a named person OR org — within the proximity window, mirroring the
+// identifier proximity pass. The entity edge is what a resolution traversal follows ("the owner's
+// VAT" → the owner's figure nodes). An org is included alongside persons because a business figure
+// (a VAT amount) is typically stated next to the company, not a person. A figure with no entity in
+// reach is dropped (fail-closed: an unattributed amount cannot be resolved to a subject). Emitted
+// figures carry their context edges (period, direction, unit) verbatim from the extractor.
+// Deterministic, no LLM.
+func figureNodes(item *store.KnowledgeItem) []store.FigureNode {
+	if item == nil {
+		return nil
+	}
+	text := item.Title + " " + item.NormalizedText
+	figs := figure.Extract(text)
+	if len(figs) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(text)
+
+	// Locate every named entity (person + org) by its rarest (most distinctive) token — same
+	// technique as identifierProximityLinks, so a figure attaches to the entity actually written
+	// near it rather than to a full name the OCR may not reproduce verbatim.
+	type entity struct {
+		norm string
+		pos  []int
+	}
+	var entities []entity
+	locate := func(metaKey string) {
+		for _, raw := range metaStrings(item.Metadata, metaKey) {
+			norm := contradict.NormKey(raw)
+			if norm == "" {
+				continue
+			}
+			rare, rareCount := "", 1<<30
+			for _, tok := range strings.Fields(strings.ToLower(raw)) {
+				if len([]rune(tok)) < 3 {
+					continue
+				}
+				if c := strings.Count(lower, tok); c > 0 && c < rareCount {
+					rare, rareCount = tok, c
+				}
+			}
+			if rare == "" {
+				continue
+			}
+			var pos []int
+			for i := 0; ; {
+				j := strings.Index(lower[i:], rare)
+				if j < 0 {
+					break
+				}
+				pos = append(pos, i+j)
+				i += j + len(rare)
+			}
+			if len(pos) > 0 {
+				entities = append(entities, entity{norm, pos})
+			}
+		}
+	}
+	locate("extracted_persons")
+	locate("extracted_orgs")
+	if len(entities) == 0 {
+		return nil
+	}
+
+	var out []store.FigureNode
+	for _, f := range figs {
+		figPos := (f.Start + f.End) / 2
+		bestNorm, bestD := "", 1<<30
+		for _, e := range entities {
+			for _, pp := range e.pos {
+				if d := abs(pp - figPos); d < bestD {
+					bestD, bestNorm = d, e.norm
+				}
+			}
+		}
+		if bestNorm == "" || bestD > proxWindow {
+			continue
+		}
+		out = append(out, store.FigureNode{
+			EntityNorm: bestNorm,
+			Label:      f.Label,
+			Value:      f.Value,
+			Raw:        f.Raw,
+			Unit:       f.Unit,
+			Period:     f.Period,
+			Direction:  f.Direction,
+			Prox:       1.0,
+		})
+	}
+	return out
 }

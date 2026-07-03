@@ -747,6 +747,11 @@ func main() {
 		}
 	}
 	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db, ownerMatcher, ownerSubject))
+	// lookup_figure: deterministic (subject, label, direction, period) → monetary value from the
+	// figure engram graph (FIGURES_TRUTH_PLAN F1). Same owner anchor + first-person resolution as
+	// lookup_identifier; the value + context (period, direction, source) come from a traversal, never
+	// a RAG guess. Rendered by the same cut-LLM-safe determined_answer card.
+	toolRegistry.MustRegister(tools.NewLookupFigureTool(db, ownerMatcher, ownerSubject))
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is

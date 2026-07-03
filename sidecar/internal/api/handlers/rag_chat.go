@@ -161,30 +161,61 @@ type DeterminedAnswerEvent struct {
 // engine's, so the LLM path cannot change it. High/medium carry the value; "none" carries an
 // honest decline message and NO value (the engine has nothing → no fabrication).
 func determinedAnswerFromToolResult(toolName string, result json.RawMessage) (*DeterminedAnswerEvent, bool) {
-	if toolName != "lookup_identifier" || len(result) == 0 {
+	if len(result) == 0 {
 		return nil, false
 	}
-	var lr tools.LookupResponse
-	if err := json.Unmarshal(result, &lr); err != nil {
-		return nil, false
-	}
-	evt := &DeterminedAnswerEvent{
-		Type:       "determined_answer",
-		Label:      strings.TrimSpace(lr.Label),
-		Subject:    strings.TrimSpace(lr.Subject),
-		Confidence: string(lr.Tier),
-	}
-	for _, s := range lr.Sources {
-		evt.Sources = append(evt.Sources, DeterminedAnswerSource{ContentID: s.ContentID, Title: s.Title})
-	}
-	switch lr.Tier {
-	case fact.TierHigh, fact.TierMed:
-		evt.Value = lr.Value
+	switch toolName {
+	case "lookup_identifier":
+		var lr tools.LookupResponse
+		if err := json.Unmarshal(result, &lr); err != nil {
+			return nil, false
+		}
+		evt := &DeterminedAnswerEvent{
+			Type:       "determined_answer",
+			Label:      strings.TrimSpace(lr.Label),
+			Subject:    strings.TrimSpace(lr.Subject),
+			Confidence: string(lr.Tier),
+		}
+		for _, s := range lr.Sources {
+			evt.Sources = append(evt.Sources, DeterminedAnswerSource{ContentID: s.ContentID, Title: s.Title})
+		}
+		switch lr.Tier {
+		case fact.TierHigh, fact.TierMed:
+			evt.Value = lr.Value
+		default:
+			evt.Confidence = "none"
+			evt.Message = "No verified value — I don't have a confirmed one on record for you."
+		}
+		return evt, true
+	case "lookup_figure":
+		// A labelled MONETARY figure (FIGURES_TRUTH_PLAN F1). The engine determined the value +
+		// context; the tool pre-composed the display Value ("7 421,85 €") and Label ("VAT to pay ·
+		// Q1 2026"). Rendered by the SAME cut-LLM-safe card — value on the wire before the prose, so
+		// the LLM cannot substitute, hedge, or decline the amount.
+		var fr tools.FigureResponse
+		if err := json.Unmarshal(result, &fr); err != nil {
+			return nil, false
+		}
+		evt := &DeterminedAnswerEvent{
+			Type:       "determined_answer",
+			Label:      strings.TrimSpace(fr.Label),
+			Subject:    strings.TrimSpace(fr.Subject),
+			Confidence: string(fr.Tier),
+		}
+		for _, s := range fr.Sources {
+			evt.Sources = append(evt.Sources, DeterminedAnswerSource{ContentID: s.ContentID, Title: s.Title})
+		}
+		switch fr.Tier {
+		case fact.TierHigh, fact.TierMed:
+			evt.Value = fr.Value
+		default:
+			evt.Confidence = "none"
+			evt.Message = "No verified figure — I don't have a confirmed value for that."
+		}
+		return evt, true
 	default:
-		evt.Confidence = "none"
-		evt.Message = "No verified value — I don't have a confirmed one on record for you."
+		return nil, false
 	}
-	return evt, true
 }
 
 // maxToolRounds caps how many consecutive tool-call rounds the chat loop
