@@ -739,6 +739,9 @@ export function Ask() {
                 activeId={sessionId}
                 onPick={loadSession}
                 onClose={() => setPanelOpen(false)}
+                onDelete={(id) => {
+                  if (id === sessionId) startNewChat();
+                }}
               />
             ) : (
               <ContextPanel sources={liveSources} openDetail={openDetail} />
