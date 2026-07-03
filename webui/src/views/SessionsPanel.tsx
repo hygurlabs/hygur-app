@@ -125,19 +125,21 @@ export function SessionsPanel({
                 // revealed on hover/focus. On touch, swiping the row left reveals
                 // a red trash zone underneath instead.
                 <li key={s.id} className="group relative overflow-hidden rounded-lg">
-                  <div
-                    data-trash-id={s.id}
-                    className="absolute inset-y-0 right-0 flex w-[76px] items-center justify-center bg-danger"
-                  >
-                    <button
-                      type="button"
-                      onClick={(e) => void remove(s.id, e)}
-                      aria-label="Delete conversation"
-                      className="flex h-full w-full items-center justify-center text-white"
+                  {(openId === s.id || dragging) && (
+                    <div
+                      data-trash-id={s.id}
+                      className="absolute inset-y-0 right-0 flex w-[76px] items-center justify-center bg-danger"
                     >
-                      <Trash2 size={17} strokeWidth={1.9} />
-                    </button>
-                  </div>
+                      <button
+                        type="button"
+                        onClick={(e) => void remove(s.id, e)}
+                        aria-label="Delete conversation"
+                        className="flex h-full w-full items-center justify-center text-white"
+                      >
+                        <Trash2 size={17} strokeWidth={1.9} />
+                      </button>
+                    </div>
+                  )}
                   <div
                     className={openId === s.id || dragging ? "relative bg-surface" : "relative"}
                     style={{
