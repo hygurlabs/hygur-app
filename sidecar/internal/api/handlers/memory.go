@@ -591,7 +591,7 @@ func (h *MemoryHandler) backupMemories(memories []*store.Memory) (string, error)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create backup dir: %w", err)
 	}
-	path := filepath.Join(dir, fmt.Sprintf("memory-dedup-%s.json", time.Now().Format("20060102-150405")))
+	path := filepath.Join(dir, fmt.Sprintf("memory-dedup-%s.json", time.Now().Format("20060102-150405.000000000")))
 	out := make([]StoreResponse, 0, len(memories))
 	for _, m := range memories {
 		out = append(out, memoryToResponse(m))

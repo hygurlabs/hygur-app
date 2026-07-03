@@ -363,6 +363,31 @@ func ResetTokenUsageAt(ctx context.Context, path, key string) (int64, error) {
 	return (&DB{db: conn}).ResetTokenUsage(ctx)
 }
 
+// OpenKeyedForCLI opens the DB at path with optional SQLCipher key on a single
+// pinned connection WITHOUT running migrations — the in-pod operator-CLI pattern
+// (mirrors DumpTokenUsage / ResetTokenUsageAt). readOnly adds mode=ro. Safe to
+// run alongside the live server (WAL + busy_timeout serialise access). The
+// returned *DB exposes the normal typed CRUD methods; the caller must Close it.
+func OpenKeyedForCLI(path, key string, readOnly bool) (*DB, error) {
+	dsn := "file:" + path + "?_foreign_keys=off&_busy_timeout=30000"
+	if readOnly {
+		dsn += "&mode=ro"
+	}
+	if key != "" {
+		dsn += fmt.Sprintf("&_pragma_key=%s&_pragma_cipher_page_size=4096", url.QueryEscape(key))
+	}
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("cli open: %w", err)
+	}
+	conn.SetMaxOpenConns(1)
+	if err := conn.PingContext(context.Background()); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("cli open (wrong key?): %w", err)
+	}
+	return &DB{db: conn}, nil
+}
+
 // MailboxStat is one row of the mail-by-mailbox breakdown (the purge dry-run).
 type MailboxStat struct {
 	Mailbox   string `json:"mailbox"`
