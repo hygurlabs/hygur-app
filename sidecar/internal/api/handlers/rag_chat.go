@@ -131,6 +131,62 @@ type PendingActionEvent struct {
 	Preview  string `json:"preview"`
 }
 
+// DeterminedAnswerSource is a document that carries a determined identifier value, surfaced so
+// the user can verify it independently of the LLM's prose.
+type DeterminedAnswerSource struct {
+	ContentID string `json:"content_id"`
+	Title     string `json:"title,omitempty"`
+}
+
+// DeterminedAnswerEvent is the CUT-LLM-SAFE render of a factual-identifier answer. The engine
+// (the lookup_identifier tool, driven by the model's language understanding) PRODUCES the value;
+// the handler emits this event so the client renders the answer (value + label + confidence +
+// sources) from the ENGINE, not from the streamed LLM text. The LLM may add warm framing but can
+// no longer substitute, hedge, or decline the value — the value is on the wire before its prose.
+// On an engine DECLINE (Confidence "none") Value is empty and Message carries an honest decline,
+// so the client shows "no verified value" rather than letting the model fabricate one.
+type DeterminedAnswerEvent struct {
+	Type       string                   `json:"type"` // "determined_answer"
+	Label      string                   `json:"label,omitempty"`
+	Subject    string                   `json:"subject,omitempty"`
+	Value      string                   `json:"value,omitempty"`
+	Confidence string                   `json:"confidence"` // "high" | "medium" | "none"
+	Message    string                   `json:"message,omitempty"`
+	Sources    []DeterminedAnswerSource `json:"sources,omitempty"`
+}
+
+// determinedAnswerFromToolResult turns a lookup_identifier tool result into the authoritative
+// render event, or (nil,false) for any other tool or an unparseable result. This is the SINGLE
+// bridge from the deterministic engine to the client render: the value shown to the user is the
+// engine's, so the LLM path cannot change it. High/medium carry the value; "none" carries an
+// honest decline message and NO value (the engine has nothing → no fabrication).
+func determinedAnswerFromToolResult(toolName string, result json.RawMessage) (*DeterminedAnswerEvent, bool) {
+	if toolName != "lookup_identifier" || len(result) == 0 {
+		return nil, false
+	}
+	var lr tools.LookupResponse
+	if err := json.Unmarshal(result, &lr); err != nil {
+		return nil, false
+	}
+	evt := &DeterminedAnswerEvent{
+		Type:       "determined_answer",
+		Label:      strings.TrimSpace(lr.Label),
+		Subject:    strings.TrimSpace(lr.Subject),
+		Confidence: string(lr.Tier),
+	}
+	for _, s := range lr.Sources {
+		evt.Sources = append(evt.Sources, DeterminedAnswerSource{ContentID: s.ContentID, Title: s.Title})
+	}
+	switch lr.Tier {
+	case fact.TierHigh, fact.TierMed:
+		evt.Value = lr.Value
+	default:
+		evt.Confidence = "none"
+		evt.Message = "No verified value — I don't have a confirmed one on record for you."
+	}
+	return evt, true
+}
+
 // maxToolRounds caps how many consecutive tool-call rounds the chat loop
 // will service before forcing the conversation to a final assistant turn.
 // Five is comfortably above any plausible legitimate need (multi-step plans
@@ -969,6 +1025,15 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							Preview:  pa.Preview,
 						})
 					}
+				}
+				// lookup_identifier is the LANGUAGE-triggered engine path: the model called it
+				// because it understood this as a factual-identifier question. Emit the engine's
+				// verdict as a `determined_answer` render — value + confidence + sources — BEFORE
+				// the model's next round produces prose, so the answer the user sees comes from
+				// the deterministic engine and the LLM cannot substitute, hedge, or decline it
+				// (cut-LLM-safe). On decline, the render is an honest "no verified value".
+				if evt, ok := determinedAnswerFromToolResult(tc.Function.Name, result); ok {
+					_ = writeSSE(evt)
 				}
 				// search_knowledge_base also doubles as a `rag_context` event so
 				// the existing UI keeps rendering the sources panel without

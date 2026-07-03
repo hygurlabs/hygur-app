@@ -29,6 +29,7 @@ import (
 	imapconnector "github.com/hygur/sidecar/internal/connectors/imap"
 	mailconnector "github.com/hygur/sidecar/internal/connectors/mail"
 	notesconnector "github.com/hygur/sidecar/internal/connectors/notes"
+	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/edge"
 	"github.com/hygur/sidecar/internal/events"
 	"github.com/hygur/sidecar/internal/health"
@@ -736,8 +737,16 @@ func main() {
 	// lookup_identifier: deterministic (entity, type) → value from the typed-identifier graph
 	// + proximity, with a confidence tier the model must voice as-is (never a memorised guess).
 	// The owner matcher (built above) lets the owner's OWN identifiers resolve (owner anchor +
-	// dominance).
-	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db, ownerMatcher))
+	// dominance); ownerSubject is the anchor a FIRST-PERSON subject ("mon numéro…") resolves to,
+	// the same one the determined-facts layer uses.
+	ownerSubject := ""
+	for _, n := range cfg.Identity.OwnerNames {
+		if ownerMatcher.IsOwnerNorm(contradict.NormKey(n)) {
+			ownerSubject = n
+			break
+		}
+	}
+	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db, ownerMatcher, ownerSubject))
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  BadgeCheck,
   Check,
   ChevronRight,
   Copy,
@@ -12,11 +13,13 @@ import {
   NotebookPen,
   Search,
   ShieldCheck,
+  ShieldQuestion,
   Square,
   X,
 } from "lucide-react";
 import type {
   AttachmentRef,
+  DeterminedAnswer,
   MemoryWrite,
   PendingAction,
   RagSource,
@@ -53,6 +56,10 @@ export interface Turn {
   // (the `pending_action` SSE events) — rendered as Confirm/Cancel cards. Nothing
   // is executed until the user confirms (WP3).
   pendingActions?: PendingAction[];
+  // Factual-identifier answers the deterministic engine produced (`determined_answer`
+  // SSE events), rendered as authoritative cards ABOVE the prose. The value comes from
+  // the engine, so the LLM's framing can't substitute, hedge, or decline it (cut-safe).
+  determinedAnswers?: DeterminedAnswer[];
 }
 
 // MARK: - Copy helper
@@ -298,6 +305,104 @@ function PendingActions({ actions }: { actions: PendingAction[] }) {
   );
 }
 
+// MARK: - Determined answer (engine-rendered, cut-LLM-safe)
+
+const CONFIDENCE_LABEL: Record<DeterminedAnswer["confidence"], string> = {
+  high: "Verified",
+  medium: "Likely — verify",
+  none: "Not verified",
+};
+
+/** The authoritative render of a factual-identifier answer. The value is PRODUCED by Hygur's
+ *  deterministic engine, not the language model — so it's shown here as a distinct, high-trust
+ *  card that stands on its own even if the assistant's prose hedges. On an engine decline it
+ *  shows an honest "no verified value" instead of letting the model invent one. */
+function DeterminedAnswerCard({ answer }: { answer: DeterminedAnswer }) {
+  const declined = answer.confidence === "none" || !answer.value;
+  const heading = [answer.subject === "you" ? "Your" : answer.subject, answer.label]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return (
+    <div
+      className={`rounded-xl border px-4 py-3 ${
+        declined
+          ? "border-border bg-surface2/50"
+          : "border-accent/40 bg-accent-weak/40"
+      }`}
+    >
+      <div className="flex items-start gap-2.5">
+        {declined ? (
+          <ShieldQuestion
+            size={16}
+            strokeWidth={1.9}
+            className="mt-0.5 shrink-0 text-muted"
+          />
+        ) : (
+          <BadgeCheck
+            size={16}
+            strokeWidth={1.9}
+            className="mt-0.5 shrink-0 text-accent"
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            {heading && (
+              <span className="text-[11.5px] font-medium uppercase tracking-[0.07em] text-muted">
+                {heading || "Identifier"}
+              </span>
+            )}
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-[0.05em] ${
+                declined
+                  ? "bg-surface2 text-muted"
+                  : answer.confidence === "high"
+                    ? "bg-accent/15 text-accent"
+                    : "bg-warn/15 text-warn"
+              }`}
+            >
+              {CONFIDENCE_LABEL[answer.confidence]}
+            </span>
+          </div>
+          {declined ? (
+            <p className="mt-1 text-[13.5px] text-text">
+              {answer.message ??
+                "No verified value — I don't have a confirmed one on record."}
+            </p>
+          ) : (
+            <p className="mt-0.5 select-all font-mono text-[16px] font-semibold text-text">
+              {answer.value}
+            </p>
+          )}
+          {answer.sources && answer.sources.length > 0 && (
+            <p className="mt-1 text-[11.5px] text-muted">
+              Source:{" "}
+              {answer.sources
+                .slice(0, 3)
+                .map((s) => s.title || s.content_id)
+                .join("; ")}
+            </p>
+          )}
+        </div>
+        {!declined && answer.value && (
+          <CopyButton text={answer.value} title="Copy value" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Renders every engine-determined answer for a turn, above the assistant's prose. */
+function DeterminedAnswers({ answers }: { answers: DeterminedAnswer[] }) {
+  return (
+    <div aria-live="polite" className="mb-3 flex flex-col gap-2">
+      {answers.map((a, i) => (
+        <DeterminedAnswerCard key={`${a.label ?? "id"}-${i}`} answer={a} />
+      ))}
+    </div>
+  );
+}
+
 // MARK: - Turn components
 
 // A sent (user) turn. Memoized so it doesn't re-render as later turns stream —
@@ -449,6 +554,10 @@ const AssistantTurn = memo(function AssistantTurn({
           <span className="size-1.5 rounded-full bg-warn" />
           Offline mode — AI synthesis paused; showing what Hygur found.
         </div>
+      )}
+
+      {turn.determinedAnswers && turn.determinedAnswers.length > 0 && (
+        <DeterminedAnswers answers={turn.determinedAnswers} />
       )}
 
       {turn.content && (

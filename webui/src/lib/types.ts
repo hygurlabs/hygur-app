@@ -68,6 +68,19 @@ export interface PendingAction {
   status?: "pending" | "confirmed" | "cancelled" | "error";
 }
 
+/** The cut-LLM-safe render of a factual-identifier answer (the `determined_answer` SSE event).
+ *  The engine PRODUCES the value; the client shows it authoritatively so the LLM's prose can add
+ *  framing but can never substitute, hedge, or decline it. On an engine decline `value` is empty
+ *  and `message` carries the honest "no verified value" text. */
+export interface DeterminedAnswer {
+  label?: string; // the identifier as the user named it (e.g. "TVA")
+  subject?: string; // whose identifier ("you" for the owner)
+  value?: string; // the determined value (present when confidence is high/medium)
+  confidence: "high" | "medium" | "none";
+  message?: string; // honest decline text when confidence is "none"
+  sources?: { content_id: string; title?: string }[];
+}
+
 /** A row of `POST /search`. */
 export interface SearchResult {
   chunk_id: string;

@@ -448,6 +448,11 @@ export function Ask() {
               ...t,
               pendingActions: [...(t.pendingActions ?? []), action],
             })),
+          onDeterminedAnswer: (answer) =>
+            patchLast((t) => ({
+              ...t,
+              determinedAnswers: [...(t.determinedAnswers ?? []), answer],
+            })),
           onDone: (degraded) =>
             patchLast((t) => ({ ...t, activity: undefined, degraded: !!degraded })),
         },

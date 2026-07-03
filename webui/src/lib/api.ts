@@ -11,6 +11,7 @@ import type {
   ConnectorConfigValue,
   ConnectorDetail,
   ConnectorInstance,
+  DeterminedAnswer,
   EncryptionStatus,
   FocusScope,
   FollowUpDigest,
@@ -615,6 +616,10 @@ export interface ChatHandlers {
    *  that was withheld pending the user's confirmation (WP3). The UI renders a
    *  Confirm/Cancel card; Confirm calls confirmAction(action_id). */
   onPendingAction?: (action: PendingAction) => void;
+  /** Fires when the deterministic engine produced a factual-identifier answer (the
+   *  `determined_answer` SSE event). The UI renders the value authoritatively so the LLM's prose
+   *  can't substitute, hedge, or decline it — cut-LLM-safe. */
+  onDeterminedAnswer?: (answer: DeterminedAnswer) => void;
   /** degraded=true when the inference backend was down and only retrieved sources are shown. */
   onDone?: (degraded?: boolean) => void;
 }
@@ -744,6 +749,16 @@ export async function streamChat(
           action_id: evt.action_id as string,
           tool: (evt.tool as string) ?? "",
           preview: (evt.preview as string) ?? "",
+        });
+      }
+      if (evt.type === "determined_answer") {
+        handlers.onDeterminedAnswer?.({
+          label: evt.label as string | undefined,
+          subject: evt.subject as string | undefined,
+          value: evt.value as string | undefined,
+          confidence: (evt.confidence as DeterminedAnswer["confidence"]) ?? "none",
+          message: evt.message as string | undefined,
+          sources: evt.sources as DeterminedAnswer["sources"],
         });
       }
       if (typeof evt.delta === "string" && evt.delta) {
