@@ -104,6 +104,19 @@ type RAGContextEvent struct {
 	Intent  *IntentDTO  `json:"intent,omitempty"`
 }
 
+// MemoryWriteEvent surfaces an autonomous memory write to the client so the user
+// sees what the turn saved inline in the chat, instead of only later in the Mind
+// review queue. One event is emitted per persisted memory. Status is "pending"
+// (awaiting the user's review, the current path for extracted memories) or
+// "accepted" (already eligible for injection).
+type MemoryWriteEvent struct {
+	Type       string `json:"type"` // "memory_write"
+	MemoryID   string `json:"memory_id"`
+	Content    string `json:"content"`
+	MemoryType string `json:"memory_type"` // "fact" | "preference" | "action"
+	Status     string `json:"status"`      // "pending" | "accepted"
+}
+
 // maxToolRounds caps how many consecutive tool-call rounds the chat loop
 // will service before forcing the conversation to a final assistant turn.
 // Five is comfortably above any plausible legitimate need (multi-step plans
@@ -976,39 +989,56 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		updateSessionPostSynthesis(sessionCtx, latestUserQuery, assistantBuf.String(), req.RecentSourceIDs)
 	}
 
-	// Fire-and-forget per-turn memory extraction. The extractor calls the LLM
-	// (1-3 s), so detach from the request context — we don't want to block
-	// returning to the client and we also want extraction to survive the
-	// client disconnecting once the stream ends. SessionID, when present,
-	// links candidates back to the conversation that produced them.
-	//
-	// Phase 3.3: PersistExtracted now stores rows as source='extracted' with
-	// accepted_at=NULL. They will NOT be injected into future chats until the
-	// user reviews and accepts them via the Memories tab.
-	if h.memoryStore != nil && assistantBuf.Len() > 0 && latestUserQuery != "" {
-		userMsg := latestUserQuery
-		assistantMsg := assistantBuf.String()
-		sessionID := req.SessionID
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			extracted, err := h.memoryStore.ExtractMemoriesFromTurn(ctx, userMsg, assistantMsg)
-			if err != nil {
-				h.logger.Debug().Err(err).Msg("memory extraction failed")
-				return
-			}
-			if len(extracted) == 0 {
-				return
-			}
-			stored, persistErr := h.memoryStore.PersistExtracted(extracted, sessionID)
-			evt := h.logger.Info()
-			if persistErr != nil {
-				evt = h.logger.Warn().Err(persistErr)
-			}
-			evt.Int("extracted", len(extracted)).Int("stored", stored).
-				Str("session_id", sessionID).
-				Msg("pending memory candidates persisted from turn")
-		}()
+	// Per-turn memory extraction, run synchronously so each autonomous write can
+	// be surfaced inline on the just-finished turn (a `memory_write` SSE event)
+	// rather than staying buried in the Mind review queue. The extractor calls the
+	// LLM (1-3 s); we hold the stream open that bit longer, after the terminal
+	// `done`, and emit before returning. Storage semantics are unchanged (rows land
+	// pending, source='extracted') — this only surfaces the write.
+	h.emitMemoryWrites(writeSSE, latestUserQuery, assistantBuf.String(), req.SessionID)
+}
+
+// emitMemoryWrites extracts durable memories from the just-finished turn, persists
+// them (pending review, as before), and streams one `memory_write` SSE event per
+// stored row so the user sees the autonomous write inline in the chat. Uses a
+// detached context so the persist still lands if the client drops during the short
+// extraction — writeSSE then simply no-ops. Best-effort throughout: any failure is
+// logged and never breaks the turn.
+func (h *RAGChatHandler) emitMemoryWrites(writeSSE func(any) error, userMsg, assistantMsg, sessionID string) {
+	if h.memoryStore == nil || assistantMsg == "" || userMsg == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	extracted, err := h.memoryStore.ExtractMemoriesFromTurn(ctx, userMsg, assistantMsg)
+	if err != nil {
+		h.logger.Debug().Err(err).Msg("memory extraction failed")
+		return
+	}
+	if len(extracted) == 0 {
+		return
+	}
+	stored, persistErr := h.memoryStore.PersistExtractedReturning(extracted, sessionID)
+	logEvt := h.logger.Info()
+	if persistErr != nil {
+		logEvt = h.logger.Warn().Err(persistErr)
+	}
+	logEvt.Int("extracted", len(extracted)).Int("stored", len(stored)).
+		Str("session_id", sessionID).
+		Msg("pending memory candidates persisted from turn")
+
+	for _, m := range stored {
+		status := "accepted"
+		if m.AcceptedAt == nil {
+			status = "pending"
+		}
+		_ = writeSSE(MemoryWriteEvent{
+			Type:       "memory_write",
+			MemoryID:   m.MemoryID,
+			Content:    m.Content,
+			MemoryType: string(m.Type),
+			Status:     status,
+		})
 	}
 }
 

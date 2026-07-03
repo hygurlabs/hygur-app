@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -8,10 +9,11 @@ import {
   FileAudio,
   FileText,
   Globe,
+  NotebookPen,
   Search,
   Square,
 } from "lucide-react";
-import type { AttachmentRef, RagSource } from "../lib/types";
+import type { AttachmentRef, MemoryWrite, RagSource } from "../lib/types";
 import { fmtDate, srcLabel } from "../lib/format";
 import { useSlow } from "../lib/slow";
 import { RecordList, type RecordRow } from "../components/RecordList";
@@ -36,6 +38,9 @@ export interface Turn {
   // Attachments carried on a user turn so they persist across the conversation
   // (F1): follow-up questions about an attached image keep its context.
   attachments?: AttachmentRef[];
+  // Facts this turn autonomously saved to memory (the `memory_write` SSE events),
+  // surfaced inline so the write is visible, not buried in the Mind review queue.
+  memoryWrites?: MemoryWrite[];
 }
 
 // MARK: - Copy helper
@@ -135,6 +140,50 @@ function AudioAttachment({
         src={`data:${audioMime(att.format)};base64,${att.data}`}
         className="h-9 w-full"
       />
+    </div>
+  );
+}
+
+// MARK: - Memory write indicator
+
+/** Surfaces the facts a turn autonomously saved to memory, inline under the
+ *  answer. Unobtrusive but visible — a distinct card (not alarmist), with a
+ *  Review link into the Mind → Memory queue where the write can be confirmed or
+ *  removed. `aria-live` polite so it's announced when it appears mid-turn. */
+function MemoryWrites({ writes }: { writes: MemoryWrite[] }) {
+  const navigate = useNavigate();
+  return (
+    <div aria-live="polite" className="mt-3 flex flex-col gap-1.5 print:hidden">
+      {writes.map((w) => {
+        const pending = w.status !== "accepted";
+        return (
+          <div
+            key={w.memory_id}
+            className="flex items-start gap-2.5 rounded-lg border border-border bg-surface2/50 px-3 py-2 text-[12.5px]"
+          >
+            <NotebookPen
+              size={14}
+              strokeWidth={1.9}
+              className="mt-0.5 shrink-0 text-accent"
+            />
+            <div className="min-w-0 flex-1">
+              <span className="font-medium text-text">
+                {pending
+                  ? "Added to your facts memory — pending your review"
+                  : "Saved to your facts memory"}
+              </span>
+              <p className="mt-0.5 line-clamp-2 text-muted">{w.content}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/mind?tab=memory")}
+              className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent transition-colors hover:bg-accent-weak"
+            >
+              Review
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -344,6 +393,10 @@ const AssistantTurn = memo(function AssistantTurn({
         <div className="mt-2">
           <ErrorBanner message={turn.error} />
         </div>
+      )}
+
+      {turn.memoryWrites && turn.memoryWrites.length > 0 && (
+        <MemoryWrites writes={turn.memoryWrites} />
       )}
 
       {sourceRows.length > 0 && (

@@ -18,6 +18,7 @@ import type {
   LearningProgress,
   MarketplaceItem,
   Memory,
+  MemoryWrite,
   Mention,
   Note,
   Project,
@@ -596,6 +597,9 @@ export interface ChatHandlers {
   onDelta?: (delta: string) => void;
   onTool?: (name: string) => void;
   onError?: (message: string) => void;
+  /** Fires when the turn autonomously wrote a memory (once per write), so the UI
+   *  can surface it inline instead of leaving it buried in the review queue. */
+  onMemoryWrite?: (write: MemoryWrite) => void;
   /** degraded=true when the inference backend was down and only retrieved sources are shown. */
   onDone?: (degraded?: boolean) => void;
 }
@@ -716,6 +720,9 @@ export async function streamChat(
       }
       if (evt.type === "tool_call") {
         handlers.onTool?.((evt.name as string) ?? "");
+      }
+      if (evt.type === "memory_write" && typeof evt.memory_id === "string") {
+        handlers.onMemoryWrite?.(evt as unknown as MemoryWrite);
       }
       if (typeof evt.delta === "string" && evt.delta) {
         handlers.onDelta?.(evt.delta);

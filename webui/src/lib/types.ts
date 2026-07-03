@@ -47,6 +47,16 @@ export interface RagSource {
   mail_subject?: string;
 }
 
+/** An autonomous memory write surfaced inline in the Ask chat via the
+ *  `memory_write` SSE event, so the user sees what Hygur saved during a turn
+ *  without digging into the Mind review queue. */
+export interface MemoryWrite {
+  memory_id: string;
+  content: string;
+  memory_type: string; // "fact" | "preference" | "action"
+  status: "pending" | "accepted";
+}
+
 /** A row of `POST /search`. */
 export interface SearchResult {
   chunk_id: string;

@@ -221,7 +221,24 @@ func validateExtracted(in []ExtractedMemory) []ExtractedMemory {
 // /memory/{id}/accept endpoint. Returns the count of rows stored and the
 // first row-level error encountered.
 func (t *MemoryStoreTool) PersistExtracted(memories []ExtractedMemory, sessionID string) (int, error) {
-	stored := 0
+	stored, err := t.persistExtracted(memories, sessionID)
+	return len(stored), err
+}
+
+// PersistExtractedReturning behaves like PersistExtracted but returns the rows
+// actually stored (id, type, content, source, accepted_at) so the caller can
+// surface each autonomous write — e.g. the chat handler streams a `memory_write`
+// SSE event per row so the user sees it inline instead of only in the review
+// queue. Storage semantics are identical: every row lands PENDING.
+func (t *MemoryStoreTool) PersistExtractedReturning(memories []ExtractedMemory, sessionID string) ([]store.Memory, error) {
+	return t.persistExtracted(memories, sessionID)
+}
+
+// persistExtracted is the shared insert loop behind PersistExtracted and
+// PersistExtractedReturning. It returns the rows successfully stored and the
+// first row-level error encountered.
+func (t *MemoryStoreTool) persistExtracted(memories []ExtractedMemory, sessionID string) ([]store.Memory, error) {
+	stored := make([]store.Memory, 0, len(memories))
 	var firstErr error
 	for _, m := range memories {
 		var expiry *time.Time
@@ -235,10 +252,8 @@ func (t *MemoryStoreTool) PersistExtracted(memories []ExtractedMemory, sessionID
 			fallback := time.Now().Add(90 * 24 * time.Hour)
 			expiry = &fallback
 		}
-		memoryID := uuid.New().String()
-		embedding := t.embedContent(m.Content)
-		err := t.store.InsertMemory(&store.Memory{
-			MemoryID:   memoryID,
+		mem := store.Memory{
+			MemoryID:   uuid.New().String(),
 			Type:       store.MemoryType(m.Type),
 			Content:    m.Content,
 			ContextID:  sessionID,
@@ -247,16 +262,16 @@ func (t *MemoryStoreTool) PersistExtracted(memories []ExtractedMemory, sessionID
 			Score:      0.0,
 			Source:     store.MemorySourceExtracted,
 			AcceptedAt: nil, // pending review
-			Embedding:  embedding,
+			Embedding:  t.embedContent(m.Content),
 			SessionID:  sessionID,
-		})
-		if err != nil {
+		}
+		if err := t.store.InsertMemory(&mem); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		stored++
+		stored = append(stored, mem)
 	}
 	return stored, firstErr
 }

@@ -412,6 +412,11 @@ export function Ask() {
             }));
           },
           onError: (message) => patchLast((t) => ({ ...t, error: message })),
+          onMemoryWrite: (write) =>
+            patchLast((t) => ({
+              ...t,
+              memoryWrites: [...(t.memoryWrites ?? []), write],
+            })),
           onDone: (degraded) =>
             patchLast((t) => ({ ...t, activity: undefined, degraded: !!degraded })),
         },
