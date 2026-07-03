@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/hygur/sidecar/internal/config"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/hygur/sidecar/internal/tools"
+	"github.com/rs/zerolog"
 )
 
 // runMemory dispatches the `hygur memory <subcommand>` operator CLI. Runs in-pod
@@ -86,7 +89,11 @@ func runMemoryDedup(args []string) {
 	for _, m := range memories {
 		rows = append(rows, *m)
 	}
-	plan := tools.PlanReconcile(rows)
+	// The owner brick, same as the server: lets the reconcile also defer a pure
+	// owner-identity assertion (A.3), not just typed identifiers. Best-effort —
+	// a missing/unreadable config.yaml just disables that rule (nil matcher),
+	// never aborts the reconcile.
+	plan := tools.PlanReconcile(rows, resolveOwnerMatcher(*dbPath))
 
 	graphBefore := countGraphTables(ctx, db)
 
@@ -95,6 +102,7 @@ func runMemoryDedup(args []string) {
 		"total_before":    len(memories),
 		"duplicates":      plan.DuplicateCount(),
 		"identifiers":     plan.IdentifierCount(),
+		"owner_identity":  plan.OwnerIdentityCount(),
 		"kept_soft_facts": len(plan.Kept),
 		"graph_rows":      graphBefore,
 	}
@@ -140,6 +148,25 @@ func runMemoryDedup(args []string) {
 	out["backup_path"] = bpath
 	out["graph_rows_after"] = countGraphTables(ctx, db)
 	emitJSON(out)
+}
+
+// resolveOwnerMatcher loads the configured owner name/email variants from the
+// canonical data-dir config.yaml (same file the server reads) and builds the
+// first-class owner matcher used to defer a pure owner-identity assertion in
+// the reconcile. dbPath is accepted for symmetry with resolveUsageDB but
+// config.yaml always lives beside the data dir, not beside a custom --db
+// override. Best-effort: any failure to resolve the data dir or load the
+// config yields a nil matcher (the identifier + duplicate passes still run).
+func resolveOwnerMatcher(dbPath string) *identity.Matcher {
+	dataDir, err := resolveDataDir(zerolog.Nop())
+	if err != nil {
+		return nil
+	}
+	cfg, err := config.LoadWithOptions(&config.LoadOptions{ConfigPath: filepath.Join(dataDir, "config.yaml")})
+	if err != nil {
+		return nil
+	}
+	return identity.NewMatcher(cfg.Identity.OwnerNames)
 }
 
 // countGraphTables returns COUNT(*) for each identifier-graph table (0 if the

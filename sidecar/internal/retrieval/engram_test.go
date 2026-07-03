@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -134,5 +135,87 @@ func TestAssembleEngram(t *testing.T) {
 	// Unknown subject → nil (404 at the handler).
 	if e, _ := AssembleEngram(ctx, db, "Nonexistent", now, nil); e != nil {
 		t.Errorf("unknown subject should yield nil, got %+v", e)
+	}
+}
+
+// TestAssembleEngram_OwnerUnifiesFactsAndActs is the gap TestAssembleEngram_Enriched and
+// TestAssembleEngram don't cover: with a non-nil owner matcher, the dossier's timeline
+// (acts) and aggregated claims (facts) must pool ACROSS the owner's name-variant norms —
+// not just the network (already covered) — so the owner's history isn't split across
+// "Jordan Vance" / "Vance Jordan" spellings. Fictional identity; no real PII. A non-owner
+// subject (no owner matcher applies) stays untouched — see TestAssembleEngram above.
+func TestAssembleEngram_OwnerUnifiesFactsAndActs(t *testing.T) {
+	db, err := store.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	at := now.Add(-24 * time.Hour).Format(time.RFC3339)
+
+	givenFirst := contradict.NormKey("Jordan Vance")   // queried norm
+	surnameFirst := contradict.NormKey("Vance Jordan") // a distinct stored variant of the SAME owner
+	owner := identity.NewMatcher([]string{"Jordan Vance", "Vance Jordan"})
+
+	mk := func(cid, entityNorm, entityRaw string, claimVal string) {
+		md := map[string]any{
+			"canonical_date": at,
+			"extracted_claims": []any{
+				map[string]any{"entity": entityRaw, "attribute": "role", "value": claimVal, "polarity": "affirm", "source_id": cid, "quote": "role " + claimVal},
+			},
+		}
+		if err := db.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
+			ContentID: cid, SourceType: store.SourceTypeNote, Title: cid,
+			NormalizedText: "x", VersionID: "v1", CreatedAt: now, UpdatedAt: now, Metadata: md,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", cid, err)
+		}
+		if err := db.ReplaceEntityMentions(ctx, cid, []store.EntityMention{
+			{EntityNorm: entityNorm, EntityRaw: entityRaw, Attribute: "ner_person", AssertedAt: at},
+		}); err != nil {
+			t.Fatalf("mentions %s: %v", cid, err)
+		}
+	}
+	// i1 mentions the queried variant; i2 mentions the OTHER variant of the same owner.
+	// Both affirm role=founder, so the belief should corroborate ×2 only if the two
+	// variants are pooled into one subject.
+	mk("i1", givenFirst, "Jordan Vance", "founder")
+	mk("i2", surnameFirst, "Vance Jordan", "founder")
+
+	eng, err := AssembleEngram(ctx, db, "Jordan Vance", now, owner)
+	if err != nil {
+		t.Fatalf("AssembleEngram: %v", err)
+	}
+	if eng == nil {
+		t.Fatal("nil engram")
+	}
+
+	// Acts: the timeline must include BOTH items — i2 (the surname-first variant) is not
+	// dropped as a separate, unrelated subject.
+	byID := map[string]EngramItem{}
+	for _, it := range eng.Timeline {
+		byID[it.ContentID] = it
+	}
+	if _, ok := byID["i1"]; !ok {
+		t.Errorf("timeline missing i1 (queried variant): %+v", eng.Timeline)
+	}
+	if _, ok := byID["i2"]; !ok {
+		t.Errorf("timeline should pool i2 (owner's other name variant), got %+v", eng.Timeline)
+	}
+
+	// Facts: role=founder must corroborate across BOTH variants' items, not fragment into
+	// two single-source beliefs.
+	var roleFound *EngramClaim
+	for i := range eng.Claims {
+		if eng.Claims[i].Attribute == "role" {
+			roleFound = &eng.Claims[i]
+		}
+	}
+	if roleFound == nil {
+		t.Fatalf("claims missing role belief: %+v", eng.Claims)
+	}
+	if roleFound.Corroboration != 2 || roleFound.State != "corroborated" {
+		t.Errorf("role belief = %+v, want corroborated x2 (pooled across owner variants)", roleFound)
 	}
 }

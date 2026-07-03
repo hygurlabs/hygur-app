@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -63,6 +64,49 @@ func TestIsTypedIdentifierAssertion(t *testing.T) {
 	}
 }
 
+// TestIsOwnerIdentityAssertion — fictional identity, no real PII. A pure
+// self-identity assertion ("User is Jordan Vance") is dropped; a soft fact that
+// merely mentions the owner ("User works with…", "User uses…") is never touched,
+// and a bare surname/given name never matches (the strict matcher already guards
+// that — it must never capture a family member).
+func TestIsOwnerIdentityAssertion(t *testing.T) {
+	owner := identity.NewMatcher([]string{"Jordan Vance", "Jordan V"})
+
+	drop := []string{
+		"User is Jordan Vance",
+		"User is Jordan Vance.",
+		"User's name is Jordan Vance",
+		"The user's name is Jordan Vance",
+		"My name is Jordan Vance",
+		"I am Jordan Vance",
+	}
+	for _, c := range drop {
+		if !IsOwnerIdentityAssertion(c, owner) {
+			t.Errorf("expected owner-identity assertion (drop): %q", RedactContent(c))
+		}
+	}
+
+	keep := []string{
+		"User works with Fiduciaire de la Cense", // soft fact: merely mentions the owner
+		"User uses Falco pour la gestion",        // soft fact: tool
+		"User is Jordan Vance's accountant",      // an appended clause, not a pure identity assertion
+		"Jordan Vance travaille avec Falco",      // doesn't open with a self-identity prefix
+		"User is Vance",                          // bare surname — never sufficient (family guard)
+		"User is Jordan",                         // bare given name — never sufficient (family guard)
+		"User's name is Jordan",                  // bare given name after the prefix — same guard
+	}
+	for _, c := range keep {
+		if IsOwnerIdentityAssertion(c, owner) {
+			t.Errorf("soft/non-identity fact wrongly flagged as owner-identity: %q", RedactContent(c))
+		}
+	}
+
+	// Nil owner disables the rule entirely (e.g. a caller with no owner config).
+	if IsOwnerIdentityAssertion("User is Jordan Vance", nil) {
+		t.Error("nil owner should never match")
+	}
+}
+
 func TestPlanReconcile_DedupAcceptedWins(t *testing.T) {
 	now := time.Now()
 	accepted := now
@@ -75,7 +119,7 @@ func TestPlanReconcile_DedupAcceptedWins(t *testing.T) {
 		// A typed identifier — must be dropped (deferred to the graph).
 		{MemoryID: "d", Type: store.MemoryFact, Content: "Numéro national: " + mkNISS("850701123"), CreatedAt: now},
 	}
-	plan := PlanReconcile(mems)
+	plan := PlanReconcile(mems, nil)
 
 	if plan.DuplicateCount() != 1 {
 		t.Fatalf("want 1 duplicate removed, got %d", plan.DuplicateCount())
@@ -101,9 +145,46 @@ func TestPlanReconcile_DedupAcceptedWins(t *testing.T) {
 	}
 
 	// Idempotent: re-planning over the kept set removes nothing.
-	plan2 := PlanReconcile(plan.Kept)
+	plan2 := PlanReconcile(plan.Kept, nil)
 	if len(plan2.Deletions) != 0 {
 		t.Fatalf("reconcile not idempotent: %d deletions on second pass", len(plan2.Deletions))
+	}
+}
+
+// TestPlanReconcile_OwnerIdentity — Lot 3's exact shape: a memory set with two
+// pure owner-identity rows and several unrelated soft facts. With the owner
+// matcher wired, only the two identity rows are removed (6→4); every soft fact
+// — including one that merely mentions the owner — is kept. Fictional identity.
+func TestPlanReconcile_OwnerIdentity(t *testing.T) {
+	owner := identity.NewMatcher([]string{"Jordan Vance"})
+	now := time.Now()
+	mems := []store.Memory{
+		{MemoryID: "1", Type: store.MemoryFact, Content: "User is Jordan Vance", CreatedAt: now},
+		{MemoryID: "2", Type: store.MemoryFact, Content: "User's name is Jordan Vance", CreatedAt: now},
+		{MemoryID: "3", Type: store.MemoryFact, Content: "VAT declaration Q4 filed", CreatedAt: now},
+		{MemoryID: "4", Type: store.MemoryFact, Content: "Q4 turnover and purchases reported", CreatedAt: now},
+		{MemoryID: "5", Type: store.MemoryFact, Content: "Works with Fiduciaire de la Cense", CreatedAt: now},
+		{MemoryID: "6", Type: store.MemoryFact, Content: "Uses Falco for accounting", CreatedAt: now},
+	}
+	plan := PlanReconcile(mems, owner)
+
+	if got := plan.OwnerIdentityCount(); got != 2 {
+		t.Fatalf("want 2 owner-identity rows removed, got %d: %+v", got, plan.Deletions)
+	}
+	if len(plan.Deletions) != 2 {
+		t.Fatalf("want exactly 2 deletions total (no duplicate/identifier noise), got %d: %+v", len(plan.Deletions), plan.Deletions)
+	}
+	if len(plan.Kept) != 4 {
+		t.Fatalf("want 4 soft facts kept, got %d: %+v", len(plan.Kept), plan.Kept)
+	}
+	keptIDs := map[string]bool{}
+	for _, k := range plan.Kept {
+		keptIDs[k.MemoryID] = true
+	}
+	for _, want := range []string{"3", "4", "5", "6"} {
+		if !keptIDs[want] {
+			t.Errorf("soft fact %q should be kept, got kept=%v", want, keptIDs)
+		}
 	}
 }
 
@@ -153,6 +234,44 @@ func TestPersistExtracted_DedupAndIdentifierDefer(t *testing.T) {
 	for _, m := range all {
 		if IsTypedIdentifierAssertion(m.Content) {
 			t.Fatalf("identifier row leaked into store: %q", RedactContent(m.Content))
+		}
+	}
+}
+
+// TestPersistExtracted_DefersOwnerIdentity — Lot 2's write-time gate. A candidate
+// that merely re-asserts the owner's own name/identity is dropped BEFORE insert;
+// a soft fact that mentions the owner in passing is stored unchanged. Fictional
+// identity.
+func TestPersistExtracted_DefersOwnerIdentity(t *testing.T) {
+	db, err := store.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	defer db.Close()
+	owner := identity.NewMatcher([]string{"Jordan Vance"})
+	tool := &MemoryStoreTool{store: db, owner: owner}
+
+	in := []ExtractedMemory{
+		{Type: "fact", Content: "User is Jordan Vance"},                   // pure owner-identity → drop
+		{Type: "fact", Content: "User's name is Jordan Vance"},            // pure owner-identity → drop
+		{Type: "fact", Content: "User works with Fiduciaire de la Cense"}, // soft fact → keep
+		{Type: "fact", Content: "User uses Falco pour la gestion"},        // soft fact → keep
+	}
+	stored, err := tool.PersistExtracted(in, "session-1")
+	if err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if stored != 2 {
+		t.Fatalf("want exactly 2 stored (the two soft facts), got %d", stored)
+	}
+
+	all, err := db.ListMemoriesAfter(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, m := range all {
+		if IsOwnerIdentityAssertion(m.Content, owner) {
+			t.Fatalf("owner-identity row leaked into store: %q", RedactContent(m.Content))
 		}
 	}
 }

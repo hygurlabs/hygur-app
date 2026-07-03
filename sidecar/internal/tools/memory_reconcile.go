@@ -8,6 +8,8 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
 )
@@ -122,6 +124,81 @@ func IsTypedIdentifierAssertion(content string) bool {
 	return false
 }
 
+// ownerIdentityPrefixes are the short, fixed self-identity phrasings an extracted
+// fact-memory candidate can open with. Matched on the accent-folded, lowercased,
+// edge-punctuation-trimmed content — anchored at the START, so a longer sentence
+// that merely mentions the owner in passing never matches (there is no prefix for
+// "user works with…" or "user uses…").
+var ownerIdentityPrefixes = []string{
+	"the user's name is ", "user's name is ",
+	"the user is ", "user is ",
+	"my name is ", "i am ", "i'm ",
+}
+
+// isNameWord reports whether w looks like part of a person's name: letters plus an
+// internal hyphen (Jean-Paul). No digits, no apostrophe, no other punctuation clause
+// markers. An apostrophe is deliberately excluded even though it costs the rare
+// O'Brien-style name: it almost always signals a possessive ("Vance's accountant"),
+// i.e. a relationship/role clause about someone else rather than a pure identity
+// assertion, and conservative means missing an identity assertion beats dropping a
+// soft fact.
+func isNameWord(w string) bool {
+	if w == "" {
+		return false
+	}
+	for _, r := range w {
+		if r == '-' {
+			continue
+		}
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsOwnerIdentityAssertion reports whether content is PURELY a re-assertion of the
+// owner's own name/identity (e.g. "User is Daniel Petit", "User's name is Denis")
+// — already held by the first-class identity system (Identity.OwnerNames /
+// identity.Matcher) and therefore redundant in the soft-fact memory store.
+//
+// Deliberately conservative (FAIL CLOSED — keep unless certain): content must open
+// with one of a small set of fixed self-identity phrasings, the remainder must be a
+// short (<=3 word) name-shaped phrase with no appended clause, and that phrase must
+// itself resolve to the owner via the SAME strict matcher the dossier/identifier
+// lookup use (never a bare surname/given name — identity.Matcher already guards
+// that). A soft fact that merely MENTIONS the owner ("User works with Fiduciaire de
+// la Cense", "User uses Falco") never matches: it neither opens with one of these
+// prefixes NOR reduces to a bare name after the prefix.
+func IsOwnerIdentityAssertion(content string, owner *identity.Matcher) bool {
+	if owner == nil {
+		return false
+	}
+	folded := strings.TrimSpace(strings.Trim(foldText(content), ".! "))
+	var name string
+	matched := false
+	for _, p := range ownerIdentityPrefixes {
+		if strings.HasPrefix(folded, p) {
+			name = strings.TrimSpace(strings.TrimPrefix(folded, p))
+			matched = true
+			break
+		}
+	}
+	if !matched || name == "" {
+		return false
+	}
+	words := strings.Fields(name)
+	if len(words) == 0 || len(words) > 3 {
+		return false
+	}
+	for _, w := range words {
+		if !isNameWord(w) {
+			return false
+		}
+	}
+	return owner.IsOwnerNorm(contradict.NormKey(name))
+}
+
 // Reconcile-pass planning over an existing set of rows.
 
 // ReconcileReason explains why a row is slated for deletion.
@@ -133,6 +210,9 @@ const (
 	// ReasonIdentifier: the content is a typed-identifier assertion (deferred
 	// to the identifier graph).
 	ReasonIdentifier ReconcileReason = "identifier"
+	// ReasonOwnerIdentity: the content is purely a re-assertion of the owner's
+	// own name/identity (deferred to the identity system).
+	ReasonOwnerIdentity ReconcileReason = "owner_identity"
 )
 
 // ReconcileDeletion is one row the plan would remove.
@@ -150,9 +230,10 @@ type ReconcilePlan struct {
 	Kept      []store.Memory
 }
 
-// DuplicateCount / IdentifierCount summarise the deletions by reason.
-func (p ReconcilePlan) DuplicateCount() int  { return p.countReason(ReasonDuplicate) }
-func (p ReconcilePlan) IdentifierCount() int { return p.countReason(ReasonIdentifier) }
+// DuplicateCount / IdentifierCount / OwnerIdentityCount summarise the deletions by reason.
+func (p ReconcilePlan) DuplicateCount() int     { return p.countReason(ReasonDuplicate) }
+func (p ReconcilePlan) IdentifierCount() int    { return p.countReason(ReasonIdentifier) }
+func (p ReconcilePlan) OwnerIdentityCount() int { return p.countReason(ReasonOwnerIdentity) }
 
 func (p ReconcilePlan) countReason(r ReconcileReason) int {
 	n := 0
@@ -172,10 +253,16 @@ func memoryStrength(m store.Memory) int {
 	return 0
 }
 
-// PlanReconcile computes the conservative reconcile plan for mems:
+// PlanReconcile computes the conservative reconcile plan for mems. owner (may be
+// nil) is the first-class owner matcher: when set, a row that is PURELY a
+// re-assertion of the owner's own name/identity is also deferred (ReasonOwnerIdentity)
+// — see IsOwnerIdentityAssertion. nil disables that rule (behavior-preserving for
+// callers that don't have an owner matcher).
 //
 //   - Any typed-identifier assertion is removed (ReasonIdentifier), regardless
 //     of type — it is redundant with the identifier graph.
+//   - Any pure owner-identity assertion is removed (ReasonOwnerIdentity) — it is
+//     redundant with the identity system.
 //   - Among the remaining rows, rows sharing a content signature are collapsed
 //     to a single survivor; the rest are removed (ReasonDuplicate). The survivor
 //     is the STRONGEST row (accepted wins over pending; ties broken by oldest
@@ -185,14 +272,18 @@ func memoryStrength(m store.Memory) int {
 //
 // Pure and idempotent: running it again over the post-apply set yields no
 // deletions.
-func PlanReconcile(mems []store.Memory) ReconcilePlan {
+func PlanReconcile(mems []store.Memory, owner *identity.Matcher) ReconcilePlan {
 	var plan ReconcilePlan
 
-	// Pass 1: peel off identifier-bearing rows.
+	// Pass 1: peel off identifier-bearing and owner-identity rows.
 	remaining := make([]store.Memory, 0, len(mems))
 	for _, m := range mems {
 		if IsTypedIdentifierAssertion(m.Content) {
 			plan.Deletions = append(plan.Deletions, ReconcileDeletion{Memory: m, Reason: ReasonIdentifier})
+			continue
+		}
+		if IsOwnerIdentityAssertion(m.Content, owner) {
+			plan.Deletions = append(plan.Deletions, ReconcileDeletion{Memory: m, Reason: ReasonOwnerIdentity})
 			continue
 		}
 		remaining = append(remaining, m)

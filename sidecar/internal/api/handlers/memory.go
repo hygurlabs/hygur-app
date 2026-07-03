@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/hygur/sidecar/internal/tools"
@@ -21,6 +22,7 @@ type MemoryHandler struct {
 	logger   zerolog.Logger
 	tool     *tools.MemoryStoreTool
 	toolSrch *tools.MemorySearchTool
+	owner    *identity.Matcher // first-class owner matcher, for the Dedup reconcile (may be nil)
 	// dbPath locates the live DB so Dedup can write its row backup beside it
 	// (in a "backups" folder). Empty disables backup-to-disk (rows are still
 	// returned in the response).
@@ -39,6 +41,13 @@ func NewMemoryHandler(store *store.DB, logger zerolog.Logger) *MemoryHandler {
 func (h *MemoryHandler) SetTools(storeTool *tools.MemoryStoreTool, searchTool *tools.MemorySearchTool) {
 	h.tool = storeTool
 	h.toolSrch = searchTool
+}
+
+// SetOwner wires the first-class owner matcher used by Dedup to also defer pure
+// owner-identity assertions (see tools.IsOwnerIdentityAssertion). Unset (nil)
+// disables that rule — Dedup still runs the identifier + duplicate passes.
+func (h *MemoryHandler) SetOwner(owner *identity.Matcher) {
+	h.owner = owner
 }
 
 // SetBackupPath tells the handler where the live DB lives so Dedup can write
@@ -483,15 +492,16 @@ type DedupSample struct {
 // DedupResponse summarises a reconcile pass. All content is redacted; raw
 // bodies never appear here.
 type DedupResponse struct {
-	DryRun             bool          `json:"dry_run"`
-	BackupPath         string        `json:"backup_path,omitempty"`
-	TotalBefore        int           `json:"total_before"`
-	DuplicatesRemoved  int           `json:"duplicates_removed"` // "would remove" on dry-run
-	IdentifiersRemoved int           `json:"identifiers_removed"`
-	KeptSoftFacts      int           `json:"kept_soft_facts"`
-	Deleted            int           `json:"deleted"`     // rows actually deleted (0 on dry-run)
-	TotalAfter         int           `json:"total_after"` // projected on dry-run
-	Samples            []DedupSample `json:"samples"`
+	DryRun               bool          `json:"dry_run"`
+	BackupPath           string        `json:"backup_path,omitempty"`
+	TotalBefore          int           `json:"total_before"`
+	DuplicatesRemoved    int           `json:"duplicates_removed"` // "would remove" on dry-run
+	IdentifiersRemoved   int           `json:"identifiers_removed"`
+	OwnerIdentityRemoved int           `json:"owner_identity_removed"`
+	KeptSoftFacts        int           `json:"kept_soft_facts"`
+	Deleted              int           `json:"deleted"`     // rows actually deleted (0 on dry-run)
+	TotalAfter           int           `json:"total_after"` // projected on dry-run
+	Samples              []DedupSample `json:"samples"`
 }
 
 // Dedup handles POST /memory/dedup — the one-time (idempotent) Plan A reconcile
@@ -531,15 +541,16 @@ func (h *MemoryHandler) Dedup(w http.ResponseWriter, r *http.Request) {
 	for _, m := range memories {
 		rows = append(rows, *m)
 	}
-	plan := tools.PlanReconcile(rows)
+	plan := tools.PlanReconcile(rows, h.owner)
 
 	resp := DedupResponse{
-		DryRun:             !req.Apply,
-		BackupPath:         backupPath,
-		TotalBefore:        len(memories),
-		DuplicatesRemoved:  plan.DuplicateCount(),
-		IdentifiersRemoved: plan.IdentifierCount(),
-		KeptSoftFacts:      len(plan.Kept),
+		DryRun:               !req.Apply,
+		BackupPath:           backupPath,
+		TotalBefore:          len(memories),
+		DuplicatesRemoved:    plan.DuplicateCount(),
+		IdentifiersRemoved:   plan.IdentifierCount(),
+		OwnerIdentityRemoved: plan.OwnerIdentityCount(),
+		KeptSoftFacts:        len(plan.Kept),
 	}
 	const maxSamples = 20
 	for _, d := range plan.Deletions {

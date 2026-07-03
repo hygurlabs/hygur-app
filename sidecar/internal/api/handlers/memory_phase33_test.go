@@ -53,7 +53,7 @@ func newTestRouter(t *testing.T) (*chi.Mux, *MemoryHandler, *store.DB, *httptest
 
 	llmClient := llm.NewClientWithHTTP(llmSrv.URL, 5_000_000_000, 0, llmSrv.Client())
 
-	storeTool := tools.NewMemoryStoreTool(db, llmClient)
+	storeTool := tools.NewMemoryStoreTool(db, llmClient, nil)
 	searchTool := tools.NewMemorySearchTool(db, llmClient)
 	handler := NewMemoryHandler(db, zerolog.Nop())
 	handler.SetTools(storeTool, searchTool)

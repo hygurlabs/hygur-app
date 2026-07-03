@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/store"
 )
@@ -16,13 +17,17 @@ import (
 type MemoryStoreTool struct {
 	store *store.DB
 	llm   *llm.Client
+	owner *identity.Matcher // first-class owner matcher; nil disables the owner-identity defer (A.3)
 }
 
-// NewMemoryStoreTool creates a new MemoryStoreTool.
-func NewMemoryStoreTool(store *store.DB, llm *llm.Client) *MemoryStoreTool {
+// NewMemoryStoreTool creates a new MemoryStoreTool. owner (may be nil) is the
+// first-class owner matcher used to defer a pure owner-identity assertion from
+// the fact-memory store at write time (see IsOwnerIdentityAssertion).
+func NewMemoryStoreTool(store *store.DB, llm *llm.Client, owner *identity.Matcher) *MemoryStoreTool {
 	return &MemoryStoreTool{
 		store: store,
 		llm:   llm,
+		owner: owner,
 	}
 }
 
@@ -242,6 +247,12 @@ func (t *MemoryStoreTool) PersistExtractedReturning(memories []ExtractedMemory, 
 //   - A.2: a typed-identifier assertion (national number / enterprise / IBAN,
 //     by recognize checksum or an explicit identifier label + value) is DROPPED
 //     — it belongs in the deterministic identifier graph, not the memory store.
+//   - A.3: a candidate that is PURELY a re-assertion of the owner's own name/
+//     identity ("User is Daniel Petit", "User's name is Denis") is DROPPED —
+//     the identity system (Identity.OwnerNames / identity.Matcher) already holds
+//     it. Conservative: a soft fact that merely mentions the owner ("User works
+//     with Fiduciaire de la Cense", "User uses Falco") is never dropped — see
+//     IsOwnerIdentityAssertion.
 //   - A.1: a candidate whose normalized content signature already exists (in
 //     the DB or earlier in this same batch) is skipped instead of inserting a
 //     second row. Extracted candidates always land pending, so there is no
@@ -266,6 +277,10 @@ func (t *MemoryStoreTool) persistExtracted(memories []ExtractedMemory, sessionID
 	for _, m := range memories {
 		// A.2 — defer typed identifiers to the deterministic store.
 		if IsTypedIdentifierAssertion(m.Content) {
+			continue
+		}
+		// A.3 — defer a pure owner-identity assertion to the identity system.
+		if IsOwnerIdentityAssertion(m.Content, t.owner) {
 			continue
 		}
 		// A.1 — content-dedup on write.

@@ -686,10 +686,17 @@ func main() {
 	// Create memory handler. The search tool now needs the LLM client too —
 	// Phase 3.3 ranks accepted memories by cosine similarity to the user's
 	// last message, so it embeds the query before searching.
-	memoryStoreTool := tools.NewMemoryStoreTool(db, llmClient)
+	//
+	// The owner matcher is built here (rather than at its other use sites below)
+	// because the memory store needs it too: it defers a pure owner-identity
+	// assertion at write time (A.3), the same brick lookup_identifier and the
+	// Engram dossier use to recognize the owner.
+	ownerMatcher := identity.NewMatcher(cfg.Identity.OwnerNames)
+	memoryStoreTool := tools.NewMemoryStoreTool(db, llmClient, ownerMatcher)
 	memorySearchTool := tools.NewMemorySearchTool(db, llmClient)
 	memoryHandler := handlers.NewMemoryHandler(db, logger)
 	memoryHandler.SetTools(memoryStoreTool, memorySearchTool)
+	memoryHandler.SetOwner(ownerMatcher)
 	// Locate the live DB so the /memory/dedup reconcile can back up rows to disk.
 	memoryHandler.SetBackupPath(cfg.Store.Path)
 
@@ -728,8 +735,8 @@ func main() {
 	toolRegistry.MustRegister(tools.NewFindDecisionsTool(db))
 	// lookup_identifier: deterministic (entity, type) → value from the typed-identifier graph
 	// + proximity, with a confidence tier the model must voice as-is (never a memorised guess).
-	// The owner matcher lets the owner's OWN identifiers resolve (owner anchor + dominance).
-	ownerMatcher := identity.NewMatcher(cfg.Identity.OwnerNames)
+	// The owner matcher (built above) lets the owner's OWN identifiers resolve (owner anchor +
+	// dominance).
 	toolRegistry.MustRegister(tools.NewLookupIdentifierTool(db, ownerMatcher))
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
