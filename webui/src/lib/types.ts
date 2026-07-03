@@ -57,6 +57,17 @@ export interface MemoryWrite {
   status: "pending" | "accepted";
 }
 
+/** A side-effecting action (e.g. create_note) the LLM requested but that was NOT
+ *  executed — it waits for the user's explicit confirmation (WP3 `pending_action`
+ *  SSE event). Confirming hits POST /actions/{action_id}/confirm. */
+export interface PendingAction {
+  action_id: string;
+  tool: string;
+  preview: string;
+  /** Local UI state — not on the wire. */
+  status?: "pending" | "confirmed" | "cancelled" | "error";
+}
+
 /** A row of `POST /search`. */
 export interface SearchResult {
   chunk_id: string;

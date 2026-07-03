@@ -13,6 +13,8 @@ import (
 // server must never be steered to internal addresses. The returned content is
 // untrusted (see the chat loop's tainted-context handling).
 type FetchURLTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	client   *http.Client
 	maxChars int
 }

@@ -6,17 +6,20 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stubTool is a minimal Tool used only by these tests.
 type stubTool struct {
-	name string
-	desc string
-	exec func(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
+	name       string
+	desc       string
+	sideEffect bool
+	exec       func(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
 }
 
 func (s *stubTool) Name() string                 { return s.name }
 func (s *stubTool) Description() string          { return s.desc }
+func (s *stubTool) SideEffect() bool             { return s.sideEffect }
 func (s *stubTool) ParameterSchema() map[string]any {
 	return map[string]any{"type": "object"}
 }
@@ -121,6 +124,82 @@ func TestRegistry_ExecuteForwardsArgsAndResult(t *testing.T) {
 	}
 	if string(got) != `{"a":1}` {
 		t.Fatalf("got %q", string(got))
+	}
+}
+
+// TestRegistry_SideEffectToolNeverExecutedWithoutConfirm is the WP3 gate
+// guarantee (test a): a SideEffect tool routed through Execute is NEVER run —
+// it is held pending and only runs via ExecuteConfirmed after the user approves.
+func TestRegistry_SideEffectToolNeverExecutedWithoutConfirm(t *testing.T) {
+	executed := false
+	r := NewRegistry()
+	r.SetPendingStore(NewPendingActionStore(PendingActionTTL))
+	r.MustRegister(&stubTool{
+		name:       "create_note",
+		sideEffect: true,
+		exec: func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+			executed = true
+			return args, nil
+		},
+	})
+
+	out, err := r.Execute(context.Background(), "create_note", json.RawMessage(`{"title":"x"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if executed {
+		t.Fatal("SideEffect tool was executed by the registry without confirmation")
+	}
+	var pr PendingResult
+	if err := json.Unmarshal(out, &pr); err != nil || !pr.Pending || pr.ActionID == "" {
+		t.Fatalf("expected a pending envelope, got %s (err %v)", out, err)
+	}
+
+	// The confirm path runs it exactly once.
+	if _, err := r.ExecuteConfirmed(context.Background(), "create_note", json.RawMessage(`{"title":"x"}`)); err != nil {
+		t.Fatalf("ExecuteConfirmed: %v", err)
+	}
+	if !executed {
+		t.Fatal("ExecuteConfirmed did not run the tool")
+	}
+}
+
+// TestRegistry_SideEffectFailsClosedWithoutStore proves the fail-closed default:
+// with no pending store configured, a SideEffect tool is refused, not run.
+func TestRegistry_SideEffectFailsClosedWithoutStore(t *testing.T) {
+	executed := false
+	r := NewRegistry()
+	r.MustRegister(&stubTool{
+		name:       "create_note",
+		sideEffect: true,
+		exec: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			executed = true
+			return nil, nil
+		},
+	})
+	_, err := r.Execute(context.Background(), "create_note", json.RawMessage(`{}`))
+	if !errors.Is(err, ErrConfirmationRequired) {
+		t.Fatalf("expected ErrConfirmationRequired, got %v", err)
+	}
+	if executed {
+		t.Fatal("SideEffect tool ran despite missing confirmation gate")
+	}
+}
+
+// TestPendingActionStore_TakeAndExpiry covers the TTL + one-shot semantics.
+func TestPendingActionStore_TakeAndExpiry(t *testing.T) {
+	s := NewPendingActionStore(10 * time.Minute)
+	s.Add(PendingAction{ActionID: "a1", ToolName: "create_note", CreatedAt: time.Now()})
+	if _, ok := s.Take("a1"); !ok {
+		t.Fatal("expected to take a1")
+	}
+	if _, ok := s.Take("a1"); ok {
+		t.Fatal("a1 should be gone after being taken (no replay)")
+	}
+	// Expired entry is refused.
+	s.Add(PendingAction{ActionID: "old", ToolName: "create_note", CreatedAt: time.Now().Add(-11 * time.Minute)})
+	if _, ok := s.Take("old"); ok {
+		t.Fatal("expired entry should not be takeable")
 	}
 }
 

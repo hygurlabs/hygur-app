@@ -18,6 +18,8 @@ import (
 // the model's memory; the model only voices it, at the confidence the tool reports. This is
 // how "what is X's national number?" gets a grounded answer instead of a plausible guess.
 type LookupIdentifierTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	store fact.Store
 	owner *identity.Matcher // first-class owner matcher (may be nil)
 }

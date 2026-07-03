@@ -642,6 +642,16 @@ func (s *Server) handleMemoryPending(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMemoryAccept handles POST /memory/{memory_id}/accept.
+// handleActionConfirm delegates to the RAG chat handler's WP3 confirmation gate
+// (POST /actions/{action_id}/confirm) — it owns the pending-action store.
+func (s *Server) handleActionConfirm(w http.ResponseWriter, r *http.Request) {
+	if s.ragChatHandler != nil {
+		s.ragChatHandler.HandleActionConfirm(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "chat handler not configured")
+}
+
 func (s *Server) handleMemoryAccept(w http.ResponseWriter, r *http.Request) {
 	if s.memoryHandler != nil {
 		s.memoryHandler.Accept(w, r)

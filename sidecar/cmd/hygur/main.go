@@ -749,6 +749,13 @@ func main() {
 		logger.Info().Str("endpoint", webSearchURL).Msg("web tools enabled (web_search + fetch_url)")
 	}
 
+	// WP3 confirmation gate: side-effect tools (create_note) are withheld by the
+	// registry and held pending here until the user confirms via
+	// POST /actions/{action_id}/confirm. In-process, 10-min TTL, no DB row.
+	pendingActions := tools.NewPendingActionStore(tools.PendingActionTTL)
+	toolRegistry.SetPendingStore(pendingActions)
+	ragChatHandler.SetPendingActionStore(pendingActions)
+
 	ragChatHandler.SetToolRegistry(toolRegistry)
 
 	// Persistent chat transcripts — the handler saves each turn (user +

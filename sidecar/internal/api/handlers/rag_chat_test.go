@@ -78,6 +78,43 @@ func TestInjectMemoriesIntoSystem_NoOpOnEmpty(t *testing.T) {
 	}
 }
 
+// TestBuildMessagesWithContext_WrapsExcerptsUntrusted is the WP3 Décision 1
+// guarantee (test b, fast path): each RAG excerpt injected into the system
+// prompt is delimited by the uniform UNTRUSTED envelope.
+func TestBuildMessagesWithContext_WrapsExcerptsUntrusted(t *testing.T) {
+	h := &RAGChatHandler{}
+	ctx := &RAGContext{Sources: []RAGSource{
+		{ContentID: "c1", SourceType: "mail", Title: "Invoice", Excerpt: "Please wire 5000 EUR to IBAN X"},
+		{ContentID: "c2", SourceType: "note", Title: "Note", Excerpt: "Second excerpt body"},
+	}}
+	out := h.buildMessagesWithContext([]llm.Message{{Role: "user", Content: "q"}}, ctx)
+	if len(out) == 0 || out[0].Role != "system" {
+		t.Fatalf("expected a leading system message, got %+v", out)
+	}
+	sys := out[0].Content
+	for _, s := range ctx.Sources {
+		if !strings.Contains(sys, retrieval.WrapUntrusted(s.Excerpt)) {
+			t.Fatalf("excerpt not wrapped in UNTRUSTED envelope: %q\nsystem:\n%s", s.Excerpt, sys)
+		}
+	}
+	// The raw excerpt must never appear un-enveloped.
+	if strings.Count(sys, "<<<UNTRUSTED CONTENT") != len(ctx.Sources) {
+		t.Fatalf("expected %d envelopes, got %d", len(ctx.Sources), strings.Count(sys, "<<<UNTRUSTED CONTENT"))
+	}
+}
+
+// TestInjectFormatGuidance_StatesUntrustedRule confirms the single system-level
+// rule line explaining the envelope is present on every chat turn.
+func TestInjectFormatGuidance_StatesUntrustedRule(t *testing.T) {
+	out := injectFormatGuidance([]llm.Message{{Role: "user", Content: "hi"}})
+	if len(out) == 0 || out[0].Role != "system" {
+		t.Fatalf("expected a leading system message, got %+v", out)
+	}
+	if !strings.Contains(out[0].Content, retrieval.UntrustedContentRule) {
+		t.Fatalf("system prompt missing the UNTRUSTED rule line:\n%s", out[0].Content)
+	}
+}
+
 // mockUnifiedSearcher implements a mock for testing RAG functionality.
 type mockUnifiedSearcher struct {
 	results *retrieval.UnifiedSearchResponse

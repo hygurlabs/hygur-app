@@ -118,23 +118,27 @@ Rules:
 - If the turn contains nothing memorable, return [].
 - Maximum 3 items. Output ONLY the JSON array.`
 
-// ExtractMemoriesFromTurn analyses a single user/assistant turn and returns
-// the durable memories worth persisting. Returns an empty slice (no error)
-// when the turn carries nothing memorable. Caller is expected to invoke this
-// in a goroutine — the LLM call typically takes 1-3 s.
-func (t *MemoryStoreTool) ExtractMemoriesFromTurn(ctx context.Context, userMessage, assistantMessage string) ([]ExtractedMemory, error) {
+// ExtractMemoriesFromTurn analyses ONLY the user's message(s) of a turn and
+// returns the durable memories worth persisting. Returns an empty slice (no
+// error) when the turn carries nothing memorable. Caller is expected to invoke
+// this in a goroutine — the LLM call typically takes 1-3 s.
+//
+// WP3 Décision 3 — the extractor input is restricted to the USER channel. It
+// deliberately excludes document excerpts, tool results, and the assistant's
+// reply. This closes the "a mail makes you memorize a lie" injection vector:
+// only what the user themselves stated can become a durable memory.
+func (t *MemoryStoreTool) ExtractMemoriesFromTurn(ctx context.Context, userMessage string) ([]ExtractedMemory, error) {
 	if t.llm == nil {
 		return nil, fmt.Errorf("LLM client not configured")
 	}
 	// Cheap pre-filter: short banter never produces useful memories and
 	// burns LLM time. Threshold tuned by observation — anything below ~30
-	// combined chars is "ok", "thanks", "merci", etc.
-	combined := strings.TrimSpace(userMessage) + " " + strings.TrimSpace(assistantMessage)
-	if len(strings.TrimSpace(combined)) < 30 {
+	// chars is "ok", "thanks", "merci", etc.
+	if len(strings.TrimSpace(userMessage)) < 30 {
 		return nil, nil
 	}
 
-	userPrompt := fmt.Sprintf("User: %s\n\nAssistant: %s", userMessage, assistantMessage)
+	userPrompt := fmt.Sprintf("User: %s", userMessage)
 	resp, err := t.llm.Chat(ctx, llm.ChatRequest{
 		// Post-turn memory extraction: background work triggered by the chat, but
 		// it must NOT consume the user's Ask cap (WP16a).

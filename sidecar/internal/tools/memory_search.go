@@ -17,6 +17,8 @@ import (
 // embedding-cosine ranking over accepted memories on top of the legacy LIKE
 // search the older /memory/search endpoint exposes.
 type MemorySearchTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	store *store.DB
 	llm   *llm.Client
 }

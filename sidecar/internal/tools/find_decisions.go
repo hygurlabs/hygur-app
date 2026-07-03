@@ -14,6 +14,8 @@ import (
 // is the only way the assistant can answer "what did I decide about X?". Pure
 // read over store.ListDecisions — deterministic, no LLM, no side effect.
 type FindDecisionsTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	store *store.DB
 }
 

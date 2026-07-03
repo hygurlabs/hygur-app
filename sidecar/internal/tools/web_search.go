@@ -16,6 +16,8 @@ import (
 // uses a plain client. The RESULT urls are untrusted; the model reads them via
 // fetch_url, which is SSRF-guarded.
 type WebSearchTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	endpoint   string // SearXNG base URL, e.g. https://searx.example
 	apiKey     string // optional bearer
 	client     *http.Client

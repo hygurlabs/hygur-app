@@ -41,7 +41,7 @@ const TOOL_LABELS: Record<string, string> = {
   list_attachments: "Listing attachments…",
   recall_memory: "Recalling from memory…",
   find_decisions: "Reviewing logged decisions…",
-  create_note: "Creating a note…",
+  create_note: "Preparing a note…",
   create_calendar_event: "Creating a calendar event…",
 };
 // Tools that reach the internet — flagged distinctly so the user always knows when data
@@ -416,6 +416,11 @@ export function Ask() {
             patchLast((t) => ({
               ...t,
               memoryWrites: [...(t.memoryWrites ?? []), write],
+            })),
+          onPendingAction: (action) =>
+            patchLast((t) => ({
+              ...t,
+              pendingActions: [...(t.pendingActions ?? []), action],
             })),
           onDone: (degraded) =>
             patchLast((t) => ({ ...t, activity: undefined, degraded: !!degraded })),

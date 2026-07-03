@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -184,6 +185,32 @@ func (t *CreateNoteTool) ParseRequest(jsonStr string) (*CreateNoteRequest, error
 
 // Name implements Tool.
 func (t *CreateNoteTool) Name() string { return "create_note" }
+
+// SideEffect implements Tool: create_note is the REFERENCE side-effecting tool
+// (WP3, Décision 2). It writes an autonomous, durable note, so the registry
+// gates it behind an explicit user confirmation instead of executing it inline.
+func (t *CreateNoteTool) SideEffect() bool { return true }
+
+// Preview implements PreviewProvider: a human-readable one-liner for the
+// confirmation card, built from the note title (falling back to a snippet of the
+// content). Never surfaces the full body — the card stays glanceable.
+func (t *CreateNoteTool) Preview(args json.RawMessage) string {
+	var req CreateNoteRequest
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "Create a note"
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = strings.TrimSpace(req.Content)
+		if len(title) > 60 {
+			title = title[:60] + "…"
+		}
+	}
+	if title == "" {
+		return "Create a note"
+	}
+	return fmt.Sprintf("Create a note: %q", title)
+}
 
 // Description implements Tool.
 func (t *CreateNoteTool) Description() string {

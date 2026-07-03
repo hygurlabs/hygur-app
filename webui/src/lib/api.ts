@@ -21,6 +21,7 @@ import type {
   MemoryWrite,
   Mention,
   Note,
+  PendingAction,
   Project,
   ProjectItem,
   RagSource,
@@ -192,6 +193,15 @@ export const api = {
   },
   search: (query: string, topK = 15) =>
     postJSON<SearchResponse>("/search", { query, top_k: topK }),
+  /** Confirms a gated side-effect action (WP3): executes the withheld tool
+   *  server-side. Throws on an expired/unknown action (410) or execution error. */
+  confirmAction: async (actionId: string): Promise<void> => {
+    const r = await fetchAuthed(
+      `/actions/${encodeURIComponent(actionId)}/confirm`,
+      { method: "POST" },
+    );
+    if (!r.ok) throw httpError(r);
+  },
   knowledgeItems: (limit = 200, sourceType?: string, exclude?: string[]) =>
     getJSON<{ items: KnowledgeItem[] }>(
       `/knowledge/items?limit=${limit}&offset=0${
@@ -601,6 +611,10 @@ export interface ChatHandlers {
   /** Fires when the turn autonomously wrote a memory (once per write), so the UI
    *  can surface it inline instead of leaving it buried in the review queue. */
   onMemoryWrite?: (write: MemoryWrite) => void;
+  /** Fires when the LLM requested a side-effecting action (e.g. create a note)
+   *  that was withheld pending the user's confirmation (WP3). The UI renders a
+   *  Confirm/Cancel card; Confirm calls confirmAction(action_id). */
+  onPendingAction?: (action: PendingAction) => void;
   /** degraded=true when the inference backend was down and only retrieved sources are shown. */
   onDone?: (degraded?: boolean) => void;
 }
@@ -724,6 +738,13 @@ export async function streamChat(
       }
       if (evt.type === "memory_write" && typeof evt.memory_id === "string") {
         handlers.onMemoryWrite?.(evt as unknown as MemoryWrite);
+      }
+      if (evt.type === "pending_action" && typeof evt.action_id === "string") {
+        handlers.onPendingAction?.({
+          action_id: evt.action_id as string,
+          tool: (evt.tool as string) ?? "",
+          preview: (evt.preview as string) ?? "",
+        });
       }
       if (typeof evt.delta === "string" && evt.delta) {
         handlers.onDelta?.(evt.delta);

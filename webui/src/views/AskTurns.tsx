@@ -11,9 +11,17 @@ import {
   Globe,
   NotebookPen,
   Search,
+  ShieldCheck,
   Square,
+  X,
 } from "lucide-react";
-import type { AttachmentRef, MemoryWrite, RagSource } from "../lib/types";
+import type {
+  AttachmentRef,
+  MemoryWrite,
+  PendingAction,
+  RagSource,
+} from "../lib/types";
+import { api } from "../lib/api";
 import { fmtDate, srcLabel } from "../lib/format";
 import { useSlow } from "../lib/slow";
 import { RecordList, type RecordRow } from "../components/RecordList";
@@ -41,6 +49,10 @@ export interface Turn {
   // Facts this turn autonomously saved to memory (the `memory_write` SSE events),
   // surfaced inline so the write is visible, not buried in the Mind review queue.
   memoryWrites?: MemoryWrite[];
+  // Side-effecting actions the turn requested but withheld pending confirmation
+  // (the `pending_action` SSE events) — rendered as Confirm/Cancel cards. Nothing
+  // is executed until the user confirms (WP3).
+  pendingActions?: PendingAction[];
 }
 
 // MARK: - Copy helper
@@ -184,6 +196,104 @@ function MemoryWrites({ writes }: { writes: MemoryWrite[] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// MARK: - Pending action confirmation
+
+// Friendly label per side-effecting tool for the confirmation card heading.
+const PENDING_TOOL_LABELS: Record<string, string> = {
+  create_note: "Save a note",
+};
+
+/** A single Confirm/Cancel card for a gated side-effect action (WP3). Nothing has
+ *  run yet: Confirm calls POST /actions/{id}/confirm to execute the withheld
+ *  tool; Cancel just dismisses it (the server-side pending action expires on its
+ *  own TTL). Terminal states (confirmed/cancelled/error) replace the buttons. */
+function PendingActionCard({ action }: { action: PendingAction }) {
+  const [status, setStatus] = useState<NonNullable<PendingAction["status"]>>(
+    action.status ?? "pending",
+  );
+  const [busy, setBusy] = useState(false);
+  const heading = PENDING_TOOL_LABELS[action.tool] ?? "Confirm this action";
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      await api.confirmAction(action.action_id);
+      setStatus("confirmed");
+    } catch {
+      setStatus("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-accent/30 bg-accent-weak/40 px-3.5 py-3">
+      <div className="flex items-start gap-2.5">
+        <ShieldCheck
+          size={15}
+          strokeWidth={1.9}
+          className="mt-0.5 shrink-0 text-accent"
+        />
+        <div className="min-w-0 flex-1">
+          <span className="text-[12.5px] font-medium text-text">{heading}</span>
+          <p className="mt-0.5 text-[13px] text-muted">{action.preview}</p>
+
+          {status === "pending" && (
+            <div className="mt-2.5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={confirm}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                <Check size={13} strokeWidth={2.2} />
+                {busy ? "Confirming…" : "Confirm"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatus("cancelled")}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-medium text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-50"
+              >
+                <X size={13} strokeWidth={2.2} />
+                Cancel
+              </button>
+            </div>
+          )}
+          {status === "confirmed" && (
+            <div className="mt-2 flex items-center gap-1.5 text-[12.5px] font-medium text-accent">
+              <Check size={13} strokeWidth={2.2} />
+              Done
+            </div>
+          )}
+          {status === "cancelled" && (
+            <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted">
+              <X size={13} strokeWidth={2.2} />
+              Cancelled — nothing was saved
+            </div>
+          )}
+          {status === "error" && (
+            <div className="mt-2 text-[12.5px] text-danger">
+              Couldn&rsquo;t complete this action. Please try again.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Renders every pending side-effect action for a turn, inline under the answer. */
+function PendingActions({ actions }: { actions: PendingAction[] }) {
+  return (
+    <div aria-live="polite" className="mt-3 flex flex-col gap-2 print:hidden">
+      {actions.map((a) => (
+        <PendingActionCard key={a.action_id} action={a} />
+      ))}
     </div>
   );
 }
@@ -393,6 +503,10 @@ const AssistantTurn = memo(function AssistantTurn({
         <div className="mt-2">
           <ErrorBanner message={turn.error} />
         </div>
+      )}
+
+      {turn.pendingActions && turn.pendingActions.length > 0 && (
+        <PendingActions actions={turn.pendingActions} />
       )}
 
       {turn.memoryWrites && turn.memoryWrites.length > 0 && (

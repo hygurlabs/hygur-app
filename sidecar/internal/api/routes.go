@@ -42,6 +42,9 @@ func (s *Server) setupRoutes() {
 		r.Use(s.apiVersionMiddleware)
 		r.Use(s.authMiddleware)
 		r.Post("/chat", s.handleChat)
+		// WP3: confirm a gated side-effect action (create_note). Same auth group
+		// as /chat. No timeout — the confirmed tool may index+embed a note.
+		r.Post("/actions/{action_id}/confirm", s.handleActionConfirm)
 		r.Get("/events", s.handleEvents)
 		// DB backup/restore — no request timeout (large downloads/uploads).
 		r.Get("/admin/db/backup", s.handleBackupDownload)

@@ -12,6 +12,8 @@ import (
 
 // ListAttachmentsTool lists attachments from email threads.
 type ListAttachmentsTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	connectors map[string]mail.MailConnector
 }
 

@@ -15,6 +15,8 @@ import (
 
 // SummarizeThreadTool generates structured summaries of email threads using LLM.
 type SummarizeThreadTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	llm          *llm.Client
 	store        *store.DB
 	normalizer   *mail.ThreadNormalizer

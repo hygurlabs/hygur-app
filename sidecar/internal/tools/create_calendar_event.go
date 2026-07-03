@@ -13,7 +13,12 @@ import (
 // EKEventStore lives in the user's session — the sidecar only validates the
 // request, normalises the timestamps, and emits a structured response so the
 // macOS layer can surface a confirmation sheet before any side-effect.
-type CreateCalendarEventTool struct{}
+// CreateCalendarEventTool keeps its OWN native macOS confirmation flow: it
+// returns {requested:true} and the macOS app surfaces an EventKit sheet before
+// any write. It therefore embeds NoSideEffect (SideEffect()==false) so the
+// generic pending_action gate does NOT intercept it — that would break the
+// desktop app's native sheet.
+type CreateCalendarEventTool struct{ NoSideEffect }
 
 // NewCreateCalendarEventTool returns a CreateCalendarEventTool. It takes no
 // dependencies — by design, this tool does not touch any local state. The

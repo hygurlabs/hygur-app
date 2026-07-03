@@ -29,6 +29,8 @@ const windowedExcerptChars = 2300
 // like "create a note" cost zero RAG round-trips while genuine factual
 // questions still get the full pipeline.
 type SearchKnowledgeBaseTool struct {
+	// Read-only: embeds NoSideEffect so it is never gated by the confirmation flow.
+	NoSideEffect
 	searcher        *retrieval.UnifiedSearcher
 	defaultTopK     int
 	minConfidence   float64
@@ -237,10 +239,14 @@ func (t *SearchKnowledgeBaseTool) Execute(ctx context.Context, args json.RawMess
 			break
 		}
 		result.Sources = append(result.Sources, SearchKnowledgeBaseSource{
-			ContentID:   r.ContentID,
-			SourceType:  r.SourceType,
-			Title:       r.Title,
-			Excerpt:     excerpt,
+			ContentID:  r.ContentID,
+			SourceType: r.SourceType,
+			Title:      r.Title,
+			// WP3 Décision 1: this excerpt is untrusted document/mail content fed
+			// straight into the prompt as the tool result. Wrap it in the uniform
+			// envelope so the model reads it as data, not instructions. The UI
+			// unwraps it again in decodeSearchSources for a clean sources panel.
+			Excerpt:     retrieval.WrapUntrusted(excerpt),
 			Score:       r.Score,
 			MailFrom:    r.MailFrom,
 			MailDate:    r.MailDate,

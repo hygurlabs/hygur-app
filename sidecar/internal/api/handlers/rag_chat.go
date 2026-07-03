@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/agenda"
 	"github.com/hygur/sidecar/internal/contradict"
@@ -117,6 +118,17 @@ type MemoryWriteEvent struct {
 	Status     string `json:"status"`      // "pending" | "accepted"
 }
 
+// PendingActionEvent surfaces a gated side-effect action to the client so the UI
+// can render a Confirm/Cancel card (WP3, Décision 2). The registry has already
+// registered the action and withheld execution; confirming hits
+// POST /actions/{action_id}/confirm, which then runs the tool exactly once.
+type PendingActionEvent struct {
+	Type     string `json:"type"` // "pending_action"
+	ActionID string `json:"action_id"`
+	Tool     string `json:"tool"`
+	Preview  string `json:"preview"`
+}
+
 // maxToolRounds caps how many consecutive tool-call rounds the chat loop
 // will service before forcing the conversation to a final assistant turn.
 // Five is comfortably above any plausible legitimate need (multi-step plans
@@ -150,7 +162,8 @@ type RAGChatHandler struct {
 	agendaStore      *store.DB
 	chatStore        *store.DB
 	toolRegistry     *tools.Registry
-	chatTokenCap     int           // monthly chat-token cap; 0 = unlimited (local default)
+	pendingActions   *tools.PendingActionStore // WP3 confirmation gate for side-effect tools
+	chatTokenCap     int                       // monthly chat-token cap; 0 = unlimited (local default)
 	chatTokenCapDay  int           // daily chat-token cap; 0 = unlimited (the fast fuse)
 	rpmLimiter       *rateLimiter  // per-tenant request-rate fuse; nil = off
 	chatSem          chan struct{} // per-tenant concurrency cap; nil = off
@@ -245,6 +258,14 @@ func (h *RAGChatHandler) SetToolRegistry(registry *tools.Registry) {
 	h.toolRegistry = registry
 }
 
+// SetPendingActionStore wires the WP3 confirmation gate. The same store is set
+// on the tool registry (which withholds SideEffect tools and records them here);
+// the handler reads it to execute a confirmed action from
+// POST /actions/{action_id}/confirm.
+func (h *RAGChatHandler) SetPendingActionStore(p *tools.PendingActionStore) {
+	h.pendingActions = p
+}
+
 // baseFormatGuidance is the persona/format hint prepended to every chat turn.
 // The macOS client renders assistant messages with MarkdownUI (headings,
 // fenced code, GFM tables, blockquotes, lists, hr), so we tell the model to
@@ -299,7 +320,11 @@ func degradedChatMessage(hasSources bool) string {
 func injectFormatGuidance(messages []llm.Message) []llm.Message {
 	// Couche A: the shared prose-voice block rides on the base persona. Chat is
 	// streamed, so it gets the voice guidance only (no deterministic post-pass).
-	guidance := todayGuidance() + "\n\n" + baseFormatGuidance + "\n\n" + llm.ProseVoiceGuidance
+	// WP3 Décision 1: state the UNTRUSTED-content rule ONCE here — it applies to
+	// every retrieval-bearing turn (both the RAG fast path and the
+	// search_knowledge_base tool wrap their excerpts in the matching envelope).
+	guidance := todayGuidance() + "\n\n" + retrieval.UntrustedContentRule +
+		"\n\n" + baseFormatGuidance + "\n\n" + llm.ProseVoiceGuidance
 	if len(messages) > 0 && messages[0].Role == "system" {
 		merged := guidance + "\n\n" + messages[0].Content
 		out := make([]llm.Message, len(messages))
@@ -883,6 +908,21 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
 				}
+				// WP3 Décision 2: a SideEffect tool was NOT executed — the registry
+				// returned a pending-confirmation envelope. Surface it to the client
+				// as a Confirm/Cancel card. The `{pending:true}` result also flows
+				// back to the model so it stops and asks the user to confirm.
+				if h.toolRegistry.IsSideEffect(tc.Function.Name) {
+					var pa tools.PendingResult
+					if json.Unmarshal(result, &pa) == nil && pa.Pending {
+						_ = writeSSE(PendingActionEvent{
+							Type:     "pending_action",
+							ActionID: pa.ActionID,
+							Tool:     tc.Function.Name,
+							Preview:  pa.Preview,
+						})
+					}
+				}
 				// search_knowledge_base also doubles as a `rag_context` event so
 				// the existing UI keeps rendering the sources panel without
 				// needing to know about the tool-call shape.
@@ -1010,7 +1050,10 @@ func (h *RAGChatHandler) emitMemoryWrites(writeSSE func(any) error, userMsg, ass
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	extracted, err := h.memoryStore.ExtractMemoriesFromTurn(ctx, userMsg, assistantMsg)
+	// WP3 Décision 3: extract from the USER's message only — never the assistant
+	// reply, tool results, or document excerpts. The assistantMsg guard above
+	// just confirms the turn actually completed before we bother extracting.
+	extracted, err := h.memoryStore.ExtractMemoriesFromTurn(ctx, userMsg)
 	if err != nil {
 		h.logger.Debug().Err(err).Msg("memory extraction failed")
 		return
@@ -1040,6 +1083,39 @@ func (h *RAGChatHandler) emitMemoryWrites(writeSSE func(any) error, userMsg, ass
 			Status:     status,
 		})
 	}
+}
+
+// HandleActionConfirm executes a gated side-effect action after the user
+// approved it (WP3, Décision 2). POST /actions/{action_id}/confirm. It takes the
+// pending entry (removing it — a confirmation can never be replayed), then runs
+// the tool via ExecuteConfirmed. An unknown or expired action_id fail-closes with
+// 404/410 and nothing executes. The action_audit log is WP4 — out of scope here.
+func (h *RAGChatHandler) HandleActionConfirm(w http.ResponseWriter, r *http.Request) {
+	if h.pendingActions == nil || h.toolRegistry == nil {
+		http.Error(w, `{"error":"confirmation gate not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+	actionID := chi.URLParam(r, "action_id")
+	if actionID == "" {
+		http.Error(w, `{"error":"action_id is required"}`, http.StatusBadRequest)
+		return
+	}
+	pa, ok := h.pendingActions.Take(actionID)
+	if !ok {
+		// Unknown or expired — fail-closed, nothing runs.
+		http.Error(w, `{"error":"pending action not found or expired"}`, http.StatusGone)
+		return
+	}
+	result, err := h.toolRegistry.ExecuteConfirmed(r.Context(), pa.ToolName, pa.Args)
+	if err != nil {
+		h.logger.Warn().Err(err).Str("tool", pa.ToolName).Str("action_id", actionID).Msg("confirmed action failed")
+		http.Error(w, `{"error":"action execution failed"}`, http.StatusInternalServerError)
+		return
+	}
+	h.logger.Info().Str("tool", pa.ToolName).Str("action_id", actionID).Msg("confirmed action executed")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result)
 }
 
 // persistUserTurn ensures the session row exists (creating it with an
@@ -1366,7 +1442,11 @@ func (h *RAGChatHandler) buildMessagesWithContext(messages []llm.Message, ragCon
 			header += " [" + tag + "]"
 		}
 		contextBuilder.WriteString(header + "\n")
-		contextBuilder.WriteString(source.Excerpt)
+		// WP3 Décision 1: each excerpt is attacker-controllable content (a mail,
+		// a document). Wrap it in the uniform UNTRUSTED envelope so the model
+		// treats it as data, not instructions. The rule is stated once in the
+		// system prompt (see injectFormatGuidance).
+		contextBuilder.WriteString(retrieval.WrapUntrusted(source.Excerpt))
 		contextBuilder.WriteString("\n\n")
 	}
 
@@ -1450,10 +1530,12 @@ func decodeSearchSources(raw json.RawMessage) []RAGSource {
 	out := make([]RAGSource, 0, len(payload.Sources))
 	for _, s := range payload.Sources {
 		out = append(out, RAGSource{
-			ContentID:   s.ContentID,
-			SourceType:  s.SourceType,
-			Title:       s.Title,
-			Excerpt:     s.Excerpt,
+			ContentID:  s.ContentID,
+			SourceType: s.SourceType,
+			Title:      s.Title,
+			// Strip the WP3 UNTRUSTED envelope for the UI sources panel — the
+			// markers belong in the prompt copy, not on screen.
+			Excerpt:     retrieval.UnwrapUntrusted(s.Excerpt),
 			Score:       s.Score,
 			MailFrom:    s.MailFrom,
 			MailDate:    s.MailDate,
