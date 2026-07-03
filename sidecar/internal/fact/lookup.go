@@ -41,6 +41,11 @@ const (
 const (
 	ReasonAmbiguousSubject = "ambiguous_subject" // the name matches several distinct people
 	ReasonAmbiguousOwner   = "ambiguous_owner"   // the value is claimed by several distinct people
+	// ReasonUncorroborated: the winning value competes with other candidate values of the same
+	// type for this subject yet is backed by a single document — the false-positive signature of
+	// a coincidental checksum match (a tax rôle, an order/client reference that happens to pass
+	// the type's checksum), not the subject's real number. Decline rather than pick it.
+	ReasonUncorroborated = "uncorroborated_candidate"
 )
 
 // Source is a document that carries the value — surfaced so a human can verify.
@@ -290,6 +295,29 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 			}
 			return res, nil
 		}
+	}
+
+	// Competing-candidates corroboration guard (fail-closed). When the subject carries MORE THAN
+	// ONE distinct candidate value of this single-value identifier type, the winner must be
+	// CORROBORATED to be trusted: a value backed by a single document that merely sits near the
+	// subject in that one document is the false-positive signature of a coincidental checksum
+	// match (a property-tax rôle, an order or client reference that happens to pass the type's
+	// checksum), NOT the subject's real number. Require ≥2 corroborating documents — or, for an
+	// owner query, owner-dominance across his correspondence — to keep the value; otherwise decline
+	// honestly rather than affirm a poorly-supported one. A LONE candidate (nothing to confuse it
+	// with) is untouched, so the legitimate single-source case still resolves. This only ADDS a
+	// gate — it never affirms anything the prior code declined, and it leaves the checksum, owner
+	// and dominance gates intact.
+	if len(all) > 1 && len(best.docs) < 2 && !(queryIsOwner && ownerIsDominant(ctx, s, best.norm, owner)) {
+		res.Tier = TierNone
+		res.Reason = ReasonUncorroborated
+		res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score
+		for _, id := range best.docs {
+			if it, e := s.GetKnowledgeItem(ctx, id); e == nil && it != nil {
+				res.Sources = append(res.Sources, Source{ContentID: id, Title: it.Title})
+			}
+		}
+		return res, nil
 	}
 
 	// Tier. Proximity is a trustworthy name↔number pairing → affirm/hedge on the value.

@@ -404,6 +404,163 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	}, nil
 }
 
+// DeterminedFacts is the authoritative fact layer for ONE subject in a chat turn: its
+// determined typed identifiers (tier≥med) and active aggregated claims, assembled
+// deterministically from the WP36.a dossier bricks. The chat pipeline injects these as the
+// VERIFIED layer so factual identifier VALUES are voiced from here — never lifted from raw
+// (untrusted) document excerpts. No LLM; skips the timeline/network expansion the full
+// dossier builds, since the authoritative layer needs only the determined values.
+type DeterminedFacts struct {
+	Subject  EngramSubject      `json:"subject"`
+	IsOwner  bool               `json:"is_owner,omitempty"`
+	Identity []EngramIdentifier `json:"identity,omitempty"`
+	Claims   []EngramClaim      `json:"claims,omitempty"`
+}
+
+// HasFacts reports whether the subject carries any determined identifier or claim.
+func (d *DeterminedFacts) HasFacts() bool {
+	return d != nil && (len(d.Identity) > 0 || len(d.Claims) > 0)
+}
+
+// AssembleDeterminedFacts builds the authoritative facts (typed identifiers + active claims)
+// for a subject, reusing the SAME bricks as AssembleEngram (owner unification, id-type
+// gathering, assembleIdentifiers, aggregateClaims) but WITHOUT the timeline/2nd-order
+// expansion — the chat authoritative layer needs the determined values, not the narrative.
+// Returns a non-nil dossier even when empty (HasFacts reports it), or nil for an unknown
+// subject. owner (may be nil) unifies the owner's name-variant norms into one subject.
+func AssembleDeterminedFacts(ctx context.Context, db *store.DB, subject string, now time.Time, owner *identity.Matcher) (*DeterminedFacts, error) {
+	norm := contradict.NormKey(strings.TrimSpace(subject))
+	if db == nil || norm == "" {
+		return nil, nil
+	}
+
+	// Owner unification (identical to AssembleEngram): the owner's name variants are ONE subject.
+	subjectNorms := []string{norm}
+	if owner.IsOwnerNorm(norm) {
+		if cands, e := db.PersonNormsContainingTokens(ctx, owner.Tokens()); e == nil {
+			seen := map[string]bool{norm: true}
+			for _, c := range cands {
+				if !seen[c] && owner.IsOwnerNorm(c) {
+					seen[c] = true
+					subjectNorms = append(subjectNorms, c)
+				}
+			}
+		}
+	}
+
+	// Identifier types: id_* graph neighbors unioned with proximity-linked id types — the
+	// exact same union AssembleEngram computes, so identifier recall is unchanged.
+	idTypeSet := map[string]bool{}
+	rawNetwork, err := unionNeighbors(ctx, db, subjectNorms, now, engramNetworkMax)
+	if err != nil {
+		return nil, err
+	}
+	if len(rawNetwork) > 0 {
+		netNorms := make([]string, len(rawNetwork))
+		for i, n := range rawNetwork {
+			netNorms[i] = n.Norm
+		}
+		nTypes, err := db.EntityDominantTypes(ctx, netNorms)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range nTypes {
+			if strings.HasPrefix(t, "id_") {
+				idTypeSet[strings.TrimPrefix(t, "id_")] = true
+			}
+		}
+	}
+	linkTypes, err := db.IdentifierTypesForPersons(ctx, subjectNorms)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range linkTypes {
+		idTypeSet[t] = true
+	}
+	identifiers, err := assembleIdentifiers(ctx, db, norm, idTypeSet, now, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	// Active claims: the subject's direct-item claims aggregated by attribute (dominant value,
+	// corroboration, contested state). Direct (1st-order) items only — same source as the dossier.
+	directIDs, err := db.EntityMentionContentIDs(ctx, subjectNorms, engramFirstCap)
+	if err != nil {
+		return nil, err
+	}
+	var directClaims []contradict.Claim
+	seenID := make(map[string]bool, len(directIDs))
+	for _, id := range directIDs {
+		if id == "" || seenID[id] {
+			continue
+		}
+		seenID[id] = true
+		it, gerr := db.GetKnowledgeItem(ctx, id)
+		if gerr != nil || it == nil {
+			continue
+		}
+		for _, c := range contradict.ClaimsFromMetadata(it.Metadata) {
+			if c.SourceID == "" {
+				c.SourceID = id
+			}
+			directClaims = append(directClaims, c)
+		}
+	}
+	claims := aggregateClaims(directClaims, subjectNorms)
+
+	if len(identifiers) == 0 && len(claims) == 0 && len(directIDs) == 0 && len(rawNetwork) == 0 {
+		return nil, nil // unknown subject — no presence at all
+	}
+	typ, err := subjectType(ctx, db, norm)
+	if err != nil {
+		return nil, err
+	}
+	return &DeterminedFacts{
+		Subject:  EngramSubject{Norm: norm, Type: typ},
+		Identity: identifiers,
+		Claims:   claims,
+	}, nil
+}
+
+// AssembleQueryFacts resolves a chat query's authoritative subjects DETERMINISTICALLY and
+// assembles each one's determined facts — the CORE anti-hallucination layer. It reuses the
+// EXISTING resolution: the owner (first-person framing — the app user IS the owner) plus the
+// single named subject the query mentions (detectQuerySubject: pure string↔entity-index match,
+// NO LLM, NO keyword list, NO per-type router). Only subjects that actually carry determined
+// facts are returned. The owner is emitted first and de-duplicates a query subject that IS the
+// owner. Best-effort per subject: an assembly error on one never drops the others.
+func AssembleQueryFacts(ctx context.Context, db *store.DB, query string, now time.Time, owner *identity.Matcher, ownerSubject string) ([]DeterminedFacts, error) {
+	if db == nil {
+		return nil, nil
+	}
+	var out []DeterminedFacts
+	covered := map[string]bool{}
+
+	// The owner — always a subject of a first-person turn ("my VAT", "mon numéro…"), which
+	// names no proper noun so detectQuerySubject can't surface it. ownerSubject is a configured
+	// owner name; empty (owner unconfigured) simply skips this.
+	if ownerSubject != "" {
+		if df, err := AssembleDeterminedFacts(ctx, db, ownerSubject, now, owner); err == nil && df.HasFacts() {
+			df.IsOwner = true
+			out = append(out, *df)
+			covered[df.Subject.Norm] = true
+		}
+	}
+
+	// The query's single named subject (deterministic; "" when the query names none). Skip when
+	// it IS the owner (already covered) or the same norm was already emitted.
+	subj, err := detectQuerySubject(ctx, db, query)
+	if err != nil {
+		return out, err
+	}
+	if subj != "" && !owner.IsOwnerNorm(subj) && !covered[contradict.NormKey(subj)] {
+		if df, err := AssembleDeterminedFacts(ctx, db, subj, now, owner); err == nil && df.HasFacts() {
+			out = append(out, *df)
+		}
+	}
+	return out, nil
+}
+
 // cleanTypeLabel turns an id_* dominant type into a human phrase for display
 // ("id_national_number" → "national number"); non-id types pass through unchanged.
 func cleanTypeLabel(t string) string {

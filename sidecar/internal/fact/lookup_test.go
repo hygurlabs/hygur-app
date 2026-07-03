@@ -508,3 +508,57 @@ func TestLookupIdentifier_RareIdentifierRecallFloor(t *testing.T) {
 		t.Errorf("tier = %q (conf %.2f), want medium (label fact, hedged)", r.Tier, r.Confidence)
 	}
 }
+
+// TestLookupIdentifier_ParasiteDeclines — the live "property-tax parasite" regression. The
+// owner's real enterprise number is not typed for him, but a 10-digit reference from a single
+// property-tax document coincidentally passes the enterprise-number checksum, gets typed
+// id_enterprise_number and sits (proximity) next to his name in that ONE doc — competing with
+// other candidate values. It must DECLINE (fail closed), never affirm the coincidental match.
+func TestLookupIdentifier_ParasiteDeclines(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	// Two candidate values compete: the parasite (prox to owner, 1 doc) and a graph-only other.
+	f := &fakeStore{
+		resolve:   []string{"alex martin"},
+		neighbors: []store.Neighbor{{Norm: "parasite", Weight: 0.030}, {Norm: "other", Weight: 0.020}},
+		types:     map[string]string{"parasite": "id_enterprise_number", "other": "id_enterprise_number"},
+		links:     map[string][]store.IdentifierLink{"parasite": {{ContentID: "tax1", PersonNorm: "alex martin", IDNorm: "parasite", Prox: 1}}},
+		docs:      map[string][]string{"parasite": {"tax1"}, "other": {"d9"}},
+	}
+	r, err := LookupIdentifier(ctx, f, "alex martin", "enterprise_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierNone {
+		t.Errorf("single-doc parasite amid competitors: tier=%q (conf %.2f), want none (decline)", r.Tier, r.Confidence)
+	}
+	if r.Reason != ReasonUncorroborated {
+		t.Errorf("reason=%q, want %q", r.Reason, ReasonUncorroborated)
+	}
+	if len(r.Sources) == 0 {
+		t.Error("expected the source doc surfaced for human verification even on decline")
+	}
+}
+
+// TestLookupIdentifier_CorroboratedSurvivesGuard — a well-corroborated winner (≥2 docs) amid
+// competing candidates is UNAFFECTED by the corroboration guard: it still affirms. Guards the
+// no-regression boundary (only the single-doc coincidence declines).
+func TestLookupIdentifier_CorroboratedSurvivesGuard(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	f := &fakeStore{
+		resolve:   []string{"acme sprl"},
+		neighbors: []store.Neighbor{{Norm: "real", Weight: 0.030}, {Norm: "other", Weight: 0.020}},
+		types:     map[string]string{"real": "id_enterprise_number", "other": "id_enterprise_number"},
+		links:     map[string][]store.IdentifierLink{"real": {{ContentID: "d1", PersonNorm: "acme sprl", IDNorm: "real", Prox: 1}}},
+		docs:      map[string][]string{"real": {"d1", "d2", "d3"}, "other": {"d9"}},
+	}
+	r, err := LookupIdentifier(ctx, f, "acme sprl", "enterprise_number", now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("corroborated winner amid competitors: tier=%q, want high (guard must not fire)", r.Tier)
+	}
+	if r.Value != "real" {
+		t.Errorf("value=%q, want real", r.Value)
+	}
+}

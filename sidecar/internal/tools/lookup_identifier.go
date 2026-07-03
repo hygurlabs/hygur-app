@@ -106,6 +106,8 @@ func (t *LookupIdentifierTool) Execute(ctx context.Context, raw json.RawMessage)
 			out.Guidance = "The name matches SEVERAL different people. Do NOT give any number — ask the user which specific person they mean (e.g. by full name)."
 		case fact.ReasonAmbiguousOwner:
 			out.Guidance = "This value is associated with MORE THAN ONE person, so you cannot attribute it to the one asked about. Do NOT state it as theirs — say the ownership is unclear and offer the source(s) to check."
+		case fact.ReasonUncorroborated:
+			out.Guidance = "Several candidate values compete for this identifier and none is corroborated enough to trust (the best is backed by a single document — likely a coincidental match, not the real number). Do NOT state a value — say you don't have a verified one and offer the source(s) to check."
 		default:
 			out.Guidance = "Do NOT state a value — you could not confirm a reliable one. Say so, and offer the source document(s) for the user to check themselves."
 		}

@@ -6,6 +6,7 @@ import {
   ArrowDown,
   FileDown,
   History,
+  PanelRight,
   Plus,
   Printer,
   Upload,
@@ -155,9 +156,30 @@ function HomeContradictions() {
   );
 }
 
+// useIsDesktop tracks the Tailwind `lg` breakpoint (1024px). Below it the right panel is a
+// full-height drawer that overlays the chat (88vw) — so on mobile we must NOT auto-open it on
+// submit (it would hide the streaming answer). Desktop (lg+), where the panel is an inline
+// column, keeps its existing auto-open-during-retrieval behavior.
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(min-width: 1024px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => setIsDesktop(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return isDesktop;
+}
+
 export function Ask() {
   const openDetail = useDetail();
   const qc = useQueryClient();
+  const isDesktop = useIsDesktop();
 
   const [sessionId, setSessionId] = useState(newSessionId);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -331,7 +353,10 @@ export function Ask() {
     setLiveSources([]);
     hidOnStreamRef.current = false;
     setPanelMode("context");
-    setPanelOpen(true);
+    // Auto-open the live-context panel only on desktop, where it's an inline column. On mobile
+    // it's a full-screen drawer that would hide the answer/streaming — the user opens it manually
+    // via the Sources toggle when they want it.
+    if (isDesktop) setPanelOpen(true);
 
     const userTurn: Turn = {
       id: nextId(),
@@ -400,10 +425,11 @@ export function Ask() {
               activityWeb: WEB_TOOLS.has(name),
             })),
           onDelta: (delta) => {
-            // The answer is now streaming — retract the ephemeral context panel.
+            // The answer is now streaming — retract the ephemeral context panel (desktop only;
+            // on mobile it was never auto-opened, and a manually-opened one stays until dismissed).
             if (!hidOnStreamRef.current) {
               hidOnStreamRef.current = true;
-              setPanelOpen(false);
+              if (isDesktop) setPanelOpen(false);
             }
             patchLast((t) => ({
               ...t,
@@ -564,6 +590,29 @@ export function Ask() {
             >
               <History size={15} strokeWidth={1.9} />
               <span className="hidden sm:inline">History</span>
+            </button>
+            {/* Sources toggle — mobile only (lg:hidden). On mobile the context panel no longer
+                auto-opens on submit; this lets the user open the live/last sources when wanted.
+                Desktop keeps the panel's auto-open-during-retrieval behavior, so it's hidden there. */}
+            <button
+              onClick={() => {
+                if (panelOpen && panelMode === "context") {
+                  setPanelOpen(false);
+                } else {
+                  setPanelMode("context");
+                  setPanelOpen(true);
+                }
+              }}
+              aria-pressed={panelOpen && panelMode === "context"}
+              title="Show sources"
+              className={`lg:hidden inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors ${
+                panelOpen && panelMode === "context"
+                  ? "bg-accent-weak text-accent"
+                  : "text-muted hover:bg-surface2 hover:text-text"
+              }`}
+            >
+              <PanelRight size={15} strokeWidth={1.9} />
+              <span className="hidden sm:inline">Sources</span>
             </button>
             <button
               onClick={() =>

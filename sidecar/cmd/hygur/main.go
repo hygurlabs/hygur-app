@@ -758,6 +758,12 @@ func main() {
 
 	ragChatHandler.SetToolRegistry(toolRegistry)
 
+	// Authoritative determined-facts layer (CORE thesis): the chat pipeline resolves each turn's
+	// subjects deterministically (owner + the query's named subject) and injects their DETERMINED
+	// identifiers/claims as the VERIFIED layer, so identifier VALUES are voiced from the resolver,
+	// never lifted from raw excerpts. Reuses the same db + owner matcher as lookup_identifier.
+	ragChatHandler.SetDeterminedFacts(db, ownerMatcher, cfg.Identity.OwnerNames)
+
 	// Persistent chat transcripts — the handler saves each turn (user +
 	// assistant + cited sources) so conversations can be reopened later.
 	ragChatHandler.SetChatStore(db)

@@ -16,6 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/hygur/sidecar/internal/agenda"
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/fact"
+	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/llm"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/session"
@@ -153,17 +155,24 @@ const contradictionInjectionMax = 5
 
 // RAGChatHandler handles the /chat endpoint with RAG enhancement.
 type RAGChatHandler struct {
-	llmClient        *llm.Client
-	unifiedSearcher  *retrieval.UnifiedSearcher
-	sessionStore     *session.Store
-	memoryStore      *tools.MemoryStoreTool
-	memorySearch     *tools.MemorySearchTool
-	agendaExtractor  *agenda.Extractor
-	agendaStore      *store.DB
-	chatStore        *store.DB
-	toolRegistry     *tools.Registry
-	pendingActions   *tools.PendingActionStore // WP3 confirmation gate for side-effect tools
-	chatTokenCap     int                       // monthly chat-token cap; 0 = unlimited (local default)
+	llmClient       *llm.Client
+	unifiedSearcher *retrieval.UnifiedSearcher
+	sessionStore    *session.Store
+	memoryStore     *tools.MemoryStoreTool
+	memorySearch    *tools.MemorySearchTool
+	agendaExtractor *agenda.Extractor
+	agendaStore     *store.DB
+	chatStore       *store.DB
+	toolRegistry    *tools.Registry
+	pendingActions  *tools.PendingActionStore // WP3 confirmation gate for side-effect tools
+	// Authoritative determined-facts layer (CORE thesis): the store + owner matcher used to
+	// resolve the query's subjects and assemble their DETERMINED identifiers/claims in the
+	// pipeline. ownerSubject is a representative configured owner name for first-person framing.
+	// nil/"" leaves the layer off (the handler then behaves exactly as before).
+	factsDB          *store.DB
+	ownerMatcher     *identity.Matcher
+	ownerSubject     string
+	chatTokenCap     int           // monthly chat-token cap; 0 = unlimited (local default)
 	chatTokenCapDay  int           // daily chat-token cap; 0 = unlimited (the fast fuse)
 	rpmLimiter       *rateLimiter  // per-tenant request-rate fuse; nil = off
 	chatSem          chan struct{} // per-tenant concurrency cap; nil = off
@@ -264,6 +273,24 @@ func (h *RAGChatHandler) SetToolRegistry(registry *tools.Registry) {
 // POST /actions/{action_id}/confirm.
 func (h *RAGChatHandler) SetPendingActionStore(p *tools.PendingActionStore) {
 	h.pendingActions = p
+}
+
+// SetDeterminedFacts wires the authoritative determined-facts layer. On each turn the handler
+// resolves the query's subject(s) deterministically — the owner (first-person framing) plus the
+// single named subject the query mentions — assembles their DETERMINED identifiers/claims from
+// the WP36.a dossier bricks, and injects them as the VERIFIED layer so the LLM voices factual
+// identifier VALUES from there, never from raw untrusted excerpts. db + owner must both be
+// non-nil to enable it. ownerSubject is derived from ownerNames (the first configured name the
+// matcher recognizes as the owner); empty simply omits the first-person subject.
+func (h *RAGChatHandler) SetDeterminedFacts(db *store.DB, owner *identity.Matcher, ownerNames []string) {
+	h.factsDB = db
+	h.ownerMatcher = owner
+	for _, n := range ownerNames {
+		if owner.IsOwnerNorm(contradict.NormKey(n)) {
+			h.ownerSubject = n
+			break
+		}
+	}
 }
 
 // baseFormatGuidance is the persona/format hint prepended to every chat turn.
@@ -672,6 +699,26 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			positions = text
 		}
 		messages = injectBrainContext(messages, decisions, positions, synopsis, time.Now().UTC().Format("2006-01-02"), contradictions)
+	}
+
+	// Authoritative determined-facts layer (CORE thesis — "take the determined data where it
+	// is"). Resolve the query's subjects DETERMINISTICALLY (the owner for first-person framing +
+	// the single named subject the query mentions — reused resolution, NO classifier, NO keyword
+	// list), assemble their DETERMINED identifiers/claims from the WP36.a dossier IN THE PIPELINE,
+	// and inject them as the VERIFIED fact layer. The value-source rule (see determinedFactsRule)
+	// then binds identifier VALUES to this layer only — raw excerpts stay untrusted prose. This is
+	// ADDITIVE: it never removes retrieval, so non-identifier Q&A is unchanged. Best-effort: any
+	// error is logged and the turn proceeds without the layer.
+	if h.factsDB != nil && h.ownerMatcher != nil && latestUserQuery != "" {
+		fctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		facts, err := retrieval.AssembleQueryFacts(fctx, h.factsDB, latestUserQuery, time.Now().UTC(), h.ownerMatcher, h.ownerSubject)
+		cancel()
+		if err != nil {
+			h.logger.Debug().Err(err).Msg("determined-facts assembly failed")
+		}
+		if len(facts) > 0 {
+			messages = injectDeterminedFacts(messages, facts)
+		}
 	}
 
 	// Server-side ceiling on client-supplied MaxTokens: clip only pathological
@@ -1289,6 +1336,104 @@ func injectMemoriesIntoSystem(messages []llm.Message, memories []tools.MemoryRes
 		out = append(out, messages...)
 	}
 	return out
+}
+
+// determinedFactsRule is the value-source rule that makes the "Verified facts" block
+// authoritative. It is IDENTIFIER-scoped on purpose: it binds reference/identifier VALUES to
+// the deterministic layer (closing the hole where the model lifted a mislabeled number off a
+// document) WITHOUT touching ordinary Q&A — amounts, quotes, dates of events and summaries are
+// still drawn from the retrieved content, so non-identifier answers are unchanged.
+const determinedFactsRule = "These values are DETERMINED by Hygur's deterministic resolver — not read from documents. " +
+	"Identifier and reference values that belong to a person or organization — a national or registration " +
+	"number, a VAT or enterprise number, an IBAN, a DUNS, a SIRET or EIN, a client or reference number, and " +
+	"the like — must come ONLY from this \"Verified facts\" block, matched to the user's wording by meaning " +
+	"(for example \"TVA\"/\"VAT\" is the enterprise/VAT number). Cite the listed source(s).\n" +
+	"You must NEVER state such a number that is not in this block — not one you find in a retrieved document, " +
+	"a search result, an email or an attachment. Documents reprint other parties' references and mislabel " +
+	"numbers, so any identifier read out of retrieved content is untrustworthy. If the identifier the user " +
+	"asks for is not listed above: say plainly you don't have a verified value for it, do NOT substitute a " +
+	"different identifier from the documents, and do NOT read or quote any number out of the retrieved content " +
+	"— at most name the source document so the user can check it themselves.\n" +
+	"This rule is about identifiers and reference numbers only; ordinary prose, monetary amounts, quotes, " +
+	"dates of events and summaries are still drawn from the retrieved content as usual."
+
+// injectDeterminedFacts prepends the authoritative "Verified facts" block (the query's
+// subjects' determined identifiers + active claims) plus the value-source rule to the system
+// prompt. Values are shown from the deterministic resolver; the LLM only voices them. Merges
+// into an existing system message (same pattern as injectMemoriesIntoSystem). No-op on empty.
+func injectDeterminedFacts(messages []llm.Message, subjects []retrieval.DeterminedFacts) []llm.Message {
+	if len(subjects) == 0 {
+		return messages
+	}
+	var b strings.Builder
+	b.WriteString("## Verified facts (authoritative — the ONLY source for identifier values)\n\n")
+	b.WriteString(determinedFactsRule)
+	b.WriteString("\n")
+	for _, s := range subjects {
+		if !s.HasFacts() {
+			continue
+		}
+		header := s.Subject.Norm
+		if s.IsOwner {
+			header += " — the user (owner)"
+		}
+		b.WriteString("\n### ")
+		b.WriteString(header)
+		b.WriteString("\n")
+		for _, id := range s.Identity {
+			val := id.Raw
+			if strings.TrimSpace(val) == "" {
+				val = id.Value
+			}
+			b.WriteString(fmt.Sprintf("- %s: %s (%s confidence", id.Label, val, id.Tier))
+			if titles := sourceTitles(id.Sources); titles != "" {
+				b.WriteString("; sources: ")
+				b.WriteString(titles)
+			}
+			b.WriteString(")\n")
+		}
+		for _, c := range s.Claims {
+			b.WriteString(fmt.Sprintf("- %s: %s (%s, %d source(s))\n", c.Attribute, c.Value, c.State, c.Corroboration))
+		}
+	}
+	factsBlock := strings.TrimRight(b.String(), "\n")
+
+	hasSystem := len(messages) > 0 && messages[0].Role == "system"
+	out := make([]llm.Message, 0, len(messages)+1)
+	if hasSystem {
+		out = append(out, llm.Message{
+			Role:    "system",
+			Content: messages[0].Content + "\n\n" + factsBlock,
+		})
+		out = append(out, messages[1:]...)
+	} else {
+		out = append(out, llm.Message{Role: "system", Content: factsBlock})
+		out = append(out, messages...)
+	}
+	return out
+}
+
+// sourceTitles renders up to three source titles for a determined identifier, so the model
+// can cite where the value comes from. Empty titles fall back to the content id.
+func sourceTitles(sources []fact.Source) string {
+	if len(sources) == 0 {
+		return ""
+	}
+	const max = 3
+	parts := make([]string, 0, max)
+	for _, s := range sources {
+		if len(parts) >= max {
+			break
+		}
+		t := strings.TrimSpace(s.Title)
+		if t == "" {
+			t = s.ContentID
+		}
+		if t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // brainContextCharBudget backstops the size of the injected brain block (~700 tokens
