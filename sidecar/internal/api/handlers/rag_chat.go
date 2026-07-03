@@ -1042,6 +1042,16 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// (cut-LLM-safe). On decline, the render is an honest "no verified value".
 				if evt, ok := determinedAnswerFromToolResult(tc.Function.Name, result); ok {
 					_ = writeSSE(evt)
+					// The engine determined this value via the TOOL (the recall-floor path):
+					// it is verified even when the determined-facts LAYER's type-discovery does
+					// NOT surface it (e.g. a DUNS the lookup resolves but AssembleQueryFacts does
+					// not enumerate). Union the tool verdict into the guard's membership set so a
+					// tool-verified value voiced in the prose is ALLOWED, not declined. evt.Value
+					// is set ONLY for tier high/med (empty on a "none" decline), so this adds
+					// verified values only — genuinely-unverified values still fail closed.
+					if evt.Value != "" {
+						determinedValues = addToolDeterminedValue(determinedValues, evt.Value)
+					}
 				}
 				// search_knowledge_base also doubles as a `rag_context` event so
 				// the existing UI keeps rendering the sources panel without

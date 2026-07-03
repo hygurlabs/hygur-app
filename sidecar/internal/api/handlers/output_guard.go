@@ -35,6 +35,26 @@ func determinedValueSet(subjects []retrieval.DeterminedFacts) map[string]bool {
 	return set
 }
 
+// addToolDeterminedValue unions an engine-verified value produced by the lookup_identifier TOOL
+// (rendered as a determined_answer card, tier high/med) into the guard's membership set. The value
+// is normalized exactly like determinedValueSet normalizes the LAYER values (identifier.Normalize),
+// so a cosmetically-formatted form in the prose still matches. It initializes the set when nil —
+// the determined-facts LAYER may have surfaced nothing for this query even though the TOOL resolved
+// a value (the recall-floor path) — and ignores empty/undecodable values. This ONLY ADDS to the
+// verified set; it never weakens the guard, so a value the engine determined by NEITHER path stays
+// unverified and still declines.
+func addToolDeterminedValue(set map[string]bool, value string) map[string]bool {
+	n := identifier.Normalize(value)
+	if n == "" {
+		return set
+	}
+	if set == nil {
+		set = make(map[string]bool)
+	}
+	set[n] = true
+	return set
+}
+
 // guardAnswer is the deterministic OUTPUT guard (the P=0 backstop). After the LLM produces the
 // answer text, it deterministically scans for identifier-grade values by REUSING the extractor's
 // value-grade detector (labelfact.IdentifierGradeValues — a value-SHAPE test: ≥9-digit run, IBAN

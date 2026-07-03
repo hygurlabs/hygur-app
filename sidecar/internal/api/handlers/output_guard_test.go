@@ -113,6 +113,37 @@ func TestGuardAnswer_KeepsVerifiedValue(t *testing.T) {
 	}
 }
 
+// DUNS CASE — the regression fixture (feat/dream-phase-ab). The founder's DUNS is engine-determined
+// by the lookup_identifier TOOL and rendered as a determined_answer card (tier high) via the
+// recall-floor path — but the determined-facts LAYER's type-discovery does NOT surface it, so it is
+// ABSENT from the AssembleQueryFacts set. Before the fix the guard trusted the LAYER set only, saw
+// the CORRECT DUNS as "unverified", and wrongly declined « mon DUNS ». The guard's set must UNION
+// the TOOL's verified value → the DUNS voiced in the prose is ALLOWED. This is the value the engine
+// determined via the TOOL path; a value determined by NEITHER path (the phone case) still declines.
+func TestGuardAnswer_AllowsToolDeterminedValueAbsentFromLayer(t *testing.T) {
+	const founderDUNS = "373021488" // 9-digit identifier-grade value, engine-determined by the TOOL
+
+	// The LAYER set holds only the VAT (1021…). The DUNS is NOT in it — the type-discovery gap
+	// that caused the regression. This precondition documents the raté: layer-only → decline.
+	layer := determinedValueSet(ownerVATFacts())
+	answer := "Your DUNS number is 373021488 (from the D&B record)."
+	if out, declined := guardAnswer(answer, layer); !declined || out != unverifiedIdentifierDecline {
+		t.Fatalf("precondition: the layer-only set must NOT contain the tool DUNS "+
+			"(declined=%v, out=%q) — the bug this fixture pins", declined, out)
+	}
+
+	// THE FIX: union the TOOL's verdict value (as the handler does at determined_answer emission)
+	// into the guard set. The DUNS is now verified → the guard must ALLOW the prose unchanged.
+	union := addToolDeterminedValue(layer, founderDUNS)
+	out, declined := guardAnswer(answer, union)
+	if declined {
+		t.Errorf("tool-determined DUNS wrongly declined: %q → %q", answer, out)
+	}
+	if out != answer {
+		t.Errorf("tool-determined answer altered: %q → %q", answer, out)
+	}
+}
+
 // CALIBRATION — legitimate non-identifier numbers must survive untouched: a monetary amount, a
 // date, a count, a percentage, a year. All sit below the value-grade floor (≥9 digits / IBAN /
 // code), so the guard leaves them alone even with an empty determined set.
