@@ -180,6 +180,49 @@ func (d *DB) IdentifierTypesForPersons(ctx context.Context, norms []string) ([]s
 	return out, rows.Err()
 }
 
+// IdentifierValuesForPersonsOfType returns the distinct identifier VALUE norms of a given type
+// (national_number, duns…) that any of the given person/org norms is proximity-linked to. This
+// is the recall floor for the deterministic lookup: a proximity link is the strongest ownership
+// signal we have, so a value linked here MUST be considered a candidate even when — for a highly
+// connected subject — that value is a single-document identifier crowded out of the subject's
+// top-K Hebbian neighbors. Precise (no ranking, no cutoff); mirrors IdentifierTypesForPersons.
+func (d *DB) IdentifierValuesForPersonsOfType(ctx context.Context, norms []string, idType string) ([]string, error) {
+	if strings.TrimSpace(idType) == "" {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	ph := make([]string, 0, len(norms))
+	args := make([]any, 0, len(norms)+1)
+	for _, n := range norms {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		ph = append(ph, "?")
+		args = append(args, n)
+	}
+	if len(ph) == 0 {
+		return nil, nil
+	}
+	args = append(args, idType)
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT id_norm FROM entity_identifier_link
+		 WHERE person_norm IN (`+strings.Join(ph, ",")+`) AND id_type = ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // PersonNormsContainingTokens returns distinct ner_person entity norms that contain ANY of the
 // given whole (space-delimited) tokens — a bounded candidate set for owner recognition, which
 // the caller narrows with an identity.Matcher. Word-boundary matched (space-padding), so 'l'

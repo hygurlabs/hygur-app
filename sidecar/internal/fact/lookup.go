@@ -67,6 +67,7 @@ type Store interface {
 	HebbianNeighborsWeighted(ctx context.Context, norm string, now time.Time, minWeight float64, max int) ([]store.Neighbor, error)
 	EntityDominantTypes(ctx context.Context, norms []string) (map[string]string, error)
 	IdentifierLinksForID(ctx context.Context, idNorm string) ([]store.IdentifierLink, error)
+	IdentifierValuesForPersonsOfType(ctx context.Context, norms []string, idType string) ([]string, error)
 	SearchByIdentifier(ctx context.Context, key string, limit int) ([]string, error)
 	GetKnowledgeItem(ctx context.Context, contentID string) (*store.KnowledgeItem, error)
 	NationalNumbersByPersons(ctx context.Context, norms []string) (map[string][]string, error)
@@ -181,6 +182,28 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 					}
 				}
 			}
+		}
+	}
+
+	// Recall floor. Candidate enumeration above walks the subject's TOP-K Hebbian neighbors, so a
+	// rare, single-document identifier (e.g. a DUNS printed once, in one mail) is crowded out of the
+	// neighbor list for a highly-connected subject (the owner has hundreds of neighbors) and would
+	// never be scored — a silent miss that grows with the subject's centrality. But a proximity link
+	// is the STRONGEST ownership signal we have; a value proximity-linked to a pooled subject norm is
+	// authoritative and must be a candidate regardless of neighbor rank. Seed those directly (precise,
+	// uncapped). This only ADDS candidates that are already proximity-confident — every downstream
+	// gate (ambiguity, uniqueness/ownerCount, owner-dominance) is unchanged and still fails closed.
+	if seed, e := s.IdentifierValuesForPersonsOfType(ctx, norms, idType); e == nil {
+		for _, v := range seed {
+			if v == "" {
+				continue
+			}
+			ci := cands[v]
+			if ci == nil {
+				ci = &cinfo{}
+				cands[v] = ci
+			}
+			ci.prox = true // linked to a pooled subject norm by construction of the query
 		}
 	}
 	res.Candidates = len(cands)

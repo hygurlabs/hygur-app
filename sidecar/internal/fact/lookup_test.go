@@ -31,6 +31,23 @@ func (f *fakeStore) EntityDominantTypes(_ context.Context, _ []string) (map[stri
 func (f *fakeStore) IdentifierLinksForID(_ context.Context, id string) ([]store.IdentifierLink, error) {
 	return f.links[id], nil
 }
+func (f *fakeStore) IdentifierValuesForPersonsOfType(_ context.Context, norms []string, idType string) ([]string, error) {
+	in := map[string]bool{}
+	for _, n := range norms {
+		in[n] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	for idNorm, links := range f.links {
+		for _, l := range links {
+			if l.IDType == idType && in[l.PersonNorm] && !seen[idNorm] {
+				seen[idNorm] = true
+				out = append(out, idNorm)
+			}
+		}
+	}
+	return out, nil
+}
 func (f *fakeStore) SearchByIdentifier(_ context.Context, key string, _ int) ([]string, error) {
 	return f.docs[key], nil
 }
@@ -451,5 +468,43 @@ func TestLookupIdentifier_OwnerCrossVariantProximity(t *testing.T) {
 	}
 	if r.Tier != TierHigh {
 		t.Errorf("owner cross-variant proximity: tier=%q (conf %.2f, reason %q), want high", r.Tier, r.Confidence, r.Reason)
+	}
+}
+
+// TestLookupIdentifier_RareIdentifierRecallFloor reproduces the founder-DUNS regression: a
+// single-document identifier (a DUNS printed once, in one Apple mail) that is proximity-linked
+// to a highly-connected subject is crowded OUT of that subject's top-K Hebbian neighbors, so the
+// old candidate enumeration (neighbors only) missed it and declined with candidates:0. The
+// proximity link is authoritative, so the value must still be surfaced — hedged at medium
+// (family-B label fact, no checksum → never affirmed high). Values below are fictional.
+func TestLookupIdentifier_RareIdentifierRecallFloor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	// The subject's top neighbors are its frequent correspondents — the rare DUNS value is NOT
+	// among them (the bug). It is only reachable via the proximity link.
+	f := &fakeStore{
+		neighbors: []store.Neighbor{
+			{Norm: "some org", Weight: 0.9},
+			{Norm: "a contact", Weight: 0.8},
+		},
+		types: map[string]string{"some org": "ner_org", "a contact": "ner_person"},
+		links: map[string][]store.IdentifierLink{
+			"824190537": {{PersonNorm: "denis petit", IDNorm: "824190537", IDType: "duns", Prox: 1}},
+		},
+		docs: map[string][]string{"824190537": {"apple-mail"}},
+	}
+	r, err := LookupIdentifier(ctx, f, "denis petit", "duns", now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Candidates == 0 {
+		t.Fatalf("recall floor: DUNS is proximity-linked but candidates=0 (crowded out of neighbors)")
+	}
+	if r.Value != "824190537" {
+		t.Errorf("value = %q, want 824190537 (the proximity-linked DUNS)", r.Value)
+	}
+	if r.Tier != TierMed {
+		t.Errorf("tier = %q (conf %.2f), want medium (label fact, hedged)", r.Tier, r.Confidence)
 	}
 }
