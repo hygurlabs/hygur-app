@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/fact"
 	"github.com/hygur/sidecar/internal/identity"
 	"github.com/hygur/sidecar/internal/store"
 )
@@ -65,11 +66,36 @@ func neighborRank(n EngramNeighbor) float64 {
 
 // Engram is a subject's consolidated dossier.
 type Engram struct {
-	Subject        EngramSubject    `json:"subject"`
-	Network        []EngramNeighbor `json:"network"`
-	Timeline       []EngramItem     `json:"timeline"`
-	Decisions      []EngramItem     `json:"decisions"`      // standing/superseded decisions in the set
-	Contradictions []EngramItem     `json:"contradictions"` // items carrying an open contradiction
+	Subject        EngramSubject      `json:"subject"`
+	Identity       []EngramIdentifier `json:"identity,omitempty"` // typed identifiers, tier≥med (WP36.a)
+	Claims         []EngramClaim      `json:"claims,omitempty"`   // active beliefs aggregated by attribute (WP36.a)
+	Network        []EngramNeighbor   `json:"network"`
+	Timeline       []EngramItem       `json:"timeline"`
+	Decisions      []EngramItem       `json:"decisions"`      // standing/superseded decisions in the set
+	Contradictions []EngramItem       `json:"contradictions"` // items carrying an open contradiction
+}
+
+// EngramIdentifier is one typed identifier the subject carries (national number, VAT,
+// DUNS…), scored deterministically via fact.LookupIdentifier and kept only at tier≥med.
+// Label is the id_* type stripped to a human phrase ("national number").
+type EngramIdentifier struct {
+	Type    string        `json:"type"`  // canonical id type (national_number)
+	Label   string        `json:"label"` // clean display label ("national number")
+	Value   string        `json:"value"`
+	Raw     string        `json:"raw,omitempty"`
+	Tier    string        `json:"tier"` // high | medium
+	Sources []fact.Source `json:"sources,omitempty"`
+}
+
+// EngramClaim is an active belief about the subject, aggregated across its direct items
+// by attribute: the dominant value, how many sources corroborate it, and whether other
+// sources assert a divergent value (contested).
+type EngramClaim struct {
+	Attribute     string   `json:"attribute"`     // display attribute (as first written)
+	Value         string   `json:"value"`         // dominant value
+	State         string   `json:"state"`         // corroborated | contested
+	Corroboration int      `json:"corroboration"` // distinct sources for the dominant value
+	Sources       []string `json:"sources"`       // content_ids carrying the dominant value
 }
 
 // EngramSubject identifies the dossier's subject and its dominant kind.
@@ -84,6 +110,7 @@ type EngramNeighbor struct {
 	Norm   string  `json:"norm"`
 	Weight float64 `json:"weight"`
 	Type   string  `json:"type,omitempty"`
+	Label  string  `json:"label,omitempty"` // Type as a clean phrase — id_* stripped ("national number")
 }
 
 // EngramItem is one memory in a subject's timeline, annotated with what makes it
@@ -153,13 +180,22 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	if err != nil {
 		return nil, err
 	}
+	// The subject's identifier types are its id_* graph neighbors. Collected from the
+	// dominant types of ALL raw neighbors — a numeric identifier value reads as "junk"
+	// to the subject filter below, so this must run before that filter drops it.
+	idTypeSet := map[string]bool{}
+	for _, t := range nTypes {
+		if strings.HasPrefix(t, "id_") {
+			idTypeSet[strings.TrimPrefix(t, "id_")] = true
+		}
+	}
 	network := make([]EngramNeighbor, 0, len(rawNetwork))
 	for _, n := range rawNetwork {
 		t := nTypes[n.Norm]
 		if t == "" || store.IsJunkSubjectNorm(n.Norm) {
 			continue // claim-only generic, or junk (date/email/function word)
 		}
-		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: t})
+		network = append(network, EngramNeighbor{Norm: n.Norm, Weight: n.Weight, Type: t, Label: cleanTypeLabel(t)})
 	}
 	sort.SliceStable(network, func(i, j int) bool {
 		return neighborRank(network[i]) > neighborRank(network[j])
@@ -243,10 +279,20 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 		return nil, err
 	}
 
+	// Direct-item claims accumulate here for the aggregated-belief block (WP36.a).
+	var directClaims []contradict.Claim
 	build := func(p pend) *EngramItem {
 		it, gerr := db.GetKnowledgeItem(ctx, p.id)
 		if gerr != nil || it == nil {
 			return nil
+		}
+		if p.order == 1 {
+			for _, c := range contradict.ClaimsFromMetadata(it.Metadata) {
+				if c.SourceID == "" {
+					c.SourceID = p.id
+				}
+				directClaims = append(directClaims, c)
+			}
 		}
 		// Canonical content date is the honest timeline axis; a missing one is an
 		// ingestion gap we surface rather than paper over with the ingestion time.
@@ -327,13 +373,170 @@ func AssembleEngram(ctx context.Context, db *store.DB, subject string, now time.
 	if err != nil {
 		return nil, err
 	}
+
+	// Identity: the subject's typed identifiers, scored deterministically and kept only
+	// at tier≥med (WP36.a). Assembly, not new computation — id types come from the subject's
+	// proximity-linked identifiers (precise) unioned with its id_* graph neighbors, and each
+	// value is resolved by fact.LookupIdentifier's existing scorer.
+	linkTypes, err := db.IdentifierTypesForPersons(ctx, subjectNorms)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range linkTypes {
+		idTypeSet[t] = true
+	}
+	identifiers, err := assembleIdentifiers(ctx, db, norm, idTypeSet, now, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	// Beliefs: active claims about the subject, aggregated by attribute with corroboration/state.
+	claims := aggregateClaims(directClaims, subjectNorms)
+
 	return &Engram{
 		Subject:        EngramSubject{Norm: norm, Type: typ},
+		Identity:       identifiers,
+		Claims:         claims,
 		Network:        network,
 		Timeline:       timeline,
 		Decisions:      decisions,
 		Contradictions: contradictions,
 	}, nil
+}
+
+// cleanTypeLabel turns an id_* dominant type into a human phrase for display
+// ("id_national_number" → "national number"); non-id types pass through unchanged.
+func cleanTypeLabel(t string) string {
+	if strings.HasPrefix(t, "id_") {
+		return strings.ReplaceAll(strings.TrimPrefix(t, "id_"), "_", " ")
+	}
+	return t
+}
+
+// assembleIdentifiers enumerates the subject's typed-identifier attributes (id_* in the
+// entity index, unioned across the owner's variant norms) and scores each one via the
+// existing fact.LookupIdentifier. Only confident results (tier high/medium) are kept, so
+// the dossier never affirms an ambiguous or declined value. Read-only assembly.
+func assembleIdentifiers(ctx context.Context, db *store.DB, norm string, idTypes map[string]bool, now time.Time, owner *identity.Matcher) ([]EngramIdentifier, error) {
+	if len(idTypes) == 0 {
+		return nil, nil
+	}
+	ordered := make([]string, 0, len(idTypes))
+	for t := range idTypes {
+		ordered = append(ordered, t)
+	}
+	sort.Strings(ordered) // deterministic order
+	out := make([]EngramIdentifier, 0, len(ordered))
+	for _, idType := range ordered {
+		res, err := fact.LookupIdentifier(ctx, db, norm, idType, now, owner)
+		if err != nil {
+			return nil, err
+		}
+		if res.Tier != fact.TierHigh && res.Tier != fact.TierMed {
+			continue // decline: never surface an unreliable identifier
+		}
+		out = append(out, EngramIdentifier{
+			Type:    idType,
+			Label:   cleanTypeLabel("id_" + idType),
+			Value:   res.Value,
+			Raw:     res.Raw,
+			Tier:    string(res.Tier),
+			Sources: res.Sources,
+		})
+	}
+	return out, nil
+}
+
+// aggregateClaims groups the subject's direct-item claims by attribute into active beliefs.
+// Within an attribute, values are grouped by norm; the value backed by the most distinct
+// sources wins (dominant). A belief is "contested" when a different value is asserted by a
+// separate source, else "corroborated". Only affirmed claims about one of the subject's own
+// norms count. Deterministic ordering: corroboration desc, then attribute.
+func aggregateClaims(claims []contradict.Claim, subjectNorms []string) []EngramClaim {
+	if len(claims) == 0 {
+		return nil
+	}
+	subj := map[string]bool{}
+	for _, n := range subjectNorms {
+		subj[n] = true
+	}
+	type valGroup struct {
+		display string
+		sources map[string]bool
+	}
+	type attrGroup struct {
+		display string
+		values  map[string]*valGroup // value-norm → sources
+	}
+	byAttr := map[string]*attrGroup{}
+	for _, c := range claims {
+		if c.Polarity == "negate" || c.Attribute == "" || c.Value == "" {
+			continue
+		}
+		if !subj[contradict.NormKey(c.Entity)] {
+			continue
+		}
+		ak := contradict.NormKey(c.Attribute)
+		ag := byAttr[ak]
+		if ag == nil {
+			ag = &attrGroup{display: strings.TrimSpace(c.Attribute), values: map[string]*valGroup{}}
+			byAttr[ak] = ag
+		}
+		vk := contradict.NormKey(c.Value)
+		vg := ag.values[vk]
+		if vg == nil {
+			vg = &valGroup{display: strings.TrimSpace(c.Value), sources: map[string]bool{}}
+			ag.values[vk] = vg
+		}
+		src := c.SourceID
+		if src == "" {
+			src = c.Quote // last-resort distinct key; never empty in practice
+		}
+		vg.sources[src] = true
+	}
+	out := make([]EngramClaim, 0, len(byAttr))
+	for _, ag := range byAttr {
+		var best *valGroup
+		contested := false
+		distinctValues := 0
+		for _, vg := range ag.values {
+			if len(vg.sources) > 0 {
+				distinctValues++
+			}
+			if best == nil || len(vg.sources) > len(best.sources) {
+				best = vg
+			}
+		}
+		if best == nil {
+			continue
+		}
+		if distinctValues > 1 {
+			contested = true
+		}
+		srcs := make([]string, 0, len(best.sources))
+		for s := range best.sources {
+			srcs = append(srcs, s)
+		}
+		sort.Strings(srcs)
+		state := "corroborated"
+		if contested {
+			state = "contested"
+		}
+		out = append(out, EngramClaim{
+			Attribute:     ag.display,
+			Value:         best.display,
+			State:         state,
+			Corroboration: len(best.sources),
+			Sources:       srcs,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Corroboration != out[j].Corroboration {
+			return out[i].Corroboration > out[j].Corroboration
+		}
+		return out[i].Attribute < out[j].Attribute
+	})
+	return out
 }
 
 // unionNeighbors returns the Hebbian neighbors of one or more subject norms. For a single

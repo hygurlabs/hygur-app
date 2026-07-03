@@ -62,6 +62,49 @@ func TestTopSubjects(t *testing.T) {
 	}
 }
 
+// TopSubjects surfaces each subject's most-recent activity (MAX asserted_at) and a
+// representative raw surface form, so the My World list can sort by recency and filter
+// on the display name (WP36.b).
+func TestTopSubjectsRecency(t *testing.T) {
+	db, err := NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	older := now.Add(-72 * time.Hour).Format(time.RFC3339)
+	newer := now.Add(-2 * time.Hour).Format(time.RFC3339)
+
+	add := func(cid string, ms ...EntityMention) {
+		if err := db.InsertKnowledgeItem(ctx, &KnowledgeItem{
+			ContentID: cid, SourceType: SourceTypeNote, Title: cid,
+			NormalizedText: "x", VersionID: "v1", CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", cid, err)
+		}
+		if err := db.ReplaceEntityMentions(ctx, cid, ms); err != nil {
+			t.Fatalf("mentions %s: %v", cid, err)
+		}
+	}
+	add("i1", EntityMention{EntityNorm: "acme", EntityRaw: "Acme", Attribute: "ner_org", AssertedAt: older})
+	add("i2", EntityMention{EntityNorm: "acme", EntityRaw: "Acme Corp", Attribute: "ner_org", AssertedAt: newer})
+
+	subs, err := db.TopSubjects(ctx, 10, nil)
+	if err != nil {
+		t.Fatalf("TopSubjects: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("want 1 subject, got %d: %+v", len(subs), subs)
+	}
+	if subs[0].LastActivity != newer {
+		t.Errorf("last_activity = %q, want the most recent %q", subs[0].LastActivity, newer)
+	}
+	if subs[0].Raw == "" {
+		t.Errorf("raw surface form should be populated, got empty")
+	}
+}
+
 func TestIsJunkSubjectNorm(t *testing.T) {
 	for _, n := range []string{
 		"le", "au", "ce", "les", "the", "une", "madame", "bonjour",

@@ -407,8 +407,10 @@ export interface Briefing {
 /** A discovered subject in the Engram index (GET /engrams). */
 export interface SubjectStat {
   norm: string;
+  raw?: string; // a representative surface form, for client-side search
   type?: string; // person | org | project | topic
   mentions: number;
+  last_activity?: string; // MAX(asserted_at) across mentions — recency sort
 }
 
 /** One node of a subject's Engram network. */
@@ -416,6 +418,32 @@ export interface EngramNeighbor {
   norm: string;
   weight: number;
   type?: string;
+  label?: string; // clean display label — id_* stripped ("national number")
+}
+
+/** A source document carrying an identifier value or claim. */
+export interface EngramSource {
+  content_id: string;
+  title: string;
+}
+
+/** One typed identifier the subject carries (WP36.a), tier≥med. */
+export interface EngramIdentifier {
+  type: string; // canonical id type (national_number)
+  label: string; // clean display label ("national number")
+  value: string;
+  raw?: string;
+  tier: string; // high | medium
+  sources?: EngramSource[];
+}
+
+/** One active belief about the subject, aggregated by attribute (WP36.a). */
+export interface EngramClaim {
+  attribute: string;
+  value: string;
+  state: string; // corroborated | contested
+  corroboration: number;
+  sources: string[]; // content_ids
 }
 
 /** One memory in a subject's Engram timeline. */
@@ -437,6 +465,8 @@ export interface EngramItem {
 /** A subject's consolidated Engram dossier (GET /engrams/{norm}). */
 export interface Engram {
   subject: { norm: string; type: string };
+  identity?: EngramIdentifier[];
+  claims?: EngramClaim[];
   network: EngramNeighbor[];
   timeline: EngramItem[];
   decisions: EngramItem[];

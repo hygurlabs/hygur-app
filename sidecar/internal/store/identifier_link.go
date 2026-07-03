@@ -142,6 +142,44 @@ func (d *DB) NationalNumbersByPersons(ctx context.Context, norms []string) (map[
 	return out, rows.Err()
 }
 
+// IdentifierTypesForPersons returns the distinct identifier types (national_number,
+// enterprise_number, duns…) that any of the given person/org norms is proximity-linked
+// to. This is the precise source for a dossier's Identity block: the id types a subject
+// actually carries, independent of whether the (numeric, junk-looking) identifier value
+// ranks inside the subject's top network neighbors.
+func (d *DB) IdentifierTypesForPersons(ctx context.Context, norms []string) ([]string, error) {
+	seen := map[string]bool{}
+	ph := make([]string, 0, len(norms))
+	args := make([]any, 0, len(norms))
+	for _, n := range norms {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		ph = append(ph, "?")
+		args = append(args, n)
+	}
+	if len(ph) == 0 {
+		return nil, nil
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT id_type FROM entity_identifier_link
+		 WHERE person_norm IN (`+strings.Join(ph, ",")+`) AND id_type <> ''`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // PersonNormsContainingTokens returns distinct ner_person entity norms that contain ANY of the
 // given whole (space-delimited) tokens — a bounded candidate set for owner recognition, which
 // the caller narrows with an identity.Matcher. Word-boundary matched (space-padding), so 'l'

@@ -14,6 +14,7 @@ import {
   Newspaper,
   Brain,
   Network,
+  Globe,
   Plug,
   LogOut,
   Settings as SettingsIcon,
@@ -45,6 +46,8 @@ const NAV: NavItem[] = [
   { to: "/follow-up", label: "Follow-up", icon: GitCompareArrows },
   // Mind — the consolidated psyché hub (Decisions, Contradictions, Memory, Chronicle).
   { to: "/mind", label: "Mind", icon: Brain },
+  // My World — the canonical entity dossiers (identity, beliefs, frictions, history).
+  { to: "/world", label: "My World", icon: Globe },
   // Engrams — the discovered-subject dossiers (network + timeline + live/dead).
   { to: "/engrams", label: "Engrams", icon: Network },
 ];

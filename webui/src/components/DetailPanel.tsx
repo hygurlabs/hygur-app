@@ -6,24 +6,53 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { X, MessageSquareText, ListPlus, Reply, Copy, Check } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  X,
+  MessageSquareText,
+  ListPlus,
+  Reply,
+  Copy,
+  Check,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ItemMeta } from "./ItemMeta";
+import { StatusBadge, type StatusVariant } from "./ui";
 import { api } from "../lib/api";
 import { useToast } from "../lib/toast";
+
+/** The item's psyché facets (WP36.c, R4) — what the dossier already knows about the
+ *  item: which subject it belongs to, its thread-closure/contradiction/decision state,
+ *  and whether it reached the subject directly (order 1) or via a neighbor (order 2). */
+export interface DetailFacets {
+  subject?: string;
+  closed?: boolean;
+  contradicted?: boolean;
+  decisionStatus?: string;
+  order?: number;
+  viaNeighbor?: string;
+}
 
 export interface DetailData {
   title: string;
   meta: string[];
+  /** Item body. May be empty when opened from a dossier — the panel then lazy-loads
+   *  the full text from GET /knowledge/{id} using contentId. */
   body: string;
   /** When set, the panel shows "Ask in chat" + "Create task" (and "Draft reply"
    *  for mail) and loads the item's project/tags. */
   contentId?: string;
   /** Item source type — enables the mail-only "Draft reply" action. */
   sourceType?: string;
+  /** Psyché facets from the opening dossier (WP36.c). */
+  facets?: DetailFacets;
+  /** Timeline prev/next navigation (WP36.c) — undefined disables the control. */
+  onPrev?: () => void;
+  onNext?: () => void;
   /** Optional actions rendered in the panel header (e.g. Edit, Delete). */
   actions?: ReactNode;
 }
@@ -145,6 +174,26 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {data.actions}
+                {(data.onPrev || data.onNext) && (
+                  <div className="mr-1 flex items-center">
+                    <button
+                      onClick={data.onPrev}
+                      disabled={!data.onPrev}
+                      aria-label="Previous item"
+                      className="rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-30"
+                    >
+                      <ChevronUp size={18} strokeWidth={1.75} />
+                    </button>
+                    <button
+                      onClick={data.onNext}
+                      disabled={!data.onNext}
+                      aria-label="Next item"
+                      className="rounded-md p-1 text-muted transition-colors hover:bg-surface2 hover:text-text disabled:opacity-30"
+                    >
+                      <ChevronDown size={18} strokeWidth={1.75} />
+                    </button>
+                  </div>
+                )}
                 <button
                   onClick={close}
                   aria-label="Close"
@@ -193,6 +242,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
               </div>
             )}
             <div className="overflow-auto px-5 py-5">
+              {data.facets && <PsycheFacets facets={data.facets} contentId={data.contentId} />}
               {data.contentId && <ItemMeta contentId={data.contentId} />}
 
               {draft !== null && (
@@ -223,15 +273,107 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
                 </div>
               )}
 
-              <div className="prose-answer text-[14px] leading-relaxed text-text">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {data.body || "_(empty)_"}
-                </ReactMarkdown>
-              </div>
+              <DetailBody body={data.body} contentId={data.contentId} />
             </div>
           </>
         )}
       </aside>
     </OpenContext.Provider>
+  );
+}
+
+/** Item body: renders the passed text, or lazy-loads the full text via GET
+ *  /knowledge/{id} when opened from a dossier with no body in hand. */
+function DetailBody({ body, contentId }: { body: string; contentId?: string }) {
+  const need = !body && !!contentId;
+  const { data, isLoading } = useQuery({
+    queryKey: ["kb-item", contentId],
+    queryFn: () => api.knowledgeItem(contentId as string),
+    enabled: need,
+  });
+  const text = body || data?.normalized_text || "";
+  if (need && isLoading && !text) {
+    return <p className="text-[13px] text-muted">Loading…</p>;
+  }
+  return (
+    <div className="prose-answer text-[14px] leading-relaxed text-text">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text || "_(empty)_"}</ReactMarkdown>
+    </div>
+  );
+}
+
+interface RawClaim {
+  attribute?: string;
+  value?: string;
+  polarity?: string;
+}
+
+/** Psyché facets (WP36.c, R4): the item's state as the dossier knows it — owning
+ *  subject, thread closure, contradiction, decision, order — plus the claims
+ *  extracted from the item (read from its cached metadata). */
+function PsycheFacets({ facets, contentId }: { facets: DetailFacets; contentId?: string }) {
+  const { data: item } = useQuery({
+    queryKey: ["kb-item", contentId],
+    queryFn: () => api.knowledgeItem(contentId as string),
+    enabled: !!contentId,
+  });
+  const rawClaims = (item?.metadata?.extracted_claims as RawClaim[] | undefined) ?? [];
+  const claims = rawClaims.filter((c) => c.attribute && c.value).slice(0, 6);
+
+  const stateBadges: { variant: StatusVariant; label: string }[] = [];
+  if (facets.closed) stateBadges.push({ variant: "closed", label: "thread closed" });
+  if (facets.contradicted)
+    stateBadges.push({ variant: "contradiction", label: "contradiction" });
+  if (facets.decisionStatus)
+    stateBadges.push({ variant: "decision", label: facets.decisionStatus });
+
+  const hasState = stateBadges.length > 0;
+  const hasClaims = claims.length > 0;
+  if (!facets.subject && !hasState && !hasClaims && facets.order == null) return null;
+
+  return (
+    <div className="mb-5 rounded-xl border border-border bg-surface2/50 px-4 py-3">
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+        In your psyché
+      </div>
+      <div className="flex flex-col gap-2 text-[13px]">
+        {facets.subject && (
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-muted">subject</span>
+            <span className="text-text">{facets.subject}</span>
+            {facets.order != null && (
+              <span className="text-faint">
+                · {facets.order === 2 ? "related" : "direct"}
+                {facets.viaNeighbor ? ` via ${facets.viaNeighbor}` : ""}
+              </span>
+            )}
+          </div>
+        )}
+        {hasState && (
+          <div className="flex flex-wrap gap-1.5">
+            {stateBadges.map((b) => (
+              <StatusBadge key={b.label} variant={b.variant}>
+                {b.label}
+              </StatusBadge>
+            ))}
+          </div>
+        )}
+        {hasClaims && (
+          <div>
+            <div className="mb-1 text-[12px] text-muted">Extracted claims</div>
+            <ul className="flex flex-col gap-1">
+              {claims.map((c, i) => (
+                <li key={i} className="text-[13px] text-text">
+                  <span className="text-muted">{c.attribute}:</span> {c.value}
+                  {c.polarity === "negate" && (
+                    <span className="ml-1 text-faint">(negated)</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

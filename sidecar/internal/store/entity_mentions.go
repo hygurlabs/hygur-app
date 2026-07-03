@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -140,9 +141,11 @@ func (d *DB) EntityNormsMatching(ctx context.Context, norms []string) (map[strin
 // SubjectStat is one discovered subject: its norm, dominant NER type, and how many
 // distinct items mention it (its centrality).
 type SubjectStat struct {
-	Norm     string `json:"norm"`
-	Type     string `json:"type,omitempty"`
-	Mentions int    `json:"mentions"`
+	Norm         string `json:"norm"`
+	Raw          string `json:"raw,omitempty"` // a representative surface form, for client-side search
+	Type         string `json:"type,omitempty"`
+	Mentions     int    `json:"mentions"`
+	LastActivity string `json:"last_activity,omitempty"` // MAX(asserted_at) across the subject's mentions — recency sort
 }
 
 // junkSubjectNorms are function words / greetings that must never be a subject (norms
@@ -261,7 +264,9 @@ func (d *DB) TopSubjects(ctx context.Context, limit int, exclude []string) ([]Su
 	}
 	args = append(args, limit*3) // buffer: junk + topic-dominant rows are filtered below
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT entity_norm, COUNT(DISTINCT content_id) AS c FROM entity_mentions
+		`SELECT entity_norm, COUNT(DISTINCT content_id) AS c,
+		        MAX(asserted_at) AS last_activity, MAX(entity_raw) AS raw
+		 FROM entity_mentions
 		 WHERE attribute IN ('ner_person', 'ner_org', 'ner_project')`+notIn+`
 		 GROUP BY entity_norm ORDER BY c DESC LIMIT ?`, args...)
 	if err != nil {
@@ -272,9 +277,12 @@ func (d *DB) TopSubjects(ctx context.Context, limit int, exclude []string) ([]Su
 	var norms []string
 	for rows.Next() {
 		var s SubjectStat
-		if err := rows.Scan(&s.Norm, &s.Mentions); err != nil {
+		var last, raw sql.NullString
+		if err := rows.Scan(&s.Norm, &s.Mentions, &last, &raw); err != nil {
 			return nil, err
 		}
+		s.LastActivity = last.String
+		s.Raw = raw.String
 		out = append(out, s)
 		norms = append(norms, s.Norm)
 	}

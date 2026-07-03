@@ -15,6 +15,7 @@ import { Notes } from "./views/Notes";
 import { Projects } from "./views/Projects";
 import { Briefings } from "./views/Briefings";
 import { Engrams } from "./views/Engrams";
+import { World } from "./views/World";
 import { Connectors } from "./views/Connectors";
 import { Settings } from "./views/Settings";
 import { Tags } from "./views/Tags";
@@ -105,6 +106,10 @@ export default function App({ revealOnMount = false }: { revealOnMount?: boolean
                 <Route path="/follow-up" element={<FollowUp />} />
                 <Route path="/mind" element={<Mind />} />
                 <Route path="/engrams" element={<Engrams />} />
+                {/* My World — the canonical entity dossier (WP36). New surface;
+                    the legacy /engrams view stays untouched. */}
+                <Route path="/world" element={<World />} />
+                <Route path="/world/:norm" element={<World />} />
                 {/* Decisions / Contradictions / Chronicle / Memory live inside the
                     Mind hub — redirect the bare routes to the matching tab so they
                     keep the Mind chrome (gauge + tabs + active sidebar item). */}

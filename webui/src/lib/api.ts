@@ -430,7 +430,8 @@ export const api = {
   // Briefings (daily + meeting).
   briefings: () => getJSON<{ briefings: Briefing[] }>("/briefings"),
   /** Discovered subjects (named entities) ranked by centrality (Engram index). */
-  engrams: () => getJSON<{ subjects: SubjectStat[] }>("/engrams"),
+  engrams: (limit = 200) =>
+    getJSON<{ subjects: SubjectStat[] }>(`/engrams?limit=${limit}`),
   /** A subject's consolidated Engram dossier: network + timeline + live/dead. */
   engram: (norm: string) => getJSON<Engram>(`/engrams/${encodeURIComponent(norm)}`),
   /** Triggers an on-demand brief (async, lands via SSE + the list refetch). */
