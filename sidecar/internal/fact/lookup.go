@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/identity"
+	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -283,6 +284,15 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 		res.Tier = TierMed // single candidate, nothing to confuse it with → hedge
 	default:
 		res.Tier = TierNone // ambiguous (multi-candidate, no proximity) or weak → decline
+	}
+
+	// Family split: a FAMILY-B label-derived type (id_duns, id_siret…) has no intrinsic checksum
+	// proof — its confidence comes only from the label binding + proximity + corroboration — so it
+	// can never be affirmed HIGH, only hedged. Family A (checksum types) is unaffected. idType is
+	// already canonical here (callers normalize via labelfact.NormalizeLabel), so VAT synonyms have
+	// resolved to enterprise_number and stay high.
+	if res.Tier == TierHigh && !recognize.IsChecksumType(idType) {
+		res.Tier = TierMed
 	}
 
 	res.Value, res.Raw, res.Confidence = best.norm, best.norm, best.score

@@ -7,12 +7,12 @@ package identifier
 
 import "strings"
 
-// minIdentifierDigits is the digit floor for treating a token as an exact-lookup
+// MinIdentifierDigits is the digit floor for treating a token as an exact-lookup
 // identifier. Set to 9 so an 8-digit date (YYYYMMDD, e.g. a normalized "2024-03-15") stays
 // on the semantic path, while real identifiers — phone (9–10), VAT (10), national number
 // (11), IBAN (14+) — are caught. Shorter identifiers fall back to semantic, never worse
-// than today.
-const minIdentifierDigits = 9
+// than today. Exported so the label-fact extractor shares the same value-grade floor.
+const MinIdentifierDigits = 9
 
 // Normalize reduces s to its identifier core: lowercase, keeping only [0-9a-z] and dropping
 // every separator, punctuation and space. General by construction — "12.34.56:789-01",
@@ -31,7 +31,7 @@ func Normalize(s string) string {
 // ExtractQuery inspects a search query and, if it carries an exact identifier, returns its
 // canonical form and true. It tokenizes the RAW query on whitespace, normalizes each token,
 // and picks the one with the most digits — accepting it only when that token has at least
-// minIdentifierDigits digits. So "invoice 12345678901" yields "12345678901", while a prose
+// MinIdentifierDigits digits. So "invoice 12345678901" yields "12345678901", while a prose
 // query or a short code yields ("", false) and stays on the semantic path. (A single
 // identifier the user types WITH spaces is a known gap — whitespace splits it into tokens.)
 func ExtractQuery(query string) (string, bool) {
@@ -42,7 +42,7 @@ func ExtractQuery(query string) (string, bool) {
 			best, bestDigits = n, d
 		}
 	}
-	if bestDigits < minIdentifierDigits {
+	if bestDigits < MinIdentifierDigits {
 		return "", false
 	}
 	return best, true

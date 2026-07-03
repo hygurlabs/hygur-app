@@ -10,6 +10,7 @@ import (
 	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/fact"
 	"github.com/hygur/sidecar/internal/identity"
+	"github.com/hygur/sidecar/internal/labelfact"
 )
 
 // LookupIdentifierTool exposes the deterministic (entity, identifier-type) → value lookup to
@@ -30,7 +31,7 @@ func NewLookupIdentifierTool(s fact.Store, owner *identity.Matcher) *LookupIdent
 func (t *LookupIdentifierTool) Name() string { return "lookup_identifier" }
 
 func (t *LookupIdentifierTool) Description() string {
-	return "Get a person or org's exact labeled identifier (national number, VAT/enterprise number, IBAN). Use for 'what is X's national number / IBAN / VAT'."
+	return "Get a person or org's exact labeled identifier by its label — a national number, VAT/enterprise number, IBAN, or ANY other labeled identifier (DUNS, SIRET, EIN, a client/reference number…). Use for 'what is X's national number / IBAN / VAT / DUNS / …'."
 }
 
 func (t *LookupIdentifierTool) ParameterSchema() map[string]any {
@@ -43,8 +44,7 @@ func (t *LookupIdentifierTool) ParameterSchema() map[string]any {
 			},
 			"type": map[string]any{
 				"type":        "string",
-				"enum":        []string{"national_number", "enterprise_number", "iban"},
-				"description": "Which identifier: national_number (numéro national/NISS), enterprise_number (TVA/BCE/KBO), or iban.",
+				"description": "The identifier's LABEL, exactly as the user names it — e.g. 'national number', 'NISS', 'VAT', 'TVA', 'IBAN', 'DUNS', 'SIRET', 'EIN', 'client number'. Pass the raw label; the lookup normalizes it and returns ONLY that identifier (never a different type).",
 			},
 		},
 		"required": []string{"entity", "type"},
@@ -76,7 +76,16 @@ func (t *LookupIdentifierTool) Execute(ctx context.Context, raw json.RawMessage)
 	if a.Entity == "" || a.Type == "" {
 		return nil, fmt.Errorf("entity and type are required")
 	}
-	res, err := fact.LookupIdentifier(ctx, t.store, contradict.NormKey(a.Entity), a.Type, time.Now(), t.owner)
+	// Normalize the raw label to its canonical id_type (label-EXACT): "DUNS" → id_duns, "vat" →
+	// enterprise_number. The lookup then queries ONLY that type — asking for a DUNS can never
+	// return an enterprise_number. An unusable label declines rather than guessing.
+	idType := labelfact.NormalizeLabel(a.Type)
+	if idType == "" {
+		out := lookupResponse{Type: a.Type, Tier: fact.TierNone,
+			Guidance: "Do NOT state a value — the identifier label was not understood. Ask the user to name the identifier more precisely."}
+		return json.Marshal(out)
+	}
+	res, err := fact.LookupIdentifier(ctx, t.store, contradict.NormKey(a.Entity), idType, time.Now(), t.owner)
 	if err != nil {
 		return nil, err
 	}

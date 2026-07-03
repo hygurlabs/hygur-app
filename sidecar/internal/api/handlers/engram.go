@@ -10,6 +10,7 @@ import (
 	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/fact"
 	"github.com/hygur/sidecar/internal/identity"
+	"github.com/hygur/sidecar/internal/labelfact"
 	"github.com/hygur/sidecar/internal/retrieval"
 	"github.com/hygur/sidecar/internal/store"
 	"github.com/rs/zerolog"
@@ -23,9 +24,16 @@ func (h *EngramHandler) IdentifierLookup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	entity := strings.TrimSpace(r.URL.Query().Get("entity"))
-	idType := strings.TrimSpace(r.URL.Query().Get("type"))
-	if entity == "" || idType == "" {
+	rawType := strings.TrimSpace(r.URL.Query().Get("type"))
+	if entity == "" || rawType == "" {
 		writeKnowledgeError(w, http.StatusBadRequest, "BAD_REQUEST", "entity and type are required")
+		return
+	}
+	// Normalize the raw label to its canonical id_type (label-EXACT + open to any label): "DUNS"
+	// → id_duns, "vat" → enterprise_number. An unusable label declines.
+	idType := labelfact.NormalizeLabel(rawType)
+	if idType == "" {
+		writeKnowledgeJSON(w, http.StatusOK, fact.Result{Type: rawType, Tier: fact.TierNone})
 		return
 	}
 	res, err := fact.LookupIdentifier(r.Context(), h.store, contradict.NormKey(entity), idType, time.Now(), h.owner)

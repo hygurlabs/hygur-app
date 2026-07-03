@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/labelfact"
 	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
 )
@@ -21,11 +22,17 @@ const proxWindow = 300
 // row and correctly declines when one name is flanked by two numbers of the same type.
 // Deterministic.
 func identifierProximityLinks(item *store.KnowledgeItem) []store.IdentifierLink {
-	if item == nil || typedIdentifiersSuppressed(item) {
+	if item == nil {
 		return nil
 	}
 	text := item.Title + " " + item.NormalizedText
-	typed := recognize.Recognize(text)
+	// Checksum identifiers are suppressed for transactional/automated docs (document-trust prior);
+	// label facts are not (the written label is the trust signal — see typedIdentifierMentions).
+	var typed []recognize.Typed
+	if !typedIdentifiersSuppressed(item) {
+		typed = recognize.Recognize(text)
+	}
+	typed = append(typed, labelfact.Extract(text)...)
 	if len(typed) == 0 {
 		return nil
 	}

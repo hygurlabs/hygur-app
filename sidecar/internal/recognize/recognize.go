@@ -23,6 +23,21 @@ const (
 	TypeIBAN           = "iban"
 )
 
+// IsChecksumType reports whether idType is a FAMILY-A (self-verifying, checksum-validated)
+// identifier type owned by this package — as opposed to a FAMILY-B label-derived type
+// (labelfact). It is the single source of truth for the family split: family A may be
+// affirmed HIGH (the checksum is intrinsic proof); family B is capped at MED (a label
+// binding is not proof). Callers pass a normalized/canonical type (e.g. from
+// labelfact.NormalizeLabel), which maps VAT synonyms onto TypeEnterprise, so "vat" reaches
+// here as "enterprise_number".
+func IsChecksumType(idType string) bool {
+	switch idType {
+	case TypeNationalNumber, TypeEnterprise, TypeIBAN:
+		return true
+	}
+	return false
+}
+
 // Typed is one recognized identifier: its type, canonical value (the graph-node key), the
 // raw substring as written, and its byte offsets (for proximity scoring later).
 type Typed struct {

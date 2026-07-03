@@ -166,6 +166,43 @@ func TestLookupIdentifier_MonoPersonStillHigh(t *testing.T) {
 	}
 }
 
+// TestLookupIdentifier_FamilyBCappedAtMed — a FAMILY-B label-derived type (id_duns) with the
+// SAME proximity-linked, well-corroborated evidence that affirms a checksum type HIGH must be
+// capped at MED: a label binding is not intrinsic proof. Checksum types (family A) still affirm.
+func TestLookupIdentifier_FamilyBCappedAtMed(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	mk := func(attr string) *fakeStore {
+		return &fakeStore{
+			resolve:   []string{"acme sprl"},
+			neighbors: []store.Neighbor{{Norm: "idval", Weight: 0.030}},
+			types:     map[string]string{"idval": attr},
+			links:     map[string][]store.IdentifierLink{"idval": {{PersonNorm: "acme sprl", IDNorm: "idval", Prox: 1}}},
+			docs:      map[string][]string{"idval": {"d1", "d2", "d3"}},
+		}
+	}
+	// Family B: DUNS — capped at med even though proximity + corroboration would score high.
+	r, err := LookupIdentifier(ctx, mk("id_duns"), "acme sprl", "duns", now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierMed {
+		t.Errorf("family-B duns: tier = %q (conf %.2f), want medium (capped)", r.Tier, r.Confidence)
+	}
+	if r.Value != "idval" {
+		t.Errorf("family-B duns: value = %q, want idval", r.Value)
+	}
+	// Family A: enterprise_number — the identical evidence still affirms HIGH (checksum path intact).
+	r, err = LookupIdentifier(ctx, mk("id_enterprise_number"), "acme sprl", "enterprise_number", now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("family-A enterprise_number: tier = %q, want high (unchanged)", r.Tier)
+	}
+}
+
 // TestLookupIdentifier_PersonVariantsResolve — the over-decline regression. A query that pools
 // several norms which are really ONE person (reversed order + a middle name: {bernard,alice} and
 // {alice,marie,bernard}) must NOT decline as ambiguous_subject. Its number is proximity-linked to

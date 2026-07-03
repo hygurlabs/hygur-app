@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/labelfact"
 	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
 )
@@ -286,13 +287,16 @@ func typedIdentifiersSuppressed(item *store.KnowledgeItem) bool {
 	return false
 }
 
-// typedIdentifierMentions extracts checksum-typed identifiers (national number, VAT, IBAN…)
-// from the item's text (recognize.Recognize — deterministic, no LLM) and folds them into
-// entity_mentions as first-class nodes: node key = canonical value, attribute = "id_<type>".
-// So the existing Hebbian graph + NPMI link a person to their identifier by co-occurrence.
-// Skipped entirely for transactional/automated docs (document-trust prior).
+// typedIdentifierMentions extracts typed identifiers from the item's text and folds them into
+// entity_mentions as first-class nodes: node key = canonical value, attribute = "id_<type>". So
+// the existing Hebbian graph + NPMI link a person to their identifier by co-occurrence. Two
+// sources, deterministic (no LLM): (1) recognize.Recognize — checksum family (national number,
+// VAT, IBAN), skipped for transactional/automated docs (document-trust prior); (2) labelfact —
+// the GENERIC label→value family (id_duns, id_siret…), which is NOT suppressed: the written label
+// is itself the trust signal, so a labelled fact is reliable even in an automated mail, and the
+// label keeps it from ever being confused with a checksum type (id_duns ≠ id_national_number).
 func typedIdentifierMentions(item *store.KnowledgeItem) []store.EntityMention {
-	if item == nil || typedIdentifiersSuppressed(item) {
+	if item == nil {
 		return nil
 	}
 	at := ""
@@ -302,8 +306,14 @@ func typedIdentifierMentions(item *store.KnowledgeItem) []store.EntityMention {
 	if d := store.GetCanonicalDate(item); !d.IsZero() {
 		at = d.UTC().Format(time.RFC3339)
 	}
+	text := item.Title + " " + item.NormalizedText
+	var typed []recognize.Typed
+	if !typedIdentifiersSuppressed(item) {
+		typed = recognize.Recognize(text)
+	}
+	typed = append(typed, labelfact.Extract(text)...)
 	var out []store.EntityMention
-	for _, t := range recognize.Recognize(item.Title + " " + item.NormalizedText) {
+	for _, t := range typed {
 		out = append(out, store.EntityMention{
 			EntityNorm: t.Value, EntityRaw: t.Raw, Attribute: "id_" + t.Type, AssertedAt: at,
 		})
