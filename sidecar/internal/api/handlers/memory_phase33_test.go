@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hygur/sidecar/internal/llm"
@@ -61,9 +66,100 @@ func newTestRouter(t *testing.T) (*chi.Mux, *MemoryHandler, *store.DB, *httptest
 	router.Get("/memory/stats", handler.Stats)
 	router.Delete("/memory/extracted", handler.ClearExtracted)
 	router.Get("/memory/list", handler.List)
+	router.Post("/memory/dedup", handler.Dedup)
 
 	t.Cleanup(func() { db.Close() })
 	return router, handler, db, llmSrv
+}
+
+// TestMemoryHandler_Dedup exercises the one-time Plan A reconcile end-to-end:
+// dry-run reports the plan without mutating; apply removes exactly the
+// duplicates + identifier rows and writes a backup; a second apply is a no-op.
+func TestMemoryHandler_Dedup(t *testing.T) {
+	router, handler, db, _ := newTestRouter(t)
+	handler.SetBackupPath(filepath.Join(t.TempDir(), "hygur.db"))
+
+	niss := mkTestNISS("850701123") // fictional, checksum-valid
+	acc := time.Now()
+	seed := []store.Memory{
+		{MemoryID: "n1", Type: store.MemoryFact, Content: "User's name is Denis", Source: store.MemorySourceExtracted, CreatedAt: time.Now()},
+		{MemoryID: "n2", Type: store.MemoryFact, Content: "user's name is denis.", Source: store.MemorySourceManual, CreatedAt: time.Now(), AcceptedAt: &acc},
+		{MemoryID: "id", Type: store.MemoryFact, Content: "Son numéro national est " + niss, Source: store.MemorySourceExtracted, CreatedAt: time.Now()},
+		{MemoryID: "soft", Type: store.MemoryFact, Content: "Travaille avec la Fiduciaire de la Cense", Source: store.MemorySourceExtracted, CreatedAt: time.Now()},
+	}
+	for i := range seed {
+		if err := db.InsertMemory(&seed[i]); err != nil {
+			t.Fatalf("seed insert: %v", err)
+		}
+	}
+
+	// Dry-run.
+	dry := doDedup(t, router, false)
+	if dry.DryRun != true || dry.Deleted != 0 {
+		t.Fatalf("dry-run mutated: %+v", dry)
+	}
+	if dry.DuplicatesRemoved != 1 || dry.IdentifiersRemoved != 1 || dry.KeptSoftFacts != 2 {
+		t.Fatalf("unexpected dry-run plan: %+v", dry)
+	}
+	if dry.TotalBefore != 4 || dry.TotalAfter != 2 {
+		t.Fatalf("unexpected dry-run totals: %+v", dry)
+	}
+	if n := countRows(t, db); n != 4 {
+		t.Fatalf("dry-run must not delete; have %d rows", n)
+	}
+
+	// Apply.
+	applied := doDedup(t, router, true)
+	if applied.DryRun != false || applied.Deleted != 2 {
+		t.Fatalf("apply did not delete 2: %+v", applied)
+	}
+	if applied.BackupPath == "" {
+		t.Fatal("apply must write a backup path")
+	}
+	if _, err := os.Stat(applied.BackupPath); err != nil {
+		t.Fatalf("backup file missing: %v", err)
+	}
+	if n := countRows(t, db); n != 2 {
+		t.Fatalf("after apply want 2 rows, got %d", n)
+	}
+
+	// Idempotent: a second apply removes nothing.
+	again := doDedup(t, router, true)
+	if again.Deleted != 0 {
+		t.Fatalf("second apply not idempotent: deleted %d", again.Deleted)
+	}
+}
+
+func doDedup(t *testing.T, router *chi.Mux, apply bool) DedupResponse {
+	t.Helper()
+	body, _ := json.Marshal(DedupRequest{Apply: apply})
+	req := httptest.NewRequest(http.MethodPost, "/memory/dedup", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dedup status %d: %s", rr.Code, rr.Body.String())
+	}
+	var out DedupResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode dedup response: %v", err)
+	}
+	return out
+}
+
+// mkTestNISS builds a checksum-valid Belgian national number from a 9-digit
+// base (fictional) so the reconcile's identifier detection fires.
+func mkTestNISS(base9 string) string {
+	b, _ := strconv.ParseInt(base9, 10, 64)
+	return base9 + fmt.Sprintf("%02d", 97-(b%97))
+}
+
+func countRows(t *testing.T, db *store.DB) int {
+	t.Helper()
+	all, err := db.ListMemoriesAfter(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	return len(all)
 }
 
 func TestMemoryHandler_ExtractToAcceptFlow(t *testing.T) {

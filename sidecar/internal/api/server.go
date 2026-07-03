@@ -686,6 +686,15 @@ func (s *Server) handleMemoryClearExtracted(w http.ResponseWriter, r *http.Reque
 	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
 }
 
+// handleMemoryDedup handles POST /memory/dedup — the one-time Plan A reconcile.
+func (s *Server) handleMemoryDedup(w http.ResponseWriter, r *http.Request) {
+	if s.memoryHandler != nil {
+		s.memoryHandler.Dedup(w, r)
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "memory handler not configured")
+}
+
 // SetEventsHandler sets the events handler for the server.
 func (s *Server) SetEventsHandler(handler *handlers.EventsHandler) {
 	s.eventsHandler = handler

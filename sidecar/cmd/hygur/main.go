@@ -687,6 +687,8 @@ func main() {
 	memorySearchTool := tools.NewMemorySearchTool(db, llmClient)
 	memoryHandler := handlers.NewMemoryHandler(db, logger)
 	memoryHandler.SetTools(memoryStoreTool, memorySearchTool)
+	// Locate the live DB so the /memory/dedup reconcile can back up rows to disk.
+	memoryHandler.SetBackupPath(cfg.Store.Path)
 
 	// Persistent memory feeds into the chat handler so durable user facts get
 	// injected into the system prompt AND new facts get auto-extracted at the

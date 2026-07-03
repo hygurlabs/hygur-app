@@ -265,6 +265,10 @@ func (s *Server) setupRoutes() {
 			r.Get("/pending", s.handleMemoryPending)
 			r.Post("/extract", s.handleMemoryExtract)
 			r.Delete("/extracted", s.handleMemoryClearExtracted)
+			// One-time Plan A reconcile: dedup soft facts + defer typed
+			// identifiers to the graph. Dry-run by default; {"apply":true}
+			// mutates. Operator-gated by this route's auth (loopback + token).
+			r.Post("/dedup", s.handleMemoryDedup)
 			r.Post("/{memory_id}/accept", s.handleMemoryAccept)
 			r.Post("/{memory_id}/discard", s.handleMemoryDiscard)
 			r.Delete("/{memory_id}", s.handleMemoryDelete)

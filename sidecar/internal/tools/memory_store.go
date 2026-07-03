@@ -237,10 +237,44 @@ func (t *MemoryStoreTool) PersistExtractedReturning(memories []ExtractedMemory, 
 // persistExtracted is the shared insert loop behind PersistExtracted and
 // PersistExtractedReturning. It returns the rows successfully stored and the
 // first row-level error encountered.
+//
+// Plan A reconciliation (fail-closed) is applied per candidate BEFORE insert:
+//   - A.2: a typed-identifier assertion (national number / enterprise / IBAN,
+//     by recognize checksum or an explicit identifier label + value) is DROPPED
+//     — it belongs in the deterministic identifier graph, not the memory store.
+//   - A.1: a candidate whose normalized content signature already exists (in
+//     the DB or earlier in this same batch) is skipped instead of inserting a
+//     second row. Extracted candidates always land pending, so there is no
+//     status to upgrade here; the "accepted wins" reconciliation lives in the
+//     one-time reconcile pass over pre-existing rows.
 func (t *MemoryStoreTool) persistExtracted(memories []ExtractedMemory, sessionID string) ([]store.Memory, error) {
 	stored := make([]store.Memory, 0, len(memories))
 	var firstErr error
+
+	// Signatures already present, so a duplicate candidate is skipped. Seeded
+	// from every existing memory (manual + extracted, accepted or pending) and
+	// extended as we insert within this batch. Best-effort: if the load fails
+	// we fall back to batch-local dedup only (never silently insert on error
+	// paths that matter — a load failure just weakens dedup, never data safety).
+	seen := make(map[string]struct{})
+	if existing, err := t.store.ListMemoriesAfter(context.Background(), time.Time{}); err == nil {
+		for _, e := range existing {
+			seen[SignContent(e.Content)] = struct{}{}
+		}
+	}
+
 	for _, m := range memories {
+		// A.2 — defer typed identifiers to the deterministic store.
+		if IsTypedIdentifierAssertion(m.Content) {
+			continue
+		}
+		// A.1 — content-dedup on write.
+		sig := SignContent(m.Content)
+		if _, dup := seen[sig]; dup {
+			continue
+		}
+		seen[sig] = struct{}{}
+
 		var expiry *time.Time
 		if m.ExpiresAt != "" {
 			if d, err := time.Parse("2006-01-02", m.ExpiresAt); err == nil {

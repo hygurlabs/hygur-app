@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,6 +21,10 @@ type MemoryHandler struct {
 	logger   zerolog.Logger
 	tool     *tools.MemoryStoreTool
 	toolSrch *tools.MemorySearchTool
+	// dbPath locates the live DB so Dedup can write its row backup beside it
+	// (in a "backups" folder). Empty disables backup-to-disk (rows are still
+	// returned in the response).
+	dbPath string
 }
 
 // NewMemoryHandler creates a new MemoryHandler.
@@ -32,6 +39,12 @@ func NewMemoryHandler(store *store.DB, logger zerolog.Logger) *MemoryHandler {
 func (h *MemoryHandler) SetTools(storeTool *tools.MemoryStoreTool, searchTool *tools.MemorySearchTool) {
 	h.tool = storeTool
 	h.toolSrch = searchTool
+}
+
+// SetBackupPath tells the handler where the live DB lives so Dedup can write
+// its pre-apply row backup to "<dbDir>/backups".
+func (h *MemoryHandler) SetBackupPath(dbPath string) {
+	h.dbPath = dbPath
 }
 
 // StoreRequest represents the request body for POST /memory/store.
@@ -452,6 +465,145 @@ func (h *MemoryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// DedupRequest is the body for POST /memory/dedup. apply=false (default) is a
+// dry-run: it reports what WOULD be removed without touching data. apply=true
+// performs the conservative reconcile (after writing a backup).
+type DedupRequest struct {
+	Apply bool `json:"apply"`
+}
+
+// DedupSample is a PII-safe, digit-masked preview of one row the plan targets.
+type DedupSample struct {
+	Reason string `json:"reason"` // "duplicate" | "identifier"
+	Sample string `json:"sample"` // redacted (digits masked, truncated)
+}
+
+// DedupResponse summarises a reconcile pass. All content is redacted; raw
+// bodies never appear here.
+type DedupResponse struct {
+	DryRun             bool          `json:"dry_run"`
+	BackupPath         string        `json:"backup_path,omitempty"`
+	TotalBefore        int           `json:"total_before"`
+	DuplicatesRemoved  int           `json:"duplicates_removed"` // "would remove" on dry-run
+	IdentifiersRemoved int           `json:"identifiers_removed"`
+	KeptSoftFacts      int           `json:"kept_soft_facts"`
+	Deleted            int           `json:"deleted"`     // rows actually deleted (0 on dry-run)
+	TotalAfter         int           `json:"total_after"` // projected on dry-run
+	Samples            []DedupSample `json:"samples"`
+}
+
+// Dedup handles POST /memory/dedup — the one-time (idempotent) Plan A reconcile
+// over the live memory store. It is operator-gated by the same auth as every
+// /memory route (loopback + token). Steps: (a) BACKUP all rows to disk;
+// (b) compute the conservative plan (exact content-duplicates → keep the
+// strongest survivor; typed-identifier assertions → deferred to the graph);
+// (c) dry-run reports the plan, apply=true deletes exactly that set. Soft facts
+// that exist nowhere else are always kept. The identifier graph / claims are
+// never touched.
+func (h *MemoryHandler) Dedup(w http.ResponseWriter, r *http.Request) {
+	var req DedupRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req) // empty body → dry-run
+	}
+
+	memories, err := h.store.ListMemoriesAfter(r.Context(), time.Time{})
+	if err != nil {
+		h.logger.Error().Err(err).Msg("dedup: failed to list memories")
+		writeMemoryError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list memories")
+		return
+	}
+
+	// (a) BACKUP the raw rows to disk BEFORE any mutation. Fail closed: if a
+	// backup was requested (apply) and it cannot be written, abort.
+	backupPath, err := h.backupMemories(memories)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("dedup: backup failed")
+		if req.Apply {
+			writeMemoryError(w, http.StatusInternalServerError, "BACKUP_FAILED", "refusing to apply without a backup")
+			return
+		}
+	}
+
+	// (b) Plan.
+	rows := make([]store.Memory, 0, len(memories))
+	for _, m := range memories {
+		rows = append(rows, *m)
+	}
+	plan := tools.PlanReconcile(rows)
+
+	resp := DedupResponse{
+		DryRun:             !req.Apply,
+		BackupPath:         backupPath,
+		TotalBefore:        len(memories),
+		DuplicatesRemoved:  plan.DuplicateCount(),
+		IdentifiersRemoved: plan.IdentifierCount(),
+		KeptSoftFacts:      len(plan.Kept),
+	}
+	const maxSamples = 20
+	for _, d := range plan.Deletions {
+		if len(resp.Samples) >= maxSamples {
+			break
+		}
+		resp.Samples = append(resp.Samples, DedupSample{
+			Reason: string(d.Reason),
+			Sample: tools.RedactContent(d.Memory.Content),
+		})
+	}
+
+	if !req.Apply {
+		resp.TotalAfter = len(memories) - len(plan.Deletions)
+		h.logger.Info().Int("total", len(memories)).Int("dup", resp.DuplicatesRemoved).
+			Int("ident", resp.IdentifiersRemoved).Int("kept", resp.KeptSoftFacts).
+			Msg("dedup dry-run")
+		writeMemoryJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// (c) APPLY — delete exactly the planned set. Idempotent.
+	deleted := 0
+	for _, d := range plan.Deletions {
+		if err := h.store.DeleteMemory(r.Context(), d.Memory.MemoryID); err != nil {
+			h.logger.Error().Err(err).Str("memory_id", d.Memory.MemoryID).Msg("dedup: delete failed")
+			writeMemoryError(w, http.StatusInternalServerError, "DELETE_FAILED", "reconcile aborted mid-apply; see backup")
+			return
+		}
+		deleted++
+	}
+	resp.Deleted = deleted
+	resp.TotalAfter = len(memories) - deleted
+	h.logger.Info().Int("deleted", deleted).Int("dup", resp.DuplicatesRemoved).
+		Int("ident", resp.IdentifiersRemoved).Int("kept", resp.KeptSoftFacts).
+		Str("backup", backupPath).Msg("dedup applied")
+	writeMemoryJSON(w, http.StatusOK, resp)
+}
+
+// backupMemories writes the raw memory rows to "<dbDir>/backups/
+// memory-dedup-<ts>.json" (0600) and returns the path. Returns ("", nil) when
+// no dbPath is configured (backup-to-disk disabled). The file contains raw PII
+// and stays on the pod's data volume alongside the DB it came from.
+func (h *MemoryHandler) backupMemories(memories []*store.Memory) (string, error) {
+	if h.dbPath == "" {
+		return "", nil
+	}
+	dir := filepath.Join(filepath.Dir(h.dbPath), "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create backup dir: %w", err)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("memory-dedup-%s.json", time.Now().Format("20060102-150405")))
+	out := make([]StoreResponse, 0, len(memories))
+	for _, m := range memories {
+		out = append(out, memoryToResponse(m))
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal backup: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write backup: %w", err)
+	}
+	return path, nil
 }
 
 // writeMemoryJSON writes a JSON response with the given status code.
