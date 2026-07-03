@@ -25,6 +25,14 @@ const (
 
 	thetaHigh = 0.7 // ≥ → affirm
 	thetaLow  = 0.4 // ≥ → hedge; below → decline
+
+	// ownerCorroborationMargin is the factor by which the owner-corroboration winner must lead
+	// the runner-up candidate's distinct owner-document count to be selected (cartography Phase 1).
+	// For an IDENTITY question ("my VAT") the deciding signal is corroboration/dominance, NOT
+	// NPMI-rarity: the owner's real number is the one recurring across his own documents. A single
+	// clear winner (≥2× the runner-up) is picked; a near-tie stays ambiguous and declines.
+	// Tunable — raising it declines more (safer), lowering it selects more (riskier).
+	ownerCorroborationMargin = 2
 )
 
 // Tier is the confidence band that drives the voice's phrasing.
@@ -270,6 +278,45 @@ func LookupIdentifier(ctx context.Context, s Store, query, idType string, now ti
 	sort.Slice(all, func(i, j int) bool { return all[i].score > all[j].score })
 	best := all[0]
 
+	// Owner-corroboration selection (cartography Phase 1 — the value-resolution regime). The
+	// NPMI-top `best` above is the right pick for "what is LINKED to X?" (rarity = surprise = a
+	// strong Hebbian edge). It is ACTIVELY WRONG for "what is MY value?": NPMI rewards rarity, so a
+	// single-document parasite (its edge undiluted → npmi≈1) outscores the owner's real identifier
+	// (reprinted across dozens of his documents → edge diluted → npmi≈0, floor score). For an
+	// owner IDENTITY query the deciding signal is CORROBORATION/DOMINANCE, not rarity: the owner's
+	// own number is the one recurring across the most of HIS documents. So among the
+	// proximity-linked candidates of the requested type, select the one with the MAXIMUM distinct
+	// owner-proximity doc count — IFF it is owner-dominant AND clears a ≥ownerCorroborationMargin×
+	// lead over the runner-up candidate's owner-doc count. Otherwise leave `best` as scored and let
+	// the existing guards decide (fail closed on ambiguity). This only RE-SELECTS among candidates
+	// that are already proximity-linked and owner-dominant; every downstream gate (uniqueness,
+	// corroboration, checksum, tier) is unchanged and still fails closed.
+	if queryIsOwner {
+		type ownerCand struct {
+			s      scored
+			ownerN int
+		}
+		var ranked []ownerCand
+		for _, c := range all {
+			if !c.prox {
+				continue
+			}
+			n, _ := ownerProxDocCounts(ctx, s, c.norm, owner)
+			ranked = append(ranked, ownerCand{c, n})
+		}
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].ownerN > ranked[j].ownerN })
+		if len(ranked) > 0 && ranked[0].ownerN > 0 {
+			top := ranked[0]
+			runnerUp := 0
+			if len(ranked) > 1 {
+				runnerUp = ranked[1].ownerN
+			}
+			if top.ownerN >= ownerCorroborationMargin*runnerUp && ownerIsDominant(ctx, s, top.s.norm, owner) {
+				best = top.s
+			}
+		}
+	}
+
 	// Uniqueness invariant: one value = one owner. If the best value is proximity-linked to
 	// MORE THAN ONE distinct person, its ownership is contested — we cannot say it belongs to
 	// the queried subject. Decline (fail closed), never assert or even hedge a contested value.
@@ -408,9 +455,20 @@ func distinctPeopleOwnerAware(ctx context.Context, s Store, norms []string, owne
 // non-owner is never inflated to look dominant). This is the plurality gate that turns the
 // owner's own reprinted reference number from "ambiguous_owner" into an affirmed answer.
 func ownerIsDominant(ctx context.Context, s Store, idNorm string, owner *identity.Matcher) bool {
+	ownerN, runnerUp := ownerProxDocCounts(ctx, s, idNorm, owner)
+	return ownerN >= 3 && ownerN >= 2*runnerUp
+}
+
+// ownerProxDocCounts returns the number of DISTINCT documents in which the OWNER is
+// proximity-linked to idNorm (ownerN), and the highest distinct-doc count of any single non-owner
+// person (runnerUp). Owner variants collapse to one bucket; non-owner norms are counted per
+// distinct norm (never merged, so a non-owner is never inflated). This is the corroboration
+// signal for the value-resolution regime — shared by ownerIsDominant (the dominance gate) and the
+// owner-corroboration selection (which candidate the owner uses most) so the two never diverge.
+func ownerProxDocCounts(ctx context.Context, s Store, idNorm string, owner *identity.Matcher) (ownerN, runnerUp int) {
 	links, err := s.IdentifierLinksForID(ctx, idNorm)
 	if err != nil {
-		return false
+		return 0, 0
 	}
 	ownerDocs := map[string]bool{}
 	otherDocs := map[string]map[string]bool{}
@@ -427,14 +485,13 @@ func ownerIsDominant(ctx context.Context, s Store, idNorm string, owner *identit
 		}
 		otherDocs[l.PersonNorm][l.ContentID] = true
 	}
-	ownerN := len(ownerDocs)
-	runnerUp := 0
+	ownerN = len(ownerDocs)
 	for _, ds := range otherDocs {
 		if len(ds) > runnerUp {
 			runnerUp = len(ds)
 		}
 	}
-	return ownerN >= 3 && ownerN >= 2*runnerUp
+	return ownerN, runnerUp
 }
 
 // idTypeAllowsVariantCollapse reports whether an identifier type may legitimately be shared

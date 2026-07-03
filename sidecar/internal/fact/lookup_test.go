@@ -539,6 +539,138 @@ func TestLookupIdentifier_ParasiteDeclines(t *testing.T) {
 	}
 }
 
+// corroborationStore builds an enterprise_number graph reproducing the live VAT-ranking bug:
+// several candidate values compete, each proximity-linked to the owner across a different number
+// of distinct documents (ownerDocs), plus optionally one institutional co-link so the value looks
+// "contested" like the founder's reprinted BCE. weight sets the Hebbian/NPMI edge — a RARE value
+// (few owner docs) is given a HIGH weight so NPMI would wrongly rank it first; the owner's real,
+// frequently-reprinted value is given a diluted (low) weight. corpusDocs sets SearchByIdentifier's
+// corroboration count. This is the founder's real shape: 1021 (11 owner docs, diluted edge) vs a
+// single-doc parasite 152 (npmi≈1) vs the old 1014 (2 owner docs).
+func corroborationStore(query string, ownerVariant string, specs []evSpec) *fakeStore {
+	links := map[string][]store.IdentifierLink{}
+	docs := map[string][]string{}
+	neigh := []store.Neighbor{}
+	types := map[string]string{}
+	for _, sp := range specs {
+		var ll []store.IdentifierLink
+		var dd []string
+		for i := 0; i < sp.ownerDocs; i++ {
+			id := sp.value + "-o" + string(rune('a'+i))
+			ll = append(ll, store.IdentifierLink{ContentID: id, PersonNorm: ownerVariant, IDNorm: sp.value, IDType: "enterprise_number", Prox: 1})
+			dd = append(dd, id)
+		}
+		for i := 0; i < sp.instDocs; i++ {
+			id := sp.value + "-i" + string(rune('a'+i))
+			ll = append(ll, store.IdentifierLink{ContentID: id, PersonNorm: sp.inst, IDNorm: sp.value, IDType: "enterprise_number", Prox: 1})
+			dd = append(dd, id)
+		}
+		links[sp.value] = ll
+		// corpusDocs drives corroboration (SearchByIdentifier); fall back to the link docs.
+		if sp.corpusDocs > 0 {
+			cd := make([]string, sp.corpusDocs)
+			for i := range cd {
+				cd[i] = sp.value + "-c" + string(rune('a'+i))
+			}
+			docs[sp.value] = cd
+		} else {
+			docs[sp.value] = dd
+		}
+		neigh = append(neigh, store.Neighbor{Norm: sp.value, Weight: sp.weight})
+		types[sp.value] = "id_enterprise_number"
+	}
+	return &fakeStore{
+		resolve:   []string{query},
+		neighbors: neigh,
+		types:     types,
+		links:     links,
+		docs:      docs,
+	}
+}
+
+type evSpec struct {
+	value      string
+	ownerDocs  int     // distinct docs the OWNER is proximity-linked in
+	instDocs   int     // distinct docs one institution is proximity-linked in (runner-up)
+	inst       string  // that institution's norm
+	weight     float64 // Hebbian/NPMI edge — rare values get HIGH weight to game NPMI
+	corpusDocs int     // SearchByIdentifier corroboration count (0 → use link docs)
+}
+
+// TestLookupIdentifier_OwnerCorroborationSelectsRecurringValue — the VAT-ranking bug, fixed.
+// NPMI would rank the single-doc parasite "152" first (rare edge → npmi≈1). The owner's REAL
+// BCE "1021" recurs across 11 of his docs but has a diluted edge (npmi≈0 → floor score). The
+// owner-corroboration selection must OVERRIDE the NPMI pick and choose "1021" (11 owner docs ≥ 2×
+// the old "1014"'s 2), affirming HIGH — never the parasite "152" (1 doc) nor the old "1014" (2).
+func TestLookupIdentifier_OwnerCorroborationSelectsRecurringValue(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	f := corroborationStore("alex martin", "alex martin", []evSpec{
+		// The real, frequently-reprinted BCE: 11 owner docs, 1 institutional co-link, DILUTED edge.
+		{value: "1021", ownerDocs: 11, instDocs: 1, inst: "acme sa", weight: 0.001, corpusDocs: 12},
+		// The single-doc parasite (a tax rôle): 1 owner doc, but a RARE, undiluted edge → npmi≈1.
+		{value: "152", ownerDocs: 1, inst: "", weight: 0.030, corpusDocs: 1},
+		// The stale former number: 2 owner docs.
+		{value: "1014", ownerDocs: 2, inst: "", weight: 0.010, corpusDocs: 2},
+	})
+	r, err := LookupIdentifier(ctx, f, "alex martin", "enterprise_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Value != "1021" {
+		t.Errorf("value = %q, want 1021 (owner-corroboration must beat the NPMI-rare parasite)", r.Value)
+	}
+	if r.Value == "152" {
+		t.Error("selected the single-doc parasite 152 — NPMI rarity leaked through")
+	}
+	if r.Value == "1014" {
+		t.Error("selected the stale former number 1014 — margin gate failed")
+	}
+	if r.Tier != TierHigh {
+		t.Errorf("tier = %q (conf %.2f), want high (checksum type, owner-dominant)", r.Tier, r.Confidence)
+	}
+}
+
+// TestLookupIdentifier_OwnerCorroborationNearTieDeclines — no ≥2× owner-corroboration winner.
+// Two contested candidates each with 3 owner docs (and a 2-doc institutional runner-up so neither
+// is owner-dominant): the selection must NOT force a pick, and the existing guards must decline
+// (fail closed) rather than affirm the NPMI winner of a near-tie.
+func TestLookupIdentifier_OwnerCorroborationNearTieDeclines(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	f := corroborationStore("alex martin", "alex martin", []evSpec{
+		{value: "aaa", ownerDocs: 3, instDocs: 2, inst: "acme sa", weight: 0.030, corpusDocs: 5},
+		{value: "bbb", ownerDocs: 3, instDocs: 2, inst: "beta bv", weight: 0.028, corpusDocs: 5},
+	})
+	r, err := LookupIdentifier(ctx, f, "alex martin", "enterprise_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier == TierHigh {
+		t.Errorf("near-tie: tier = high (value %q), want NOT high (no ≥2× winner → decline)", r.Value)
+	}
+	if r.Reason != ReasonAmbiguousOwner {
+		t.Errorf("near-tie: reason = %q, want %q", r.Reason, ReasonAmbiguousOwner)
+	}
+}
+
+// TestLookupIdentifier_OwnerCorroborationRejectsParasiteAndStale — the selection must not pick a
+// value that fails owner-dominance even when it is the max-ownerDocs proximity candidate. Here the
+// stale "1014" (2 owner docs) leads the parasite "152" (1) but 2 < 3 → not owner-dominant → no
+// selection; and neither is corroborated enough to affirm → decline. Guards the fail-closed floor.
+func TestLookupIdentifier_OwnerCorroborationRejectsParasiteAndStale(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	f := corroborationStore("alex martin", "alex martin", []evSpec{
+		{value: "152", ownerDocs: 1, inst: "", weight: 0.030, corpusDocs: 1},
+		{value: "1014", ownerDocs: 2, inst: "", weight: 0.010, corpusDocs: 1},
+	})
+	r, err := LookupIdentifier(ctx, f, "alex martin", "enterprise_number", now, ownerMatcher())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tier == TierHigh {
+		t.Errorf("no owner-dominant candidate: tier = high (value %q), want NOT high", r.Value)
+	}
+}
+
 // TestLookupIdentifier_CorroboratedSurvivesGuard — a well-corroborated winner (≥2 docs) amid
 // competing candidates is UNAFFECTED by the corroboration guard: it still affirms. Guards the
 // no-regression boundary (only the single-doc coincidence declines).
