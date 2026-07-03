@@ -65,20 +65,29 @@ func TestIsTypedIdentifierAssertion(t *testing.T) {
 }
 
 // TestIsOwnerIdentityAssertion — fictional identity, no real PII. A pure
-// self-identity assertion ("User is Jordan Vance") is dropped; a soft fact that
-// merely mentions the owner ("User works with…", "User uses…") is never touched,
-// and a bare surname/given name never matches (the strict matcher already guards
-// that — it must never capture a family member).
+// self-identity assertion ("User is Jordan Vance") is dropped, and so is a bare
+// single owner TOKEN (given name or surname) after a "user…" prefix specifically
+// ("User's name is Jordan") — the belt-and-suspenders refinement: "user" is this
+// codebase's fixed term for the app owner, never a third party, so a bare
+// EXPLICITLY CONFIGURED owner token is unambiguous there. That bare-token path is
+// deliberately NOT extended to "my name is "/"i am "/"i'm " (those could quote a
+// client's own self-introduction) or to a name that isn't a configured owner
+// token at all. A soft fact that merely mentions the owner never matches either
+// path.
 func TestIsOwnerIdentityAssertion(t *testing.T) {
-	owner := identity.NewMatcher([]string{"Jordan Vance", "Jordan V"})
+	owner := identity.NewMatcher([]string{"Jordan Vance"})
 
 	drop := []string{
-		"User is Jordan Vance",
-		"User is Jordan Vance.",
-		"User's name is Jordan Vance",
-		"The user's name is Jordan Vance",
-		"My name is Jordan Vance",
-		"I am Jordan Vance",
+		"User is Jordan Vance",            // full name
+		"User is Jordan Vance.",           // full name, trailing punctuation
+		"User's name is Jordan Vance",     // full name
+		"The user's name is Jordan Vance", // full name, "the user's name is " prefix
+		"My name is Jordan Vance",         // full name, first-person prefix
+		"I am Jordan Vance",               // full name, first-person prefix
+		"User's name is Jordan",           // bare given name, IS an owner token, "user…" prefix
+		"User is Jordan",                  // bare given name, IS an owner token, "user…" prefix
+		"User is Vance",                   // bare surname, IS an owner token, "user…" prefix
+		"The user is Jordan",              // bare given name, "the user is " prefix
 	}
 	for _, c := range drop {
 		if !IsOwnerIdentityAssertion(c, owner) {
@@ -91,9 +100,10 @@ func TestIsOwnerIdentityAssertion(t *testing.T) {
 		"User uses Falco pour la gestion",        // soft fact: tool
 		"User is Jordan Vance's accountant",      // an appended clause, not a pure identity assertion
 		"Jordan Vance travaille avec Falco",      // doesn't open with a self-identity prefix
-		"User is Vance",                          // bare surname — never sufficient (family guard)
-		"User is Jordan",                         // bare given name — never sufficient (family guard)
-		"User's name is Jordan",                  // bare given name after the prefix — same guard
+		"I am Jordan",                            // bare given name, but "i am " is not "user…" framing
+		"I'm Vance",                              // bare surname, same reason
+		"User's name is Casey",                   // bare name that is NOT a configured owner token
+		"My name is Casey",                       // first-person prefix, non-owner bare name
 	}
 	for _, c := range keep {
 		if IsOwnerIdentityAssertion(c, owner) {
@@ -151,16 +161,18 @@ func TestPlanReconcile_DedupAcceptedWins(t *testing.T) {
 	}
 }
 
-// TestPlanReconcile_OwnerIdentity — Lot 3's exact shape: a memory set with two
-// pure owner-identity rows and several unrelated soft facts. With the owner
-// matcher wired, only the two identity rows are removed (6→4); every soft fact
-// — including one that merely mentions the owner — is kept. Fictional identity.
+// TestPlanReconcile_OwnerIdentity — Lot 3's exact shape (home tenant, masked): a
+// full-name assertion PLUS a bare-given-name assertion ("User's name is Jordan")
+// — the latter only catchable via the "user…" bare-token path, since "Jordan"
+// alone is a configured owner token. With the owner matcher wired, both rows are
+// removed (6→4); every soft fact — including one that merely mentions the owner
+// — is kept. Fictional identity.
 func TestPlanReconcile_OwnerIdentity(t *testing.T) {
 	owner := identity.NewMatcher([]string{"Jordan Vance"})
 	now := time.Now()
 	mems := []store.Memory{
 		{MemoryID: "1", Type: store.MemoryFact, Content: "User is Jordan Vance", CreatedAt: now},
-		{MemoryID: "2", Type: store.MemoryFact, Content: "User's name is Jordan Vance", CreatedAt: now},
+		{MemoryID: "2", Type: store.MemoryFact, Content: "User's name is Jordan", CreatedAt: now},
 		{MemoryID: "3", Type: store.MemoryFact, Content: "VAT declaration Q4 filed", CreatedAt: now},
 		{MemoryID: "4", Type: store.MemoryFact, Content: "Q4 turnover and purchases reported", CreatedAt: now},
 		{MemoryID: "5", Type: store.MemoryFact, Content: "Works with Fiduciaire de la Cense", CreatedAt: now},

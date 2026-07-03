@@ -135,6 +135,17 @@ var ownerIdentityPrefixes = []string{
 	"my name is ", "i am ", "i'm ",
 }
 
+// userFramingPrefixes is the subset of ownerIdentityPrefixes that unambiguously frame
+// the APP USER — never a client or other third party quoting themselves — because
+// "user" is this codebase's fixed term for the owner operating the app. It is the
+// only subset eligible for the bare-single-token path below: "my name is "/"i am "/
+// "i'm " could in principle appear inside a quoted client self-introduction, so they
+// stay full-name-only.
+var userFramingPrefixes = map[string]bool{
+	"the user's name is ": true, "user's name is ": true,
+	"the user is ": true, "user is ": true,
+}
+
 // isNameWord reports whether w looks like part of a person's name: letters plus an
 // internal hyphen (Jean-Paul). No digits, no apostrophe, no other punctuation clause
 // markers. An apostrophe is deliberately excluded even though it costs the rare
@@ -164,22 +175,36 @@ func isNameWord(w string) bool {
 //
 // Deliberately conservative (FAIL CLOSED — keep unless certain): content must open
 // with one of a small set of fixed self-identity phrasings, the remainder must be a
-// short (<=3 word) name-shaped phrase with no appended clause, and that phrase must
-// itself resolve to the owner via the SAME strict matcher the dossier/identifier
-// lookup use (never a bare surname/given name — identity.Matcher already guards
-// that). A soft fact that merely MENTIONS the owner ("User works with Fiduciaire de
-// la Cense", "User uses Falco") never matches: it neither opens with one of these
-// prefixes NOR reduces to a bare name after the prefix.
+// short (<=3 word) name-shaped phrase with no appended clause. Two ways the phrase
+// can then resolve to the owner:
+//
+//  1. Full-name path (any prefix): the phrase passes owner.IsOwnerNorm — the SAME
+//     strict, multi-token subset match the dossier/identifier lookup use (never a
+//     bare surname/given name — identity.Matcher already guards that).
+//  2. Bare-token path ("user is "/"user's name is " prefixes ONLY): the phrase is a
+//     SINGLE token and that exact token is one of owner.Tokens() (an explicitly
+//     configured owner name/email variant, e.g. a bare given name intentionally
+//     listed in Identity.OwnerNames). Restricted to the "user…" framing because
+//     "user" is this codebase's fixed term for the person operating the app — never
+//     a client or third party quoting themselves — so a bare configured owner token
+//     is unambiguous there. "my name is "/"i am "/"i'm " stay full-name-only: those
+//     phrasings could appear inside a quoted client self-introduction, where a bare
+//     given name must NOT be assumed to be the owner.
+//
+// A soft fact that merely MENTIONS the owner ("User works with Fiduciaire de la
+// Cense", "User uses Falco") never matches either path: it neither opens with one
+// of these prefixes nor reduces to a single bare name after the prefix.
 func IsOwnerIdentityAssertion(content string, owner *identity.Matcher) bool {
 	if owner == nil {
 		return false
 	}
 	folded := strings.TrimSpace(strings.Trim(foldText(content), ".! "))
-	var name string
+	var name, prefix string
 	matched := false
 	for _, p := range ownerIdentityPrefixes {
 		if strings.HasPrefix(folded, p) {
 			name = strings.TrimSpace(strings.TrimPrefix(folded, p))
+			prefix = p
 			matched = true
 			break
 		}
@@ -196,7 +221,21 @@ func IsOwnerIdentityAssertion(content string, owner *identity.Matcher) bool {
 			return false
 		}
 	}
-	return owner.IsOwnerNorm(contradict.NormKey(name))
+	normName := contradict.NormKey(name)
+	if owner.IsOwnerNorm(normName) {
+		return true
+	}
+	if userFramingPrefixes[prefix] {
+		normToks := strings.Fields(normName)
+		if len(normToks) == 1 {
+			for _, t := range owner.Tokens() {
+				if t == normToks[0] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Reconcile-pass planning over an existing set of rows.
