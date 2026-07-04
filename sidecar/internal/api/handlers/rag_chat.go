@@ -146,13 +146,16 @@ type DeterminedAnswerSource struct {
 // On an engine DECLINE (Confidence "none") Value is empty and Message carries an honest decline,
 // so the client shows "no verified value" rather than letting the model fabricate one.
 type DeterminedAnswerEvent struct {
-	Type       string                   `json:"type"` // "determined_answer"
-	Label      string                   `json:"label,omitempty"`
-	Subject    string                   `json:"subject,omitempty"`
-	Value      string                   `json:"value,omitempty"`
-	Confidence string                   `json:"confidence"` // "high" | "medium" | "none"
-	Message    string                   `json:"message,omitempty"`
-	Sources    []DeterminedAnswerSource `json:"sources,omitempty"`
+	Type       string `json:"type"` // "determined_answer"
+	Label      string `json:"label,omitempty"`
+	Subject    string `json:"subject,omitempty"`
+	Value      string `json:"value,omitempty"`
+	Confidence string `json:"confidence"` // "high" | "medium" | "none"
+	Message    string `json:"message,omitempty"`
+	// Note carries a cross-document supersession contradiction ("Previously 5 mg — updated.") shown
+	// alongside a determined figure. Empty when nothing was superseded.
+	Note    string                   `json:"note,omitempty"`
+	Sources []DeterminedAnswerSource `json:"sources,omitempty"`
 }
 
 // determinedAnswerFromToolResult turns a lookup_identifier tool result into the authoritative
@@ -201,6 +204,7 @@ func determinedAnswerFromToolResult(toolName string, result json.RawMessage) (*D
 			Label:      strings.TrimSpace(fr.Label),
 			Subject:    strings.TrimSpace(fr.Subject),
 			Confidence: string(fr.Tier),
+			Note:       strings.TrimSpace(fr.Note),
 		}
 		for _, s := range fr.Sources {
 			evt.Sources = append(evt.Sources, DeterminedAnswerSource{ContentID: s.ContentID, Title: s.Title})

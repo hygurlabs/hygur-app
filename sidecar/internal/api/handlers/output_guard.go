@@ -55,6 +55,10 @@ func (s *provenanceValueSet) scanExcerpt(text string) {
 	for _, a := range figure.AmountValues(text) {
 		s.amt[a.Value] = true
 	}
+	// Dosage-grade quantities (mg/mcg/ml/IU) are figure-grade too (C7) — traceable to a document.
+	for _, q := range figure.QuantityValues(text) {
+		s.amt[q.Value] = true
+	}
 }
 
 // determinedValueSet reduces the query's engine-determined facts (the AssembleQueryFacts result)
@@ -71,6 +75,11 @@ func determinedValueSet(subjects []retrieval.DeterminedFacts) provenanceValueSet
 		}
 		for _, c := range s.Claims {
 			set.addValue(c.Value)
+		}
+		// Determined figures (monetary amounts AND dosages) are verified values too (pilier 1).
+		for _, f := range s.Figures {
+			set.addValue(f.Value)
+			set.addValue(f.Raw)
 		}
 	}
 	return set
@@ -136,6 +145,14 @@ func classifyAnswerValues(answer string, determined, retrieved provenanceValueSe
 			raw:        a.Raw,
 			determined: determined.amt[a.Value],
 			retrieved:  retrieved.amt[a.Value],
+		})
+	}
+	// Dosage-grade values in the prose (a hallucinated "500 mg" → INVENTÉ; a retrieved one → marked).
+	for _, q := range figure.QuantityValues(answer) {
+		out = append(out, answerValue{
+			raw:        q.Raw,
+			determined: determined.amt[q.Value],
+			retrieved:  retrieved.amt[q.Value],
 		})
 	}
 	return out

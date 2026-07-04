@@ -3,6 +3,8 @@ package figure
 import (
 	"context"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/hygur/sidecar/internal/fact"
 	"github.com/hygur/sidecar/internal/identity"
@@ -17,6 +19,7 @@ const (
 	ReasonAmbiguousDir    = "ambiguous_direction"  // several directions compete, none requested
 	ReasonAmbiguousPeriod = "ambiguous_period"     // cannot order by period (ties / missing keys)
 	ReasonAmbiguousValue  = "ambiguous_value"      // the selected period/direction holds >1 value
+	ReasonAmbiguousMedic  = "ambiguous_medication" // several medications carry a dose, none named
 )
 
 // Result is the outcome of a figure resolution — the value NODE plus its resolved context EDGES,
@@ -24,15 +27,27 @@ const (
 // and figure answers uniformly.
 type Result struct {
 	Label      string
-	Value      string // canonical numeric ("7421.85")
-	Raw        string // as written ("7 421,85")
-	Unit       string // "EUR"
+	Value      string // canonical numeric ("7421.85", "500")
+	Raw        string // as written ("7 421,85", "500")
+	Unit       string // "EUR", "mg", "mcg", ...
 	Period     string // resolved period key
 	Direction  string // resolved direction (Dir*)
+	Medication string // resolved dosage medication (folded) or ""
+	Frequency  string // resolved dosage cadence ("N×/day") or ""
+	// Prior holds the values this figure SUPERSEDED — an older dose that a newer document replaced,
+	// surfaced as a cross-document contradiction ("current 10 mg, was 5 mg"). Empty when none.
+	Prior      []PriorValue
 	Tier       fact.Tier
 	Reason     string
 	Sources    []fact.Source
 	Candidates int
+}
+
+// PriorValue is one superseded figure value (the older reading a newer document replaced).
+type PriorValue struct {
+	Value string
+	Raw   string
+	Unit  string
 }
 
 // Store is the narrow slice of *store.DB the resolver needs (kept small for testability). It reuses
@@ -92,6 +107,24 @@ func Resolve(ctx context.Context, s Store, query, rawLabel, rawDirection, rawPer
 		return res, nil
 	}
 
+	// MEDICATION filter (dosage — C7). The medication is the qualifier a shared "dose" label denotes,
+	// filtered exactly like direction: if the query names one of the candidates' medications keep only
+	// it (isolation — two meds never cross-mix); if several medications carry a dose and none is named,
+	// decline; a single medication needs no naming. Monetary figures carry no medication → no-op.
+	if meds := distinctMedications(nodes); len(meds) > 0 {
+		reqMed, namedUnknown := matchMedication(rawLabel, meds)
+		switch {
+		case reqMed != "":
+			nodes = filterMedication(nodes, reqMed) // the named medication → isolate it
+		case namedUnknown:
+			res.Reason = ReasonNoFigure // a DIFFERENT medication was named that we have no dose for
+			return res, nil
+		case len(meds) > 1:
+			res.Reason = ReasonAmbiguousMedic // several meds, none named → decline
+			return res, nil
+		}
+	}
+
 	// DIRECTION filter (G2/G3). If the user named a direction, keep only exact matches. If not, and
 	// the candidates carry MORE THAN ONE distinct direction, the label is ambiguous → decline.
 	reqDir := NormalizeDirection(rawDirection)
@@ -125,20 +158,25 @@ func Resolve(ctx context.Context, s Store, query, rawLabel, rawDirection, rawPer
 		}
 	}
 
-	// The surviving nodes must agree on ONE value (they are the same period+direction across
-	// possibly several source documents). If they disagree, we cannot pick → decline.
-	if v := distinctValues(nodes); len(v) != 1 {
-		res.Reason = ReasonAmbiguousValue
+	// VALUE resolution with TEMPORAL SUPERSESSION (the reusable cross-doc-contradiction mechanism).
+	// The survivors are one fact (same period+direction+medication) across possibly several documents.
+	// If they AGREE, that's the value. If they DISAGREE, the LATEST document wins (ordered by doc date)
+	// and the older reading is surfaced as a contradiction (res.Prior) — never averaged, never guessed.
+	// When no clear latest exists (tie / no dates), we decline.
+	pick, prior, reason := resolveTemporal(nodes)
+	if reason != "" {
+		res.Reason = reason
 		return res, nil
 	}
-
-	pick := nodes[0]
 	res.Value, res.Raw, res.Unit = pick.Value, pick.Raw, pick.Unit
 	res.Period, res.Direction = pick.Period, pick.Direction
+	res.Medication, res.Frequency = pick.Medication, pick.Frequency
+	res.Prior = prior
 	res.Tier = fact.TierHigh
+	// Sources: every document that states the CHOSEN (current) value.
 	seen := map[string]bool{}
 	for _, n := range nodes {
-		if n.ContentID == "" || seen[n.ContentID] {
+		if n.Value != pick.Value || n.ContentID == "" || seen[n.ContentID] {
 			continue
 		}
 		seen[n.ContentID] = true
@@ -147,6 +185,101 @@ func Resolve(ctx context.Context, s Store, query, rawLabel, rawDirection, rawPer
 		}
 	}
 	return res, nil
+}
+
+// resolveTemporal picks the current value from a set of same-fact nodes, applying temporal
+// supersession when they disagree: the node(s) from the LATEST document date win, and the distinct
+// older values become Prior (the surfaced contradiction). Declines (reason) when the survivors
+// disagree but cannot be ordered (no doc dates, or a tie at the latest date holding several values).
+func resolveTemporal(nodes []store.FigureNode) (store.FigureNode, []PriorValue, string) {
+	if len(nodes) == 0 {
+		return store.FigureNode{}, nil, ReasonNoFigure
+	}
+	if len(distinctValues(nodes)) == 1 {
+		return nodes[0], nil, ""
+	}
+	// Disagreement → order by document date. Find the latest date present.
+	var latest time.Time
+	for _, n := range nodes {
+		if n.DocDate.After(latest) {
+			latest = n.DocDate
+		}
+	}
+	if latest.IsZero() {
+		return store.FigureNode{}, nil, ReasonAmbiguousValue // no dates to order by
+	}
+	var top []store.FigureNode
+	for _, n := range nodes {
+		if n.DocDate.Equal(latest) {
+			top = append(top, n)
+		}
+	}
+	if len(distinctValues(top)) != 1 {
+		return store.FigureNode{}, nil, ReasonAmbiguousValue // latest date is itself contradictory
+	}
+	pick := top[0]
+	// Prior = the distinct OLDER values that this one superseded.
+	var prior []PriorValue
+	seen := map[string]bool{pick.Value: true}
+	for _, n := range nodes {
+		if seen[n.Value] {
+			continue
+		}
+		seen[n.Value] = true
+		prior = append(prior, PriorValue{Value: n.Value, Raw: n.Raw, Unit: n.Unit})
+	}
+	sort.Slice(prior, func(i, j int) bool { return prior[i].Value < prior[j].Value })
+	return pick, prior, ""
+}
+
+// distinctMedications returns the set of non-empty medications present on the nodes.
+func distinctMedications(nodes []store.FigureNode) map[string]bool {
+	m := map[string]bool{}
+	for _, n := range nodes {
+		if n.Medication != "" {
+			m[n.Medication] = true
+		}
+	}
+	return m
+}
+
+// medNameStopwords are the query words that look like a medication name (Capitalized) but are not one
+// — sentence openers, pronouns and the dose cue itself — so a query naming an ABSENT medication is
+// distinguished from one naming NO medication.
+var medNameStopwords = map[string]bool{
+	"what": true, "whats": true, "which": true, "my": true, "your": true, "the": true,
+	"dose": true, "doses": true, "dosage": true, "posology": true, "posologie": true,
+	"is": true, "of": true, "for": true, "current": true, "latest": true, "last": true,
+}
+
+// matchMedication resolves the medication the query names against the candidate set. It returns
+// (matched, false) when the query names a candidate; ("", true) when the query names a DIFFERENT
+// medication (a Capitalized non-stopword word) the candidates don't carry — so resolution can decline
+// honestly (barrier: a med that is absent → decline, never the wrong dose); and ("", false) when the
+// query names no medication at all (caller falls back to single-candidate / ambiguity handling).
+func matchMedication(query string, meds map[string]bool) (string, bool) {
+	q := foldText(query)
+	for m := range meds {
+		if m != "" && strings.Contains(q, m) {
+			return m, false // a candidate is named
+		}
+	}
+	for _, tok := range medicationRe.FindAllString(query, -1) {
+		if !medNameStopwords[foldText(tok)] {
+			return "", true // a medication is named, but it is not one we have a dose for
+		}
+	}
+	return "", false // no medication named
+}
+
+func filterMedication(nodes []store.FigureNode, med string) []store.FigureNode {
+	var out []store.FigureNode
+	for _, n := range nodes {
+		if n.Medication == med {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func filterDirection(nodes []store.FigureNode, dir string) []store.FigureNode {
@@ -200,12 +333,9 @@ func latestPeriod(nodes []store.FigureNode) ([]store.FigureNode, string) {
 		}
 	}
 	if best <= 0 {
-		// No usable period edge on any node. If they all agree on one value, return them; else the
-		// "latest" is undefined → decline.
-		if len(distinctValues(nodes)) == 1 {
-			return nodes, ""
-		}
-		return nil, ReasonAmbiguousPeriod
+		// No usable period edge on any node (typical for a dosage). Defer to the temporal-supersession
+		// value resolution, which orders any disagreement by document date instead of by period.
+		return nodes, ""
 	}
 	var top []store.FigureNode
 	for _, n := range nodes {

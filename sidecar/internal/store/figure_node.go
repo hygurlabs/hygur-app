@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"strings"
+	"time"
 )
 
 // FigureNode is one labelled MONETARY figure as an ENGRAM NODE with its typed CONTEXT EDGES
@@ -12,15 +14,21 @@ import (
 // Emitted at ingest by the deterministic figure extractor + proximity attribution; resolved by a
 // deterministic traversal (filter label+direction, order by period, pick latest / decline).
 type FigureNode struct {
-	ContentID  string  // source edge — the document the figure was found in
-	EntityNorm string  // entity edge — the nearest person/org (the owner, for the founder's VAT)
-	Label      string  // normalized figure label ("vat")
-	Value      string  // canonical numeric value node ("7421.85")
-	Raw        string  // amount as written ("7 421,85"), for display
-	Unit       string  // unit edge ("EUR")
-	Period     string  // period edge ("2026-Q1", "2026-03", "2026") or ""
-	Direction  string  // direction edge ("payable"/"refund"/"advance"/"due") or ""
-	Prox       float64 // attribution strength of the entity edge (0,1]
+	ContentID  string // source edge — the document the figure was found in
+	EntityNorm string // entity edge — the nearest person/org (the owner, for the founder's VAT)
+	Label      string // normalized figure label ("vat")
+	Value      string // canonical numeric value node ("7421.85")
+	Raw        string // amount as written ("7 421,85"), for display
+	Unit       string // unit edge ("EUR")
+	Period     string // period edge ("2026-Q1", "2026-03", "2026") or ""
+	Direction  string // direction edge ("payable"/"refund"/"advance"/"due") or ""
+	// Medication is the qualifier edge of a DOSAGE figure (the drug the dose belongs to) — folded;
+	// "" for a monetary figure. Filtered on resolution exactly like Direction (C7).
+	Medication string
+	// Frequency is a dosage's cadence, normalized to "N×/day" (or ""). A context edge, not a discriminant.
+	Frequency string
+	Prox      float64   // attribution strength of the entity edge (0,1]
+	DocDate   time.Time // source document date (knowledge_items.created_at) — read-only, for temporal supersession
 }
 
 // ReplaceFigureNodes replaces every figure node for contentID (clear + reinsert) so a re-run is
@@ -40,9 +48,9 @@ func (d *DB) ReplaceFigureNodes(ctx context.Context, contentID string, nodes []F
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO figure_nodes
-			 (content_id, entity_norm, label, value, raw, unit, period, direction, prox)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			contentID, n.EntityNorm, n.Label, n.Value, n.Raw, n.Unit, n.Period, n.Direction, n.Prox); err != nil {
+			 (content_id, entity_norm, label, value, raw, unit, period, direction, medication, frequency, prox)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			contentID, n.EntityNorm, n.Label, n.Value, n.Raw, n.Unit, n.Period, n.Direction, n.Medication, n.Frequency, n.Prox); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -70,22 +78,14 @@ func (d *DB) AllFigureNodesForEntities(ctx context.Context, norms []string) ([]F
 		return nil, nil
 	}
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT content_id, entity_norm, label, value, raw, unit, period, direction, prox
-		 FROM figure_nodes
-		 WHERE entity_norm IN (`+strings.Join(ph, ",")+`)`, args...)
+		`SELECT f.content_id, f.entity_norm, f.label, f.value, f.raw, f.unit, f.period, f.direction, f.medication, f.frequency, f.prox, k.created_at
+		 FROM figure_nodes f LEFT JOIN knowledge_items k ON k.content_id = f.content_id
+		 WHERE f.entity_norm IN (`+strings.Join(ph, ",")+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []FigureNode
-	for rows.Next() {
-		var n FigureNode
-		if err := rows.Scan(&n.ContentID, &n.EntityNorm, &n.Label, &n.Value, &n.Raw, &n.Unit, &n.Period, &n.Direction, &n.Prox); err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return scanFigureNodes(rows)
 }
 
 // FigureNodesForEntities returns every figure node of a given label attached (entity edge) to ANY
@@ -111,18 +111,28 @@ func (d *DB) FigureNodesForEntities(ctx context.Context, norms []string, label s
 	}
 	args = append(args, label)
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT content_id, entity_norm, label, value, raw, unit, period, direction, prox
-		 FROM figure_nodes
-		 WHERE entity_norm IN (`+strings.Join(ph, ",")+`) AND label = ?`, args...)
+		`SELECT f.content_id, f.entity_norm, f.label, f.value, f.raw, f.unit, f.period, f.direction, f.medication, f.frequency, f.prox, k.created_at
+		 FROM figure_nodes f LEFT JOIN knowledge_items k ON k.content_id = f.content_id
+		 WHERE f.entity_norm IN (`+strings.Join(ph, ",")+`) AND f.label = ?`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanFigureNodes(rows)
+}
+
+// scanFigureNodes scans the shared figure-node projection (node columns + the joined document date).
+func scanFigureNodes(rows *sql.Rows) ([]FigureNode, error) {
 	var out []FigureNode
 	for rows.Next() {
 		var n FigureNode
-		if err := rows.Scan(&n.ContentID, &n.EntityNorm, &n.Label, &n.Value, &n.Raw, &n.Unit, &n.Period, &n.Direction, &n.Prox); err != nil {
+		var docDate sql.NullTime
+		if err := rows.Scan(&n.ContentID, &n.EntityNorm, &n.Label, &n.Value, &n.Raw, &n.Unit,
+			&n.Period, &n.Direction, &n.Medication, &n.Frequency, &n.Prox, &docDate); err != nil {
 			return nil, err
+		}
+		if docDate.Valid {
+			n.DocDate = docDate.Time
 		}
 		out = append(out, n)
 	}

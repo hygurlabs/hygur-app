@@ -654,6 +654,20 @@ CREATE INDEX IF NOT EXISTS idx_figure_nodes_entity ON figure_nodes(entity_norm);
 CREATE INDEX IF NOT EXISTS idx_figure_nodes_label ON figure_nodes(label);
 `,
 	},
+	// Migration 35 — dosage/quantity context edges on figure_nodes (C7, FIGURES_TRUTH_PLAN
+	// generalized beyond money). A dosage is the SAME figure NODE (value+unit) with two extra edges:
+	// MEDICATION (the qualifier the shared "dose" label denotes — the analogue of a rate's client)
+	// and FREQUENCY (its cadence). Additive columns keep every existing monetary figure unchanged
+	// (both default ''); the unit is now DATA (figure.unitTable), so mg/mcg/ml/IU live beside EUR.
+	{
+		Version: 35,
+		Name:    "figure_nodes_dosage",
+		SQL: `
+ALTER TABLE figure_nodes ADD COLUMN medication TEXT NOT NULL DEFAULT '';
+ALTER TABLE figure_nodes ADD COLUMN frequency  TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_figure_nodes_medication ON figure_nodes(medication);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

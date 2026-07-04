@@ -282,3 +282,51 @@ func TestDeterminedValueSet_NormalizesAllSources(t *testing.T) {
 		}
 	}
 }
+
+// ownerDoseFacts is an owner whose determined figures include a medical dosage (C7) — the value the
+// guard must treat as verified when it appears in the answer.
+func ownerDoseFacts() []retrieval.DeterminedFacts {
+	return []retrieval.DeterminedFacts{{
+		Subject: retrieval.EngramSubject{Norm: "owner", Type: "person"},
+		IsOwner: true,
+		Figures: []retrieval.EngramFigure{
+			{Label: "dose", Value: "500", Raw: "500", Unit: "mg", Medication: "amoxicillin", Frequency: "3×/day",
+				Sources: []fact.Source{{ContentID: "rx", Title: "prescription"}}},
+		},
+	}}
+}
+
+// TestGuardAnswer_DosageClassifiedByProvenance proves the pare-feu extends to dosage units (C7):
+// a determined dose is KEPT, a retrieved-only dose is MARKED, an invented dose FAILS CLOSED, and
+// medical false friends (a weight, a blood pressure, a heart rate) are NOT figure-grade at all.
+func TestGuardAnswer_DosageClassifiedByProvenance(t *testing.T) {
+	t.Run("determined dose kept unmarked", func(t *testing.T) {
+		out, declined := guardAnswer("Your Amoxicillin dose is 500 mg, 3×/day.", determinedValueSet(ownerDoseFacts()), noRetrieved())
+		if declined || strings.Contains(out, "not engine-verified") {
+			t.Errorf("determined dose should be kept unmarked: declined=%v out=%q", declined, out)
+		}
+	})
+	t.Run("invented dose fails closed", func(t *testing.T) {
+		out, declined := guardAnswer("Take 750 mg twice a day.", newProvenanceValueSet(), noRetrieved())
+		if !declined {
+			t.Errorf("an invented dose must fail closed, got %q", out)
+		}
+	})
+	t.Run("retrieved dose marked", func(t *testing.T) {
+		out, declined := guardAnswer("The note says 250 mg daily.", newProvenanceValueSet(), excerptsR("Prescription: Ibuprofen 250 mg daily."))
+		if declined {
+			t.Fatalf("a retrieved dose should be kept + marked, not declined")
+		}
+		if !strings.Contains(out, "not engine-verified") {
+			t.Errorf("retrieved dose should be marked: %q", out)
+		}
+	})
+	t.Run("false friends are not figure-grade", func(t *testing.T) {
+		// A weight (72 kg), a blood pressure (120/80) and a heart rate (HR 68) carry no dosage unit,
+		// so the guard never classifies them — the answer passes through untouched (no decline).
+		out, declined := guardAnswer("Weight 72 kg, BP 120/80, HR 68.", newProvenanceValueSet(), noRetrieved())
+		if declined || out != "Weight 72 kg, BP 120/80, HR 68." {
+			t.Errorf("false friends should pass through untouched: declined=%v out=%q", declined, out)
+		}
+	})
+}

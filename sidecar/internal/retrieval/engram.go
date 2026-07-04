@@ -423,13 +423,15 @@ type DeterminedFacts struct {
 // F1). Assembled deterministically from store.figure_nodes so a subject's figures are ALWAYS in
 // context (pilier 1), closing the hole where the chat answered a figure from RAG (the 357 € bug).
 type EngramFigure struct {
-	Label     string        `json:"label"` // normalized figure label ("vat")
-	Value     string        `json:"value"` // canonical numeric ("7421.85")
-	Raw       string        `json:"raw,omitempty"`
-	Unit      string        `json:"unit,omitempty"`
-	Period    string        `json:"period,omitempty"`
-	Direction string        `json:"direction,omitempty"`
-	Sources   []fact.Source `json:"sources,omitempty"`
+	Label      string        `json:"label"` // normalized figure label ("vat", "dose")
+	Value      string        `json:"value"` // canonical numeric ("7421.85", "500")
+	Raw        string        `json:"raw,omitempty"`
+	Unit       string        `json:"unit,omitempty"`
+	Period     string        `json:"period,omitempty"`
+	Direction  string        `json:"direction,omitempty"`
+	Medication string        `json:"medication,omitempty"` // dosage qualifier (C7)
+	Frequency  string        `json:"frequency,omitempty"`  // dosage cadence ("N×/day")
+	Sources    []fact.Source `json:"sources,omitempty"`
 }
 
 // HasFacts reports whether the subject carries any determined identifier, claim or figure.
@@ -556,19 +558,22 @@ func groupDeterminedFigures(ctx context.Context, db *store.DB, nodes []store.Fig
 		return nil
 	}
 	type group struct {
-		label, dir, period, unit string
-		values                   map[string]store.FigureNode // value → a representative node
-		sources                  map[string]bool
+		label, dir, period, unit, medication, frequency string
+		values                                          map[string]store.FigureNode // value → a representative node
+		sources                                         map[string]bool
 	}
 	groups := map[string]*group{}
 	for _, n := range nodes {
 		if n.Value == "" || n.Label == "" {
 			continue
 		}
-		k := n.Label + "|" + n.Direction + "|" + n.Period
+		// The medication is part of the group key so two different dosages ("Amoxicillin" vs
+		// "Levothyroxine") never collapse into one contested group and get dropped.
+		k := n.Label + "|" + n.Direction + "|" + n.Period + "|" + n.Medication
 		g := groups[k]
 		if g == nil {
 			g = &group{label: n.Label, dir: n.Direction, period: n.Period, unit: n.Unit,
+				medication: n.Medication, frequency: n.Frequency,
 				values: map[string]store.FigureNode{}, sources: map[string]bool{}}
 			groups[k] = g
 		}
@@ -597,7 +602,8 @@ func groupDeterminedFigures(ctx context.Context, db *store.DB, nodes []store.Fig
 		sort.Slice(sources, func(i, j int) bool { return sources[i].ContentID < sources[j].ContentID })
 		out = append(out, EngramFigure{
 			Label: g.label, Value: rep.Value, Raw: rep.Raw, Unit: g.unit,
-			Period: g.period, Direction: g.dir, Sources: sources,
+			Period: g.period, Direction: g.dir, Medication: g.medication, Frequency: g.frequency,
+			Sources: sources,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {

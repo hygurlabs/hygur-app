@@ -36,6 +36,7 @@ func TestPlanVoieA_Routing(t *testing.T) {
 		{"vat amount → figure", "montant de la dernière TVA à payer", true, laneFigure, "moi", ""},
 		{"duns → identifier", "mon DUNS", true, laneIdentifier, "moi", "DUNS"},
 		{"named subject figure", "le montant de TVA à payer de Acme", true, laneFigure, "acme", ""},
+		{"dosage → figure", "what's my Amoxicillin dose?", true, laneFigure, "moi", ""},
 		{"exploratory → voie B", "résume ma semaine", false, "", "", ""},
 		{"bare tax word → voie B", "explique-moi comment fonctionne la TVA", false, "", "", ""},
 	}
@@ -82,6 +83,18 @@ func TestComposeVoieAAnswer_TemplatedByEngine(t *testing.T) {
 		})
 		if !strings.Contains(got, "7 421,85 €") || !strings.Contains(got, "VAT to pay for Q3 2026") {
 			t.Errorf("unexpected: %q", got)
+		}
+	})
+	t.Run("dosage high — value + frequency + supersession note", func(t *testing.T) {
+		got := composeVoieAAnswer(&DeterminedAnswerEvent{
+			Label: "Warfarin dose", Subject: "you", Value: "10 mg, 1×/day", Confidence: "high",
+			Note: "Previously 5 mg — updated.",
+		})
+		if !strings.Contains(got, "Your Warfarin dose is 10 mg, 1×/day") {
+			t.Errorf("dose sentence wrong: %q", got)
+		}
+		if !strings.Contains(got, "Previously 5 mg — updated.") {
+			t.Errorf("supersession note missing: %q", got)
 		}
 	})
 	t.Run("decline invents no value", func(t *testing.T) {

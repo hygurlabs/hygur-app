@@ -239,6 +239,8 @@ func figureNodes(item *store.KnowledgeItem) []store.FigureNode {
 			Unit:       f.Unit,
 			Period:     f.Period,
 			Direction:  f.Direction,
+			Medication: f.Medication,
+			Frequency:  f.Frequency,
 			Prox:       1.0,
 		})
 	}

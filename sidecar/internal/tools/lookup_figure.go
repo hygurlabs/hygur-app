@@ -32,7 +32,7 @@ func NewLookupFigureTool(s figure.Store, owner *identity.Matcher, ownerSubject s
 func (t *LookupFigureTool) Name() string { return "lookup_figure" }
 
 func (t *LookupFigureTool) Description() string {
-	return "Get an exact labeled MONETARY figure with its context — e.g. a VAT amount to pay or refunded for a given period. Use for 'the amount of my [last] VAT to pay / VAT refunded / VAT for Q1 2026'. Returns the deterministic value with its period and direction, or an honest decline; never a guessed number."
+	return "Get an exact labeled figure with its context — a MONETARY amount (a VAT amount to pay/refunded for a period) OR a medical DOSAGE (a medication's dose with its unit and frequency). Use for 'the amount of my [last] VAT to pay', 'my VAT for Q1 2026', or 'my Amoxicillin dose'. Returns the deterministic value with its context (period+direction, or unit+frequency for a dose) and surfaces any cross-document change; or an honest decline. Never a guessed number."
 }
 
 func (t *LookupFigureTool) ParameterSchema() map[string]any {
@@ -45,7 +45,7 @@ func (t *LookupFigureTool) ParameterSchema() map[string]any {
 			},
 			"label": map[string]any{
 				"type":        "string",
-				"description": "The figure's label as the user names it — e.g. 'VAT', 'TVA'. Pass the raw label; the engine normalizes it.",
+				"description": "The figure's label as the user names it — e.g. 'VAT', 'TVA', or a medication + 'dose' (e.g. 'Amoxicillin dose'). Pass the raw phrase; the engine normalizes it and matches the medication.",
 			},
 			"direction": map[string]any{
 				"type":        "string",
@@ -72,16 +72,19 @@ type figureArgs struct {
 // voices it at the reported confidence. Value/Label are pre-composed for display so the existing
 // card renders a figure (amount + unit, with period + direction in the label) with no UI change.
 type FigureResponse struct {
-	Label     string        `json:"label,omitempty"`   // composed heading, e.g. "VAT to pay · Q1 2026"
-	Subject   string        `json:"subject,omitempty"` // whose figure ("you" for the owner)
-	Value     string        `json:"value,omitempty"`   // composed display value, e.g. "7 421,85 €"
-	Unit      string        `json:"unit,omitempty"`
-	Period    string        `json:"period,omitempty"`
-	Direction string        `json:"direction,omitempty"`
-	Tier      fact.Tier     `json:"confidence"`
-	Reason    string        `json:"reason,omitempty"`
-	Guidance  string        `json:"guidance"`
-	Sources   []fact.Source `json:"sources,omitempty"`
+	Label     string `json:"label,omitempty"`   // composed heading, e.g. "VAT to pay · Q1 2026" / "Amoxicillin dose"
+	Subject   string `json:"subject,omitempty"` // whose figure ("you" for the owner)
+	Value     string `json:"value,omitempty"`   // composed display value, e.g. "7 421,85 €" / "500 mg, 3×/day"
+	Unit      string `json:"unit,omitempty"`
+	Period    string `json:"period,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	Frequency string `json:"frequency,omitempty"`
+	// Note surfaces a cross-document supersession contradiction ("Previously 5 mg — updated.").
+	Note     string        `json:"note,omitempty"`
+	Tier     fact.Tier     `json:"confidence"`
+	Reason   string        `json:"reason,omitempty"`
+	Guidance string        `json:"guidance"`
+	Sources  []fact.Source `json:"sources,omitempty"`
 }
 
 func (t *LookupFigureTool) Execute(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -119,15 +122,21 @@ func (t *LookupFigureTool) Execute(ctx context.Context, raw json.RawMessage) (js
 		Sources: res.Sources,
 	}
 	if res.Tier == fact.TierHigh || res.Tier == fact.TierMed {
-		out.Label = composeFigureLabel(res.Label, res.Direction, res.Period)
-		out.Value = composeFigureValue(res.Raw, res.Value, res.Unit)
-		out.Unit, out.Period, out.Direction = res.Unit, res.Period, res.Direction
-		out.Guidance = "State this amount plainly as the answer, with its period and direction, and cite the source document(s). Do NOT alter the number."
+		out.Label = composeFigureHeading(res.Label, res.Medication, res.Direction, res.Period)
+		out.Value = composeFigureDisplay(res.Raw, res.Value, res.Unit, res.Frequency)
+		out.Unit, out.Period, out.Direction, out.Frequency = res.Unit, res.Period, res.Direction, res.Frequency
+		out.Note = composeSupersessionNote(res.Prior)
+		out.Guidance = "State this value plainly as the answer, with its unit and any frequency/period/direction, and cite the source document(s). Do NOT alter the number."
+		if out.Note != "" {
+			out.Guidance += " A newer document changed this value — state the current value AND mention the prior one exactly as given in the note."
+		}
 		return json.Marshal(out)
 	}
 
 	out.Label = composeFigureLabel(res.Label, "", "")
 	switch res.Reason {
+	case figure.ReasonAmbiguousMedic:
+		out.Guidance = "Several medications carry a dose and the user named none. Do NOT state a value — ask WHICH medication they mean."
 	case figure.ReasonAmbiguousDir:
 		out.Guidance = "Several figures of this label compete (e.g. to pay vs refunded). Do NOT state a value — ask the user WHICH one they mean."
 	case figure.ReasonAmbiguousPeriod:
@@ -187,7 +196,9 @@ func composeFigureLabel(label, dir, period string) string {
 	return head
 }
 
-// composeFigureValue builds the display value: the amount as written + the unit symbol ("7 421,85 €").
+// composeFigureValue builds the display value: the amount as written + the unit symbol ("7 421,85 €",
+// "500 mg", "5 %"). The unit is rendered from the value itself — no per-type branch beyond currency's
+// trailing symbol and ratio's no-space convention.
 func composeFigureValue(rawAmount, canonical, unit string) string {
 	amt := rawAmount
 	if amt == "" {
@@ -198,6 +209,51 @@ func composeFigureValue(rawAmount, canonical, unit string) string {
 		return amt + " €"
 	case "":
 		return amt
+	case "%":
+		return amt + "%"
 	}
 	return amt + " " + unit
+}
+
+// composeFigureDisplay renders the value with its unit and appends any dosage frequency ("500 mg,
+// 3×/day"). The frequency is a context edge shown inline so the cut-LLM card carries the full dose.
+func composeFigureDisplay(rawAmount, canonical, unit, frequency string) string {
+	v := composeFigureValue(rawAmount, canonical, unit)
+	if frequency != "" {
+		v += ", " + frequency
+	}
+	return v
+}
+
+// composeFigureHeading builds the card heading. A dosage reads "Amoxicillin dose" (the MEDICATION is
+// the qualifier); a monetary figure reads "VAT to pay · Q1 2026" (direction + period). Same composer,
+// the present context edges deciding the phrasing — no separate code path per figure type.
+func composeFigureHeading(label, medication, dir, period string) string {
+	if label == "dose" && medication != "" {
+		return capitalizeMed(medication) + " dose"
+	}
+	return composeFigureLabel(label, dir, period)
+}
+
+// capitalizeMed title-cases a folded medication name for display ("amoxicillin" → "Amoxicillin").
+func capitalizeMed(m string) string {
+	if m == "" {
+		return m
+	}
+	r := []rune(m)
+	r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+	return string(r)
+}
+
+// composeSupersessionNote renders the cross-document contradiction for a superseded figure: the
+// value(s) a newer document replaced ("Previously 5 mg — updated."). Empty when nothing superseded.
+func composeSupersessionNote(prior []figure.PriorValue) string {
+	if len(prior) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(prior))
+	for _, p := range prior {
+		parts = append(parts, composeFigureValue(p.Raw, p.Value, p.Unit))
+	}
+	return "Previously " + strings.Join(parts, ", ") + " — updated."
 }

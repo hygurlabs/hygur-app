@@ -55,6 +55,8 @@ var firstPersonMarkers = map[string]bool{
 var amountCues = map[string]bool{
 	"montant": true, "montants": true, "amount": true, "amounts": true,
 	"combien": true, "somme": true,
+	// dosage/quantity cues (C7): "dose"/"dosage"/"posology" IS the how-much word for a medication.
+	"dose": true, "doses": true, "dosage": true, "posology": true, "posologie": true,
 }
 
 // idValueCues mark an IDENTIFIER-VALUE question. Generic cue words ("numéro", "number", "n°"…) PLUS
@@ -278,6 +280,9 @@ func composeVoieAAnswer(evt *DeterminedAnswerEvent) string {
 		sentence = "I'm not fully certain, but " + lowerFirst(subj) + head + " is " + evt.Value + " — please double-check against the source."
 	} else {
 		sentence = subj + head + " is " + evt.Value + "."
+	}
+	if note := strings.TrimSpace(evt.Note); note != "" {
+		sentence += " " + note
 	}
 	if titles := determinedSourceTitles(evt.Sources); titles != "" {
 		sentence += " (source: " + titles + ")"
