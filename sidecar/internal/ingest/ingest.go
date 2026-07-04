@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -522,6 +524,17 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 			if h, _ := existing.Metadata["content_hash"].(string); h == contentHash {
 				return &IngestResult{ContentID: existing.ContentID, Status: "duplicate", ChunkCount: 0}, nil
 			}
+			// Keep the BETTER of old/new by extraction confidence: a re-extraction
+			// pass must never replace a clean extraction with a worse (garbled) one.
+			// Fail-closed — only downgrade-protect when BOTH sides carry a
+			// confidence signal; absence leaves the legacy replace behaviour intact.
+			if newC, ok := metadataFloat(in.Metadata, "extract_confidence"); ok {
+				if oldC, ok := metadataFloat(existing.Metadata, "extract_confidence"); ok && oldC > newC {
+					slog.WarnContext(ctx, "ingest_text.keep_better",
+						"source_ref", in.SourceRef, "old_confidence", oldC, "new_confidence", newC)
+					return &IngestResult{ContentID: existing.ContentID, Status: "kept_better", ChunkCount: 0}, nil
+				}
+			}
 			// Content changed for this source_ref → replace in place, keeping the
 			// content_id so existing references stay stable.
 			contentID = existing.ContentID
@@ -606,6 +619,34 @@ func (i *Ingestor) IngestText(ctx context.Context, in IngestTextInput) (*IngestR
 	}
 
 	return &IngestResult{ContentID: contentID, Status: status, ChunkCount: chunkCount}, nil
+}
+
+// metadataFloat reads a numeric metadata value tolerant of how it was
+// (de)serialised: a Go float64/int (direct parser output) or a JSON number/string
+// (round-tripped through the store or the HTTP body). Returns false when absent
+// or unparseable.
+func metadataFloat(m map[string]any, key string) (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	switch v := m[key].(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // classifyItem returns the taxonomy categories for an item: the ones cached in

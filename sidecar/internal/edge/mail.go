@@ -199,9 +199,20 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 					if err := ctx.Err(); err != nil {
 						return st, state, err
 					}
-					atext := ms.attachmentText(ctx, att)
+					atext, ameta := ms.attachmentText(ctx, att)
 					if atext == "" {
 						continue
+					}
+					attMeta := map[string]any{
+						"from": m.From, "mailbox": mbox, "provider": ms.provider,
+						"attachment": true, "filename": att.Filename,
+						"parent": ref, "parent_subject": m.Subject,
+					}
+					// Carry the extraction-confidence signal so the center can flag
+					// low_confidence attachments and the keep-better-of-old/new guard
+					// never downgrades a good extraction on re-sync.
+					for k, v := range ameta {
+						attMeta[k] = v
 					}
 					if _, err := ms.client.PushText(ctx, IngestText{
 						Title:      attachmentTitle(m.Subject, att.Filename),
@@ -210,11 +221,7 @@ func (ms *MailSync) Run(ctx context.Context, conn mail.MailConnector, mailboxes 
 						SourceRef:  ref + ":att:" + att.Filename,
 						Author:     m.From,
 						CreatedAt:  createdAt,
-						Metadata: map[string]any{
-							"from": m.From, "mailbox": mbox, "provider": ms.provider,
-							"attachment": true, "filename": att.Filename,
-							"parent": ref, "parent_subject": m.Subject,
-						},
+						Metadata:   attMeta,
 					}); err != nil {
 						st.Errors++
 					} else {
@@ -345,14 +352,17 @@ func messageText(m mail.Message, body string) string {
 }
 
 // attachmentText extracts indexable text from a PDF attachment (embedded text
-// only — no OCR). Non-PDF, empty, or unparseable attachments yield "".
-func (ms *MailSync) attachmentText(ctx context.Context, att mail.Attachment) string {
+// only — no OCR on this sync path). Non-PDF, empty, or unparseable attachments
+// yield "". It also returns the extraction-confidence signal
+// (extract_method / extract_confidence / extract_low_confidence) so the center
+// can flag garbled extractions and arbitrate re-syncs by quality.
+func (ms *MailSync) attachmentText(ctx context.Context, att mail.Attachment) (string, map[string]any) {
 	if len(att.Data) == 0 || !isPDF(att) {
-		return ""
+		return "", nil
 	}
-	text, _, err := ms.pdf.Parse(ctx, bytes.NewReader(att.Data))
+	text, meta, err := ms.pdf.Parse(ctx, bytes.NewReader(att.Data))
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	// The PDF parser returns RAW text; collapse it so the mail body keeps the
 	// exact normalized attachment text it always carried (mail is left unchanged
@@ -361,7 +371,13 @@ func (ms *MailSync) attachmentText(ctx context.Context, att mail.Attachment) str
 	if len(text) > maxAttachmentTextBytes {
 		text = text[:maxAttachmentTextBytes]
 	}
-	return text
+	conf := map[string]any{}
+	for _, k := range []string{"extract_method", "extract_confidence", "extract_low_confidence"} {
+		if v, ok := meta[k]; ok {
+			conf[k] = v
+		}
+	}
+	return text, conf
 }
 
 func isPDF(att mail.Attachment) bool {

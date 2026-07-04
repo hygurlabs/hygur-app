@@ -62,12 +62,25 @@ func (p *PDFParser) SupportedExtensions() []string {
 
 // Parse extracts text content and metadata from a PDF document.
 // The reader content is fully buffered since PDF parsing requires random access.
+//
+// Extraction strategy (foundational fix for the spaced-glyph garbage the
+// ledongthuc/pdf library emitted on the TARA « Contractor Agreement » PDF):
+//  1. PRIMARY: pdftotext (poppler) — a robust layout-aware extractor that
+//     reconstructs words from individually-positioned glyphs. Runs as an
+//     external, memory-safe subprocess.
+//  2. FAIL-SOFT FALLBACK: the pure-Go ledongthuc/pdf library (panic-recovered),
+//     so extraction still works when poppler is absent from the image.
+//
+// The BETTER of the two by quality score wins (poppler on ties), so a healthy
+// ledongthuc result is never discarded for an empty/garbled poppler one and
+// vice-versa. A per-extraction confidence signal is always stamped into meta
+// (extract_method / extract_confidence / extract_low_confidence) so the engine
+// can KNOW an extraction is untrustworthy instead of trusting it blindly.
 func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (content string, meta ingest.Metadata, err error) {
-	// The ledongthuc/pdf library panics on some malformed/truncated PDFs
-	// (e.g. "malformed PDF: reading at offset … EOF") instead of returning an
-	// error. Recover so a bad document degrades to ErrInvalidPDF rather than
-	// crashing the process — mail-attachment indexing runs Parse in goroutines,
-	// where an unrecovered panic takes down the whole sidecar.
+	// Recover so a bad document degrades to an error rather than crashing the
+	// process — mail-attachment indexing runs Parse in goroutines, where an
+	// unrecovered panic takes down the whole sidecar. The ledongthuc extraction
+	// has its own inner recover; this is the outer backstop.
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.WarnContext(ctx, "pdf.parse: recovered from panic in PDF library", "panic", rec)
@@ -100,89 +113,176 @@ func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (content string, met
 	default:
 	}
 
-	// Create a ReaderAt from the buffer
-	readerAt := bytes.NewReader(data)
+	// PRIMARY: poppler. Memory-safe (external process), robust on the glyph
+	// positioning that defeats ledongthuc. Empty when poppler is absent or fails.
+	popplerText := strings.TrimSpace(extractViaPdftotext(ctx, data))
 
-	// Open the PDF
-	pdfReader, err := pdf.NewReader(readerAt, int64(len(data)))
-	if err != nil {
-		// Check for common error patterns
-		errStr := err.Error()
-		if strings.Contains(errStr, "encrypt") || strings.Contains(errStr, "password") {
+	// FALLBACK: pure-Go ledongthuc, which also yields page_count + /CreationDate.
+	ledongText, pageCount, docDate, ledongErr := extractViaLedongthuc(ctx, data)
+	ledongText = strings.TrimSpace(ledongText)
+
+	// If poppler produced nothing AND ledongthuc hard-failed (not just empty),
+	// surface the original error semantics (protected / invalid).
+	if popplerText == "" && ledongErr != nil {
+		if errors.Is(ledongErr, ErrProtectedPDF) {
 			return "", nil, ErrProtectedPDF
 		}
-		return "", nil, fmt.Errorf("%w: %v", ErrInvalidPDF, err)
+		if errors.Is(ledongErr, errNoPages) {
+			return "", ingest.Metadata{"page_count": 0}, nil
+		}
+		return "", nil, ledongErr
 	}
 
-	pageCount := pdfReader.NumPage()
-	if pageCount == 0 {
-		// Valid PDF but no pages
-		return "", ingest.Metadata{"page_count": 0}, nil
+	// Choose the better extraction by quality; poppler wins ties (it is primary
+	// and layout-aware). This guarantees we never replace a clean ledongthuc
+	// result with garbled/empty poppler output, nor the reverse.
+	popplerQ := ingest.AssessTextQuality(popplerText)
+	ledongQ := ingest.AssessTextQuality(ledongText)
+
+	content = popplerText
+	method := "pdftotext"
+	quality := popplerQ
+	if popplerText == "" || ledongQ.Score > popplerQ.Score {
+		content = ledongText
+		method = "ledongthuc"
+		quality = ledongQ
 	}
 
-	// Extract text from each page
-	var pageTexts []string
-	for i := 1; i <= pageCount; i++ {
-		// Check context between pages
-		select {
-		case <-ctx.Done():
-			return "", nil, ctx.Err()
-		default:
-		}
-
-		page := pdfReader.Page(i)
-		if page.V.IsNull() {
-			continue
-		}
-
-		text, err := page.GetPlainText(nil)
-		if err != nil {
-			// Log but continue - some pages might be images only
-			continue
-		}
-
-		text = strings.TrimSpace(text)
-		if text != "" {
-			pageTexts = append(pageTexts, text)
-		}
+	metadata := ingest.Metadata{}
+	if pageCount > 0 {
+		metadata["page_count"] = pageCount
+	}
+	if docDate != "" {
+		metadata["doc_date"] = docDate
 	}
 
-	// Join pages with double newlines. This is the RAW extracted text (line
-	// breaks + case preserved); the ingest layer derives normalized_text via
-	// ingest.NormalizeText and stores both.
-	content = strings.Join(pageTexts, "\n\n")
-
-	metadata := ingest.Metadata{
-		"page_count": pageCount,
-	}
-
-	// Extract /CreationDate from PDF document info if available.
-	// The pdf library exposes Trailer which holds the info dictionary.
-	if info := pdfReader.Trailer().Key("Info"); !info.IsNull() {
-		if creationDate := info.Key("CreationDate"); !creationDate.IsNull() {
-			if s := creationDate.RawString(); s != "" {
-				metadata["doc_date"] = s
-			}
-		}
-	}
-
-	// Sparse-text heuristic: if the extracted text averages fewer than 50
-	// characters per page, the PDF is likely scanned/image-only. Attempt an
-	// OCR fallback — unless OCR is disabled (bulk mail-attachment path), where a
-	// per-attachment vision call would saturate the inference model.
-	if !p.disableOCR && isSparseText(content, pageCount) {
-		slog.WarnContext(ctx, "pdf.parse: sparse text detected, attempting OCR fallback",
-			"page_count", pageCount, "content_len", len(content))
-		ocrText := p.ocrFallback(ctx, data)
-		if ocrText != "" {
+	// OCR fallback fires when the best embedded-text extraction is either sparse
+	// (scanned/image-only PDF) OR garbled (spaced-glyph shape poppler couldn't
+	// fix either), UNLESS OCR is disabled. The disableOCR gate keeps the bulk
+	// sync path off the critical path: sync never OCRs synchronously (a
+	// per-attachment vision call would saturate the inference model); instead it
+	// STAMPS low_confidence so an async re-extraction pass can OCR later.
+	if !p.disableOCR && (isSparseText(content, pageCount) || quality.Garbled) {
+		slog.WarnContext(ctx, "pdf.parse: sparse or garbled text, attempting OCR fallback",
+			"page_count", pageCount, "content_len", len(content), "garbled", quality.Garbled)
+		ocrText := strings.TrimSpace(p.ocrFallback(ctx, data))
+		if ocrQ := ingest.AssessTextQuality(ocrText); ocrText != "" && ocrQ.Score > quality.Score {
 			content = ocrText
+			method = "ocr"
+			quality = ocrQ
 			metadata["ocr_attempted"] = true
 		} else {
 			metadata["ocr_attempted"] = false
 		}
 	}
 
+	metadata["extract_method"] = method
+	metadata["extract_confidence"] = quality.Score
+	metadata["extract_low_confidence"] = quality.LowConfidence
+
 	return content, metadata, nil
+}
+
+// errNoPages signals a structurally valid PDF that contains zero pages.
+var errNoPages = errors.New("pdf: no pages")
+
+// extractViaLedongthuc extracts text with the pure-Go ledongthuc/pdf library and
+// returns the page count and /CreationDate too. It recovers internally so a
+// library panic becomes an error (ErrInvalidPDF) instead of unwinding through
+// the caller — keeping the poppler result usable when only ledongthuc panics.
+func extractViaLedongthuc(ctx context.Context, data []byte) (text string, pageCount int, docDate string, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.WarnContext(ctx, "pdf.ledongthuc: recovered from panic", "panic", rec)
+			text, pageCount, docDate, err = "", 0, "", fmt.Errorf("%w: panic: %v", ErrInvalidPDF, rec)
+		}
+	}()
+
+	pdfReader, rerr := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if rerr != nil {
+		errStr := rerr.Error()
+		if strings.Contains(errStr, "encrypt") || strings.Contains(errStr, "password") {
+			return "", 0, "", ErrProtectedPDF
+		}
+		return "", 0, "", fmt.Errorf("%w: %v", ErrInvalidPDF, rerr)
+	}
+
+	pageCount = pdfReader.NumPage()
+	if pageCount == 0 {
+		return "", 0, "", errNoPages
+	}
+
+	var pageTexts []string
+	for i := 1; i <= pageCount; i++ {
+		select {
+		case <-ctx.Done():
+			return "", 0, "", ctx.Err()
+		default:
+		}
+		page := pdfReader.Page(i)
+		if page.V.IsNull() {
+			continue
+		}
+		t, perr := page.GetPlainText(nil)
+		if perr != nil {
+			continue // some pages might be image-only
+		}
+		if t = strings.TrimSpace(t); t != "" {
+			pageTexts = append(pageTexts, t)
+		}
+	}
+
+	if info := pdfReader.Trailer().Key("Info"); !info.IsNull() {
+		if creationDate := info.Key("CreationDate"); !creationDate.IsNull() {
+			if s := creationDate.RawString(); s != "" {
+				docDate = s
+			}
+		}
+	}
+
+	// Join pages with double newlines. This is the RAW extracted text (line
+	// breaks + case preserved); the ingest layer derives normalized_text.
+	return strings.Join(pageTexts, "\n\n"), pageCount, docDate, nil
+}
+
+// pdftotextTimeout caps a single poppler extraction. A legitimate PDF extracts
+// in well under a second; this only fires for pathological inputs.
+const pdftotextTimeout = 30 * time.Second
+
+// extractViaPdftotext extracts text with pdftotext (poppler) as an external,
+// memory-safe subprocess. It is the ROBUST primary extractor: unlike the pure-Go
+// library it reconstructs words from individually-positioned glyphs (the
+// spaced-glyph artifact). Returns "" when pdftotext is absent or fails, so it is
+// never a hard dependency — the ledongthuc fallback still works.
+func extractViaPdftotext(ctx context.Context, data []byte) string {
+	if _, err := exec.LookPath("pdftotext"); err != nil {
+		slog.WarnContext(ctx, "pdf.parse: pdftotext not in PATH, using pure-Go fallback")
+		return ""
+	}
+	tmpDir, err := os.MkdirTemp("", "hygur-pdftotext-*")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(tmpDir)
+
+	inPath := filepath.Join(tmpDir, "in.pdf")
+	if err := os.WriteFile(inPath, data, 0o600); err != nil {
+		return ""
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, pdftotextTimeout)
+	defer cancel()
+
+	// -q quiet, -enc UTF-8 for correct accents, -eol unix, "-" writes to stdout.
+	cmd := exec.CommandContext(cctx, "pdftotext", "-q", "-enc", "UTF-8", "-eol", "unix", inPath, "-")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
+		slog.WarnContext(ctx, "pdf.parse: pdftotext failed, using pure-Go fallback", "err", err)
+		return ""
+	}
+	return out.String()
 }
 
 // isSparseText reports whether the extracted text is suspiciously thin,

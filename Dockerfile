@@ -35,8 +35,12 @@ RUN CGO_ENABLED=1 go build -tags 'sqlite_fts5 sqlite_json1' \
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
+# poppler-utils provides pdftotext (the robust PRIMARY PDF text extractor) and
+# pdftoppm (page rasteriser for the OCR fallback). Without it the server silently
+# degrades to the pure-Go ledongthuc extractor, which emits spaced-glyph garbage
+# on some PDFs (the TARA « Contractor Agreement » failure).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/hygur-server /usr/local/bin/hygur-server
 
