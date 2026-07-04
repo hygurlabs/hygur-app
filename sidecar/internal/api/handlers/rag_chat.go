@@ -818,7 +818,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// writes that is NOT in this set is unverified and must never be shown (P=0). Stays empty when
 	// the engine determined nothing (e.g. "my phone number" with no determined phone) — which is
 	// exactly when an invented number in the prose must be caught.
-	var determinedValues map[string]bool
+	var determinedValues provenanceValueSet = newProvenanceValueSet()
 	if h.factsDB != nil && h.ownerMatcher != nil && latestUserQuery != "" {
 		fctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		facts, err := retrieval.AssembleQueryFacts(fctx, h.factsDB, latestUserQuery, time.Now().UTC(), h.ownerMatcher, h.ownerSubject)
@@ -1159,9 +1159,13 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// determine, replace the whole answer with an honest decline — so no unverified identifier can
 	// EVER be shown. Verified values (also on the card) and ordinary numbers pass through. This is
 	// the text we emit, persist, and feed to session/memory below.
-	answer, guardDeclined := guardAnswer(assistantBuf.String(), determinedValues)
+	// R = the values present in this turn's UNTRUSTED retrieved excerpts. A value the LLM voiced
+	// that is NOT determined but IS in R is RETROUVÉ (from a document) → kept but marked; a value in
+	// neither is INVENTÉ → stripped. Built here so the firewall has both membership oracles.
+	retrievedValues := retrievedValueSet(turnSources)
+	answer, guardDeclined := guardAnswer(assistantBuf.String(), determinedValues, retrievedValues)
 	if guardDeclined {
-		h.logger.Warn().Msg("output guard: unverified identifier-grade value in answer → honest decline")
+		h.logger.Warn().Msg("provenance firewall: invented value (in no source) in answer → honest decline")
 	}
 
 	if streamErr != nil {

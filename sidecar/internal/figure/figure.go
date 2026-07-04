@@ -291,6 +291,39 @@ type amount struct {
 	start, end int
 }
 
+// AmountValue is a FIGURE-grade value located in text: its canonical numeric form (dot-decimal,
+// no grouping — "7421.85"), the raw substring as written ("7 421,85 €"), and byte offsets. It is
+// the figure analogue of labelfact.Value, exposed so the provenance firewall detects monetary
+// answer-values with the SAME detector the extractor binds.
+type AmountValue struct {
+	Value string
+	Raw   string
+	Start int
+	End   int
+}
+
+// AmountValues returns every euro-denominated monetary amount in text (non-overlapping). The
+// currency-unit adjacency the detector requires (€/EUR next to the digits) is the built-in
+// CALIBRATION that keeps bare prose numbers OUT: a count ("3 invoices"), a percentage ("20%"), a
+// year ("2018") and a date ("2026-07-03") carry no currency, so none is returned. Exposed so the
+// output guard classifies FIGURE-grade values (monetary amounts) by the same value-SHAPE test the
+// figure extractor uses — no label routing, no type list.
+func AmountValues(text string) []AmountValue {
+	as := findAmounts(text)
+	out := make([]AmountValue, len(as))
+	for i, a := range as {
+		out[i] = AmountValue{Value: a.value, Raw: a.raw, Start: a.start, End: a.end}
+	}
+	return out
+}
+
+// NormalizeAmount canonicalizes a raw amount string ("7 421,85 €", "850", "1,234.50") to the same
+// dot-decimal, no-grouping form the extractor stores ("7421.85", "850", "1234.50"), and whether it
+// parsed. UNLIKE AmountValues it does NOT require a currency unit — it is used to fold a TRUSTED
+// determined value (a figure claim) into the guard's membership set however it was written, so a
+// unit-bearing amount in the answer still matches. Returns ("", false) when no digits survive.
+func NormalizeAmount(raw string) (string, bool) { return parseAmount(raw) }
+
 // findAmounts returns the euro-denominated monetary amounts in text (non-overlapping).
 func findAmounts(text string) []amount {
 	var out []amount
