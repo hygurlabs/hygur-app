@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hygur/sidecar/internal/contradict"
+	"github.com/hygur/sidecar/internal/keyed"
 	"github.com/hygur/sidecar/internal/labelfact"
 	"github.com/hygur/sidecar/internal/recognize"
 	"github.com/hygur/sidecar/internal/store"
@@ -177,6 +178,12 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	// nearest entity, so "the owner's VAT to pay" resolves by a deterministic traversal. Best-effort.
 	if ferr := i.store.ReplaceFigureNodes(ctx, item.ContentID, figureNodes(item)); ferr != nil {
 		log.Printf("[ingest] figure-node sync failed for %s: %v", item.ContentID, ferr)
+	}
+	// Keyed-entity attribute nodes (GENERALIZATION_PLAN — the universal entity-anchor): anchor each
+	// claim to a KEY it names (a vehicle by its plate, generically any keyed entity), so "the model
+	// of my vehicle GT-139-RR" resolves to the plate-anchored value. Best-effort.
+	if aerr := i.store.ReplaceAttrNodes(ctx, item.ContentID, keyed.AttrNodesFromClaims(claims)); aerr != nil {
+		log.Printf("[ingest] attr-node sync failed for %s: %v", item.ContentID, aerr)
 	}
 }
 
@@ -398,7 +405,8 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 				if ctx.Err() != nil {
 					return processed, ctx.Err()
 				}
-				mentions := entityMentionsFromClaims(contradict.ClaimsFromMetadata(it.Metadata))
+				claims := contradict.ClaimsFromMetadata(it.Metadata)
+				mentions := entityMentionsFromClaims(claims)
 				mentions = append(mentions, nerEntityMentions(it)...)
 				mentions = append(mentions, typedIdentifierMentions(it)...)
 				if rerr := i.store.ReplaceEntityMentions(ctx, it.ContentID, mentions); rerr != nil {
@@ -406,6 +414,7 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 				}
 				_ = i.store.ReplaceIdentifierLinks(ctx, it.ContentID, identifierProximityLinks(it))
 				_ = i.store.ReplaceFigureNodes(ctx, it.ContentID, figureNodes(it))
+				_ = i.store.ReplaceAttrNodes(ctx, it.ContentID, keyed.AttrNodesFromClaims(claims))
 				processed++
 			}
 			if len(page) < batch {

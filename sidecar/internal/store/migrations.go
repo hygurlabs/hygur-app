@@ -691,6 +691,36 @@ CREATE TABLE IF NOT EXISTS meeting_nodes (
 CREATE INDEX IF NOT EXISTS idx_meeting_nodes_entity ON meeting_nodes(entity_norm);
 `,
 	},
+	// Migration 37 — entity_attr_nodes: the GENERIC keyed-entity attribute layer (GENERALIZATION_PLAN).
+	// A keyed entity (a vehicle by its PLATE, a bike by its serial, a cat by its chip, a phone by its
+	// IMEI) is a NODE anchored by its KEY; its attributes (model, year…) are DETERMINED facts anchored
+	// to that key. This is figure_nodes generalized from a person/org entity to a KEY entity: the NODE
+	// is (attribute, value); the EDGES are key_norm (the anchor — the canonical key), key_type/kind
+	// (what family of key), and content_id (source). Written at ingest by anchoring each extracted
+	// claim to a KEY it names (entity or verbatim quote); read by a deterministic traversal that
+	// surfaces only agreed/latest values. The KEY anchor is what keeps "distinct entities declined":
+	// a claim naming a DIFFERENT key (or none) never fills this key's attribute — the owner-anchor
+	// rule (eb7d089/448af00) generalized from person-identity to entity-identity. The composite PK
+	// lets one document carry several attributes of one key, or the same attribute at several values.
+	{
+		Version: 37,
+		Name:    "entity_attr_nodes",
+		SQL: `
+CREATE TABLE IF NOT EXISTS entity_attr_nodes (
+    content_id TEXT NOT NULL,
+    key_norm   TEXT NOT NULL,
+    key_type   TEXT NOT NULL DEFAULT '',
+    kind       TEXT NOT NULL DEFAULT '',
+    attribute  TEXT NOT NULL DEFAULT '',
+    attr_raw   TEXT NOT NULL DEFAULT '',
+    value      TEXT NOT NULL DEFAULT '',
+    value_raw  TEXT NOT NULL DEFAULT '',
+    prox       REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (content_id, key_norm, attribute, value)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_attr_nodes_key ON entity_attr_nodes(key_norm);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

@@ -10,6 +10,7 @@ import (
 	"github.com/hygur/sidecar/internal/contradict"
 	"github.com/hygur/sidecar/internal/fact"
 	"github.com/hygur/sidecar/internal/identity"
+	"github.com/hygur/sidecar/internal/keyed"
 	"github.com/hygur/sidecar/internal/store"
 )
 
@@ -649,9 +650,59 @@ func AssembleQueryFacts(ctx context.Context, db *store.DB, query string, now tim
 	if subj != "" && !owner.IsOwnerNorm(subj) && !covered[contradict.NormKey(subj)] {
 		if df, err := AssembleDeterminedFacts(ctx, db, subj, now, owner); err == nil && df.HasFacts() {
 			out = append(out, *df)
+			covered[df.Subject.Norm] = true
+		}
+	}
+
+	// Keyed entities NAMED in the query (GENERALIZATION_PLAN — the universal entity-anchor). A vehicle
+	// by its PLATE (generically any keyed entity) resolves straight to its key-anchored determined
+	// attributes — "the model of my vehicle GT-139-RR" → the plate's Model X. Distinct-entity rejection
+	// is intrinsic: only claims anchored to THIS key can fill it, so a Model Y (order-ref) / Model 3
+	// (sold) claim never surfaces here. Appended after the person subjects and de-duplicated by norm.
+	for _, k := range keyed.KeysInQuery(query) {
+		if covered[k.Norm] {
+			continue
+		}
+		if df := assembleKeyedFacts(ctx, db, k); df != nil && df.HasFacts() {
+			out = append(out, *df)
+			covered[k.Norm] = true
 		}
 	}
 	return out, nil
+}
+
+// assembleKeyedFacts builds the authoritative DETERMINED facts for one keyed entity (a vehicle by its
+// plate) — its key-anchored attributes, resolved deterministically (agreement / latest-wins /
+// decline) by keyed.ResolveAttributes. Returns nil when the key carries no determined attribute, so
+// the authoritative layer stays silent rather than guessing (a vehicle with no determined model
+// declines). The resolved attributes are surfaced as EngramClaims so the chat injection renders them
+// with the existing "Verified facts" path — no change to the prompt builder.
+func assembleKeyedFacts(ctx context.Context, db *store.DB, k keyed.Key) *DeterminedFacts {
+	if db == nil {
+		return nil
+	}
+	nodes, err := db.AttrNodesForKeys(ctx, []string{k.Norm})
+	if err != nil || len(nodes) == 0 {
+		return nil
+	}
+	attrs := keyed.ResolveAttributes(nodes)
+	if len(attrs) == 0 {
+		return nil
+	}
+	claims := make([]EngramClaim, 0, len(attrs))
+	for _, a := range attrs {
+		claims = append(claims, EngramClaim{
+			Attribute:     a.Attribute,
+			Value:         a.Value,
+			State:         a.State,
+			Corroboration: a.Corroboration,
+			Sources:       a.Sources,
+		})
+	}
+	return &DeterminedFacts{
+		Subject: EngramSubject{Norm: k.Norm, Type: k.Kind},
+		Claims:  claims,
+	}
 }
 
 // cleanTypeLabel turns an id_* dominant type into a human phrase for display
