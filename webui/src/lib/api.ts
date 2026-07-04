@@ -691,9 +691,22 @@ export async function streamFollowupReport(
   });
 }
 
+/** No SSE event (delta, heartbeat, anything) for this long → the connection is
+ *  presumed dead and the turn fails honestly. Must exceed the server heartbeat
+ *  interval (10 s) with generous margin so a healthy long wait never trips it. */
+const CHAT_IDLE_TIMEOUT_MS = 45_000;
+/** Absolute cap on a single chat turn, regardless of heartbeats. Backstop against
+ *  a pathologically long tool loop; generous by design. */
+const CHAT_MAX_DURATION_MS = 5 * 60_000;
+
 /** Streams a RAG chat turn over SSE. EventSource can't POST with headers, so
  *  we use fetch-event-source. Throwing in onerror disables its auto-retry —
- *  a chat turn is one-shot, not a long-lived subscription. */
+ *  a chat turn is one-shot, not a long-lived subscription.
+ *
+ *  Robustness: an idle timer (reset on EVERY event, including the server's
+ *  `{"type":"working"}` heartbeat) plus an absolute max-duration cap guard
+ *  against a silently dead socket. On a real timeout we abort and surface an
+ *  honest "timed out — please retry" message instead of a generic failure. */
 export async function streamChat(
   messages: ChatMessage[],
   sessionId: string,
@@ -701,76 +714,118 @@ export async function streamChat(
   signal: AbortSignal,
   opts?: ChatOptions,
 ): Promise<void> {
-  await fetchEventSource(u("/chat"), {
-    method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      messages,
-      stream: true,
-      rag_enabled: true,
-      session_id: sessionId,
-      ...(opts?.focusScope ? { focus_scope: opts.focusScope } : {}),
-    }),
-    signal,
-    openWhenHidden: true,
-    onopen: sseOnOpen,
-    onmessage(msg) {
-      const data = msg.data;
-      if (!data) return;
-      if (data === "[DONE]") {
-        handlers.onDone?.();
-        return;
-      }
-      let evt: Record<string, unknown>;
-      try {
-        evt = JSON.parse(data);
-      } catch {
-        return;
-      }
-      if (evt.error) {
-        const e = evt.error;
-        handlers.onError?.(
-          typeof e === "string"
-            ? e
-            : ((e as { message?: string })?.message ?? "LLM error"),
-        );
-      }
-      if (evt.type === "rag_context" && Array.isArray(evt.sources)) {
-        handlers.onSources?.(evt.sources as RagSource[]);
-      }
-      if (evt.type === "tool_call") {
-        handlers.onTool?.((evt.name as string) ?? "");
-      }
-      if (evt.type === "memory_write" && typeof evt.memory_id === "string") {
-        handlers.onMemoryWrite?.(evt as unknown as MemoryWrite);
-      }
-      if (evt.type === "pending_action" && typeof evt.action_id === "string") {
-        handlers.onPendingAction?.({
-          action_id: evt.action_id as string,
-          tool: (evt.tool as string) ?? "",
-          preview: (evt.preview as string) ?? "",
-        });
-      }
-      if (evt.type === "determined_answer") {
-        handlers.onDeterminedAnswer?.({
-          label: evt.label as string | undefined,
-          subject: evt.subject as string | undefined,
-          value: evt.value as string | undefined,
-          confidence: (evt.confidence as DeterminedAnswer["confidence"]) ?? "none",
-          message: evt.message as string | undefined,
-          sources: evt.sources as DeterminedAnswer["sources"],
-        });
-      }
-      if (typeof evt.delta === "string" && evt.delta) {
-        handlers.onDelta?.(evt.delta);
-      }
-      if (evt.done === true) {
-        handlers.onDone?.(evt.degraded === true);
-      }
-    },
-    onerror(err) {
-      handlers.onError?.(err instanceof Error ? err.message : String(err));
-      throw err;
-    },
-  });
+  // Chain the caller's signal to an internal controller so BOTH a user Stop and
+  // our own timeout can abort the underlying fetch through one signal.
+  const internal = new AbortController();
+  const onCallerAbort = () => internal.abort();
+  if (signal.aborted) internal.abort();
+  else signal.addEventListener("abort", onCallerAbort, { once: true });
+
+  let timedOut = false;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      internal.abort();
+    }, CHAT_IDLE_TIMEOUT_MS);
+  };
+  const maxTimer = setTimeout(() => {
+    timedOut = true;
+    internal.abort();
+  }, CHAT_MAX_DURATION_MS);
+
+  try {
+    await fetchEventSource(u("/chat"), {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        messages,
+        stream: true,
+        rag_enabled: true,
+        session_id: sessionId,
+        ...(opts?.focusScope ? { focus_scope: opts.focusScope } : {}),
+      }),
+      signal: internal.signal,
+      openWhenHidden: true,
+      onopen: async (response) => {
+        resetIdle(); // the stream is live — start the idle clock
+        await sseOnOpen(response);
+      },
+      onmessage(msg) {
+        resetIdle(); // any event (delta, tool_call, heartbeat…) means we're alive
+        const data = msg.data;
+        if (!data) return;
+        if (data === "[DONE]") {
+          handlers.onDone?.();
+          return;
+        }
+        let evt: Record<string, unknown>;
+        try {
+          evt = JSON.parse(data);
+        } catch {
+          return;
+        }
+        if (evt.error) {
+          const e = evt.error;
+          handlers.onError?.(
+            typeof e === "string"
+              ? e
+              : ((e as { message?: string })?.message ?? "LLM error"),
+          );
+        }
+        if (evt.type === "rag_context" && Array.isArray(evt.sources)) {
+          handlers.onSources?.(evt.sources as RagSource[]);
+        }
+        if (evt.type === "tool_call") {
+          handlers.onTool?.((evt.name as string) ?? "");
+        }
+        if (evt.type === "memory_write" && typeof evt.memory_id === "string") {
+          handlers.onMemoryWrite?.(evt as unknown as MemoryWrite);
+        }
+        if (evt.type === "pending_action" && typeof evt.action_id === "string") {
+          handlers.onPendingAction?.({
+            action_id: evt.action_id as string,
+            tool: (evt.tool as string) ?? "",
+            preview: (evt.preview as string) ?? "",
+          });
+        }
+        if (evt.type === "determined_answer") {
+          handlers.onDeterminedAnswer?.({
+            label: evt.label as string | undefined,
+            subject: evt.subject as string | undefined,
+            value: evt.value as string | undefined,
+            confidence:
+              (evt.confidence as DeterminedAnswer["confidence"]) ?? "none",
+            message: evt.message as string | undefined,
+            sources: evt.sources as DeterminedAnswer["sources"],
+          });
+        }
+        if (typeof evt.delta === "string" && evt.delta) {
+          handlers.onDelta?.(evt.delta);
+        }
+        if (evt.done === true) {
+          handlers.onDone?.(evt.degraded === true);
+        }
+      },
+      onerror(err) {
+        // A timeout or user Stop aborts via `internal` — don't surface those as a
+        // generic error here; the finally block emits the honest timeout message,
+        // and a user Stop is intentionally silent.
+        if (internal.signal.aborted) throw err;
+        handlers.onError?.(err instanceof Error ? err.message : String(err));
+        throw err;
+      },
+    });
+  } catch (err) {
+    if (timedOut) {
+      handlers.onError?.("The request timed out — please retry.");
+      return; // handled honestly; don't rethrow the AbortError
+    }
+    throw err;
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    clearTimeout(maxTimer);
+    signal.removeEventListener("abort", onCallerAbort);
+  }
 }

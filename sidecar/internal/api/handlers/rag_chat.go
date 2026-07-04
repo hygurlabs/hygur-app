@@ -26,6 +26,27 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// Tool-loop robustness backstops. These are generous safety nets against a
+// goroutine parked forever inside a blocking call (a cold/contended local model,
+// a tool that never returns) — NOT tight SLAs. When one fires we emit an honest
+// SSE error and end the stream cleanly rather than letting the wire sit idle
+// until an intervening layer silently kills the socket ("Can't load", nothing
+// logged). They are package vars (not consts) purely so tests can shrink them;
+// production never reassigns them.
+var (
+	// synthesisRoundTimeout backstops a single streaming LLM round — the initial
+	// completion and every post-tool synthesis round. This is the long SILENT
+	// phase (the model reasoning over tool results before emitting a token).
+	synthesisRoundTimeout = 90 * time.Second
+	// toolExecTimeout backstops one tool execution. Runs the tool on a detached
+	// goroutine so a tool that ignores its context can never hang the request.
+	toolExecTimeout = 30 * time.Second
+	// keepAliveInterval is how often the heartbeat fires during a silent wait.
+	// Kept well under any known intervening idle-timeout and under the client's
+	// idle timer so the connection never sits fully idle.
+	keepAliveInterval = 10 * time.Second
+)
+
 // RAGChatRequest extends ChatRequest with RAG-specific options.
 type RAGChatRequest struct {
 	Messages    []llm.Message `json:"messages"`
@@ -879,18 +900,23 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// During the LLM's prefill phase (loading the full context into KV cache)
-	// no tokens are sent, leaving the SSE connection silent for potentially
-	// tens of seconds. URLSession and browser EventSource implementations
-	// time out on idle connections. Send an SSE comment every 20 s to keep
-	// the connection alive; comments are ignored by clients but reset their
-	// idle timers. A mutex serialises writes between this goroutine and the
-	// stream callback below.
+	// and the post-tool synthesis wait, no tokens are sent — the SSE connection
+	// can sit fully idle for tens of seconds. URLSession/browser EventSource and
+	// intervening proxy idle-timeouts then kill the socket → silent "Can't load".
+	// The heartbeat below keeps the wire warm. It emits TWO things every
+	// keepAliveInterval, both delta-safe:
+	//   1. an SSE comment (": ping") — raw-socket liveness; ignored by clients.
+	//   2. a `{"type":"working"}` data event — fetch-event-source does NOT deliver
+	//      comment lines to onmessage, so a real DATA event is what lets the client
+	//      reset its idle timer and show "still working…". It carries no
+	//      delta/done/error, so it never touches the token-delta or done contract.
+	// A mutex serialises writes between this goroutine and the stream callback.
 	var writeMu sync.Mutex
 	stopKeepalive := make(chan struct{})
 	var stopOnce sync.Once
 
 	go func() {
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(keepAliveInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -900,7 +926,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			case <-ticker.C:
 				writeMu.Lock()
-				_, _ = fmt.Fprintf(w, ": ping\n\n")
+				_, _ = fmt.Fprint(w, ": ping\n\ndata: {\"type\":\"working\"}\n\n")
 				flusher.Flush()
 				writeMu.Unlock()
 			}
@@ -986,17 +1012,24 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// the streamed answer so it never reaches the UI. One filter per completion.
 		harmony := &llm.HarmonyFilter{}
 
-		err := h.llmClient.StreamChatRich(r.Context(), llmReq, func(evt llm.StreamEvent) error {
+		// Backstop the round with an INDEPENDENT timeout derived from the request
+		// context. r.Context() alone is cancelled only on client disconnect — so a
+		// model parked mid-round would keep this goroutine (and the socket) alive
+		// with zero bytes until an intervening layer silently killed it. On expiry
+		// StreamChatRich's context is cancelled, it returns context.DeadlineExceeded,
+		// and the post-loop error block emits an honest SSE `error` + a server log.
+		roundCtx, cancelRound := context.WithTimeout(r.Context(), synthesisRoundTimeout)
+		err := h.llmClient.StreamChatRich(roundCtx, llmReq, func(evt llm.StreamEvent) error {
 			// NOTE: do NOT stop the keepalive here. This callback first fires on
 			// the tool-call round; the long, SILENT phase is the NEXT round
 			// (the model reasoning over tool results before emitting the answer).
 			// Stopping now left that gap unguarded → the client idle-timed-out on
 			// big/slow answers ("Load failed"). The keepalive runs until the loop
-			// ends (final stopOnce below); its 20 s SSE comments interleave
+			// ends (final stopOnce below); its SSE heartbeats interleave
 			// harmlessly with token data under the shared write lock.
 			select {
-			case <-r.Context().Done():
-				return r.Context().Err()
+			case <-roundCtx.Done():
+				return roundCtx.Err()
 			default:
 			}
 
@@ -1029,6 +1062,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		})
+		cancelRound() // release the round's timeout context (no-op once fired)
 		if tail := harmony.Flush(); tail != "" {
 			roundContent.WriteString(tail)
 			assistantBuf.WriteString(tail)
@@ -1060,7 +1094,12 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, tc := range toolCalls {
 			argsRaw := json.RawMessage(tc.Function.Arguments)
 			h.logger.Info().Str("tool", tc.Function.Name).Str("call_id", tc.ID).RawJSON("args", argsRaw).Msg("executing tool")
-			result, execErr := h.toolRegistry.Execute(r.Context(), tc.Function.Name, argsRaw)
+			result, execErr := h.executeToolGuarded(r.Context(), tc.Function.Name, argsRaw)
+			if errors.Is(execErr, context.DeadlineExceeded) {
+				// Honest server-side trace for a real tool timeout. The error is also
+				// fed back to the model (below) so the turn recovers instead of hanging.
+				h.logger.Error().Str("tool", tc.Function.Name).Dur("timeout", toolExecTimeout).Msg("tool execution timed out (backstop)")
+			}
 			if isUntrustedSourceTool(tc.Function.Name) {
 				tainted = true // subsequent rounds lose the side-effecting tools
 			}
@@ -1191,6 +1230,14 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			answer = msg // canned fail-soft text (no identifier) supersedes any partial buffer
 			_ = writeSSE(map[string]any{"delta": msg, "done": false})
 			_ = writeSSE(map[string]any{"degraded": true, "done": true})
+		} else if errors.Is(streamErr, context.DeadlineExceeded) {
+			// The synthesis-round backstop fired: the model sat silent past
+			// synthesisRoundTimeout. Leave an honest server trace and emit the SAME
+			// SSE `error` shape the client already consumes — never a hang.
+			h.logger.Error().Err(streamErr).Dur("timeout", synthesisRoundTimeout).
+				Msg("chat synthesis round timed out (backstop) — emitting honest SSE error")
+			writeSSEError(w, "TIMEOUT", "The request timed out — please retry.")
+			flusher.Flush()
 		} else {
 			h.logger.Error().Err(streamErr).Msg("chat stream error")
 			writeSSEError(w, "LLM_STUDIO_ERROR", streamErr.Error())
@@ -1890,6 +1937,35 @@ func decodeSearchSources(raw json.RawMessage) []RAGSource {
 		})
 	}
 	return out
+}
+
+// executeToolGuarded runs a tool with an independent timeout backstop. The tool
+// runs on a detached goroutine and we select on the deadline, so even a tool that
+// ignores its context can never hang the request: on expiry we return
+// context.DeadlineExceeded immediately (the tool goroutine, if truly stuck, is
+// left to finish and be GC'd — a leaked goroutine is strictly better than a
+// wedged chat turn). The returned error flows back to the model as a tool error
+// so the turn recovers rather than stalling.
+func (h *RAGChatHandler) executeToolGuarded(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+	toolCtx, cancel := context.WithTimeout(ctx, toolExecTimeout)
+	defer cancel()
+
+	type toolResult struct {
+		out json.RawMessage
+		err error
+	}
+	done := make(chan toolResult, 1) // buffered so a late finish never blocks
+	go func() {
+		out, err := h.toolRegistry.Execute(toolCtx, name, args)
+		done <- toolResult{out, err}
+	}()
+
+	select {
+	case <-toolCtx.Done():
+		return nil, toolCtx.Err()
+	case res := <-done:
+		return res.out, res.err
+	}
 }
 
 // writeSSEEvent writes a single SSE event to the response writer.
