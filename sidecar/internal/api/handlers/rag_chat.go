@@ -256,9 +256,15 @@ type RAGChatHandler struct {
 	// resolve the query's subjects and assemble their DETERMINED identifiers/claims in the
 	// pipeline. ownerSubject is a representative configured owner name for first-person framing.
 	// nil/"" leaves the layer off (the handler then behaves exactly as before).
-	factsDB          *store.DB
-	ownerMatcher     *identity.Matcher
-	ownerSubject     string
+	factsDB      *store.DB
+	ownerMatcher *identity.Matcher
+	ownerSubject string
+	// Voie A pre-match resolvers (slot-filling socle): the SAME deterministic engine tools the
+	// LLM can call, held so the handler can call them DIRECTLY at query time — before any LLM
+	// round — and compose the factual answer itself (the LLM never writes the value). nil leaves
+	// Voie A off (the handler behaves exactly as the LLM-driven tool path did).
+	idTool           valueLookup
+	figTool          valueLookup
 	chatTokenCap     int           // monthly chat-token cap; 0 = unlimited (local default)
 	chatTokenCapDay  int           // daily chat-token cap; 0 = unlimited (the fast fuse)
 	rpmLimiter       *rateLimiter  // per-tenant request-rate fuse; nil = off
@@ -378,6 +384,17 @@ func (h *RAGChatHandler) SetDeterminedFacts(db *store.DB, owner *identity.Matche
 			break
 		}
 	}
+	// Build the Voie A resolvers over the SAME store/owner so the pre-match reaches the identical
+	// determined values the LLM-driven tools would — the difference is only WHO calls them.
+	h.idTool = tools.NewLookupIdentifierTool(db, owner, h.ownerSubject)
+	h.figTool = tools.NewLookupFigureTool(db, owner, h.ownerSubject)
+}
+
+// SetVoieATools overrides the Voie A resolvers (test seam). Production wiring builds them in
+// SetDeterminedFacts; tests inject stubs to drive the pre-match without a populated store.
+func (h *RAGChatHandler) SetVoieATools(identifier, figure valueLookup) {
+	h.idTool = identifier
+	h.figTool = figure
 }
 
 // baseFormatGuidance is the persona/format hint prepended to every chat turn.
@@ -899,6 +916,28 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		writeMu.Unlock()
 		return werr
+	}
+
+	// VOIE A — the slot-filling socle (SLOT_FILLING_PLAN §1). Before spending an LLM round, try to
+	// pre-match the query to a DETERMINED fact the engine has (identifier or F1 figure) via the
+	// generic label normalizer. On a match the engine COMPOSES the answer itself and simulated-
+	// streams it — the LLM is skipped, so P(the LLM writes the value) = 0 by construction. This is
+	// the fix for "the chat ignores the engine" (the 357 € RAG hallucination). No match → the turn
+	// falls straight through to voie B (the RAG path below) unchanged.
+	if h.idTool != nil && h.figTool != nil && latestUserQuery != "" {
+		subjectFn := func(q string) string {
+			if h.factsDB == nil {
+				return ""
+			}
+			s, _ := retrieval.DetectQuerySubject(r.Context(), h.factsDB, q)
+			return s
+		}
+		if plan, ok := planVoieA(latestUserQuery, subjectFn); ok {
+			if h.serveVoieA(r.Context(), plan, writeSSE, req, latestUserQuery, sessionCtx) {
+				stopOnce.Do(func() { close(stopKeepalive) })
+				return
+			}
+		}
 	}
 
 	// Accumulate assistant deltas across all tool rounds so the post-stream
@@ -1526,6 +1565,28 @@ func injectDeterminedFacts(messages []llm.Message, subjects []retrieval.Determin
 		}
 		for _, c := range s.Claims {
 			b.WriteString(fmt.Sprintf("- %s: %s (%s, %d source(s))\n", c.Attribute, c.Value, c.State, c.Corroboration))
+		}
+		for _, f := range s.Figures {
+			amt := f.Raw
+			if strings.TrimSpace(amt) == "" {
+				amt = f.Value
+			}
+			ctx := make([]string, 0, 2)
+			if f.Direction != "" {
+				ctx = append(ctx, f.Direction)
+			}
+			if f.Period != "" {
+				ctx = append(ctx, f.Period)
+			}
+			line := fmt.Sprintf("- figure %s", f.Label)
+			if len(ctx) > 0 {
+				line += " (" + strings.Join(ctx, ", ") + ")"
+			}
+			line += fmt.Sprintf(": %s %s", amt, f.Unit)
+			if titles := sourceTitles(f.Sources); titles != "" {
+				line += "; sources: " + titles
+			}
+			b.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
 	factsBlock := strings.TrimRight(b.String(), "\n")

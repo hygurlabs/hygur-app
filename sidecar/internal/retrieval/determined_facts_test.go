@@ -109,3 +109,36 @@ func TestAssembleDeterminedFacts_UnknownSubjectNil(t *testing.T) {
 		t.Errorf("unknown subject reported facts: %+v", df)
 	}
 }
+
+// TestAssembleDeterminedFacts_IncludesFigures is Pilier 1: the owner's determined VAT FIGURE
+// (value + period + direction + source) is assembled into the authoritative layer, so a figure is
+// ALWAYS in context — closing the hole where a figure was answered from RAG (the 357 € bug).
+func TestAssembleDeterminedFacts_IncludesFigures(t *testing.T) {
+	db, owner, now := seedOwnerIdentifier(t)
+	ctx := context.Background()
+	ownerNorm := contradict.NormKey("Alex Martin")
+
+	// Two source docs agree on the same VAT-to-pay figure for Q3 2026 (attached to the owner).
+	nodes := []store.FigureNode{{
+		ContentID: "i1", EntityNorm: ownerNorm, Label: "vat", Value: "7421.85", Raw: "7 421,85",
+		Unit: "EUR", Period: "2026-Q3", Direction: "payable", Prox: 1.0,
+	}}
+	if err := db.ReplaceFigureNodes(ctx, "i1", nodes); err != nil {
+		t.Fatalf("ReplaceFigureNodes: %v", err)
+	}
+
+	df, err := AssembleDeterminedFacts(ctx, db, "Alex Martin", now, owner)
+	if err != nil {
+		t.Fatalf("AssembleDeterminedFacts: %v", err)
+	}
+	if len(df.Figures) == 0 {
+		t.Fatalf("no figures assembled: %+v", df)
+	}
+	f := df.Figures[0]
+	if f.Label != "vat" || f.Value != "7421.85" || f.Direction != "payable" || f.Period != "2026-Q3" {
+		t.Errorf("unexpected figure: %+v", f)
+	}
+	if len(f.Sources) == 0 || f.Sources[0].ContentID != "i1" {
+		t.Errorf("figure missing source: %+v", f.Sources)
+	}
+}

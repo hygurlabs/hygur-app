@@ -156,3 +156,31 @@ func TestExtract_ChecksumLabelBlocksDocLevel(t *testing.T) {
 	// doc-level fallback either (family A owns it).
 	none(t, "Votre numéro national\n\n12345678901\n")
 }
+
+// TestDetectLabels covers the query-side generic normalizer: it reports which labelled
+// identifier(s) free text names, dealiasing synonyms — the pre-match the chat Voie A uses.
+func TestDetectLabels(t *testing.T) {
+	cases := []struct {
+		query string
+		want  []string
+	}{
+		{"quel est mon numéro de TVA ?", []string{"enterprise_number"}},
+		{"mon DUNS", []string{"duns"}},
+		{"quel est mon IBAN", []string{"iban"}},
+		{"le SIRET de Acme", []string{"siret"}},
+		{"résume ma semaine", nil},
+	}
+	for _, tc := range cases {
+		got := DetectLabels(tc.query)
+		if len(got) != len(tc.want) {
+			t.Errorf("%q → %v, want %v", tc.query, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%q → %v, want %v", tc.query, got, tc.want)
+				break
+			}
+		}
+	}
+}

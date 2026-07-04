@@ -415,11 +415,26 @@ type DeterminedFacts struct {
 	IsOwner  bool               `json:"is_owner,omitempty"`
 	Identity []EngramIdentifier `json:"identity,omitempty"`
 	Claims   []EngramClaim      `json:"claims,omitempty"`
+	Figures  []EngramFigure     `json:"figures,omitempty"` // labelled monetary figures (F1 — pilier 1)
 }
 
-// HasFacts reports whether the subject carries any determined identifier or claim.
+// EngramFigure is one determined labelled MONETARY figure the subject carries — a figure NODE
+// (value+unit) with its resolved context EDGES (period, direction) and source (FIGURES_TRUTH_PLAN
+// F1). Assembled deterministically from store.figure_nodes so a subject's figures are ALWAYS in
+// context (pilier 1), closing the hole where the chat answered a figure from RAG (the 357 € bug).
+type EngramFigure struct {
+	Label     string        `json:"label"` // normalized figure label ("vat")
+	Value     string        `json:"value"` // canonical numeric ("7421.85")
+	Raw       string        `json:"raw,omitempty"`
+	Unit      string        `json:"unit,omitempty"`
+	Period    string        `json:"period,omitempty"`
+	Direction string        `json:"direction,omitempty"`
+	Sources   []fact.Source `json:"sources,omitempty"`
+}
+
+// HasFacts reports whether the subject carries any determined identifier, claim or figure.
 func (d *DeterminedFacts) HasFacts() bool {
-	return d != nil && (len(d.Identity) > 0 || len(d.Claims) > 0)
+	return d != nil && (len(d.Identity) > 0 || len(d.Claims) > 0 || len(d.Figures) > 0)
 }
 
 // AssembleDeterminedFacts builds the authoritative facts (typed identifiers + active claims)
@@ -508,7 +523,16 @@ func AssembleDeterminedFacts(ctx context.Context, db *store.DB, subject string, 
 	}
 	claims := aggregateClaims(directClaims, subjectNorms)
 
-	if len(identifiers) == 0 && len(claims) == 0 && len(directIDs) == 0 && len(rawNetwork) == 0 {
+	// Figures (pilier 1): the subject's labelled monetary figure nodes, grouped by
+	// (label, direction, period) and kept only where the group agrees on ONE value — so a
+	// contested figure is dropped (fail-closed), never averaged or guessed.
+	figNodes, err := db.AllFigureNodesForEntities(ctx, subjectNorms)
+	if err != nil {
+		return nil, err
+	}
+	figures := groupDeterminedFigures(ctx, db, figNodes)
+
+	if len(identifiers) == 0 && len(claims) == 0 && len(figures) == 0 && len(directIDs) == 0 && len(rawNetwork) == 0 {
 		return nil, nil // unknown subject — no presence at all
 	}
 	typ, err := subjectType(ctx, db, norm)
@@ -519,7 +543,70 @@ func AssembleDeterminedFacts(ctx context.Context, db *store.DB, subject string, 
 		Subject:  EngramSubject{Norm: norm, Type: typ},
 		Identity: identifiers,
 		Claims:   claims,
+		Figures:  figures,
 	}, nil
+}
+
+// groupDeterminedFigures collapses raw figure nodes into determined figures: one per
+// (label, direction, period) group, kept ONLY when every node in the group carries the same
+// value (deterministic; a value conflict drops the group — never a guessed figure). Sources are
+// the distinct documents backing the value. Deterministic order: label, then period desc.
+func groupDeterminedFigures(ctx context.Context, db *store.DB, nodes []store.FigureNode) []EngramFigure {
+	if len(nodes) == 0 {
+		return nil
+	}
+	type group struct {
+		label, dir, period, unit string
+		values                   map[string]store.FigureNode // value → a representative node
+		sources                  map[string]bool
+	}
+	groups := map[string]*group{}
+	for _, n := range nodes {
+		if n.Value == "" || n.Label == "" {
+			continue
+		}
+		k := n.Label + "|" + n.Direction + "|" + n.Period
+		g := groups[k]
+		if g == nil {
+			g = &group{label: n.Label, dir: n.Direction, period: n.Period, unit: n.Unit,
+				values: map[string]store.FigureNode{}, sources: map[string]bool{}}
+			groups[k] = g
+		}
+		g.values[n.Value] = n
+		if n.ContentID != "" {
+			g.sources[n.ContentID] = true
+		}
+	}
+	out := make([]EngramFigure, 0, len(groups))
+	for _, g := range groups {
+		if len(g.values) != 1 {
+			continue // conflicting values for the same (label,direction,period) → fail-closed
+		}
+		var rep store.FigureNode
+		for _, n := range g.values {
+			rep = n
+		}
+		var sources []fact.Source
+		for cid := range g.sources {
+			title := cid
+			if it, e := db.GetKnowledgeItem(ctx, cid); e == nil && it != nil && it.Title != "" {
+				title = it.Title
+			}
+			sources = append(sources, fact.Source{ContentID: cid, Title: title})
+		}
+		sort.Slice(sources, func(i, j int) bool { return sources[i].ContentID < sources[j].ContentID })
+		out = append(out, EngramFigure{
+			Label: g.label, Value: rep.Value, Raw: rep.Raw, Unit: g.unit,
+			Period: g.period, Direction: g.dir, Sources: sources,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Label != out[j].Label {
+			return out[i].Label < out[j].Label
+		}
+		return out[i].Period > out[j].Period
+	})
+	return out
 }
 
 // AssembleQueryFacts resolves a chat query's authoritative subjects DETERMINISTICALLY and

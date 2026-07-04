@@ -47,6 +47,10 @@ func foldText(s string) string {
 	return b.String()
 }
 
+// Fold exposes the package's accent/case folding (lowercase + strip combining marks) so callers
+// (the chat Voie A cue matching) tokenize a query with the SAME folding the label normalizer uses.
+func Fold(s string) string { return foldText(s) }
+
 // aliasTable maps a folded, space-normalized label phrase to its canonical id_type key. It
 // dealiases (a) checksum-type synonyms onto recognize's canonical type names — so a VAT/TVA/BCE
 // query reaches the checksum family and a "national number" label is recognized as family A and
@@ -225,6 +229,25 @@ func IdentifierGradeValues(text string) []Value {
 	out := make([]Value, len(vs))
 	for i, v := range vs {
 		out[i] = Value{Norm: v.norm, Raw: v.raw, Start: v.start, End: v.end}
+	}
+	return out
+}
+
+// DetectLabels returns the DISTINCT canonical id_types NAMED in free text (a chat query), using the
+// SAME label-anchor detection the extractor uses (alias/cue keywords + known acronyms → NormalizeLabel).
+// It reports which labelled identifier(s) a query asks about ("quel est mon numéro de TVA" →
+// enterprise_number; "mon DUNS" → duns), with NO value binding. Order-stable by first occurrence.
+// This is the query-side of the generic normalizer — DATA (the alias table), not a per-type router.
+func DetectLabels(text string) []string {
+	anchors := findAnchors(text)
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range anchors {
+		if a.canon == "" || seen[a.canon] {
+			continue
+		}
+		seen[a.canon] = true
+		out = append(out, a.canon)
 	}
 	return out
 }

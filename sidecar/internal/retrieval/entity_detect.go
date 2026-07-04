@@ -46,6 +46,14 @@ func hasProperSignal(s string) bool {
 	return false
 }
 
+// DetectQuerySubject exposes the deterministic query→named-subject resolution (pure
+// string↔entity-index match, no LLM) to callers outside the package — the chat Voie A pre-match
+// resolves a named subject this way before defaulting to the owner. Returns "" when the query
+// names no known entity.
+func DetectQuerySubject(ctx context.Context, db *store.DB, query string) (string, error) {
+	return detectQuerySubject(ctx, db, query)
+}
+
 func detectQuerySubject(ctx context.Context, db *store.DB, query string) (string, error) {
 	if db == nil || strings.TrimSpace(query) == "" {
 		return "", nil
