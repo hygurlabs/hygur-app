@@ -668,6 +668,29 @@ ALTER TABLE figure_nodes ADD COLUMN frequency  TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_figure_nodes_medication ON figure_nodes(medication);
 `,
 	},
+	// Migration 36 — meeting_nodes: a meeting TIME as a determined temporal fact, the meeting-time
+	// analogue of figure_nodes (contradiction-aware rendez-vous). The NODE is the datetime (when_utc);
+	// the EDGES are entity_norm (whom the meeting is with — the same canonical entity key), source
+	// (email | calendar) and content_id (the message / calendar event). asserted_at is the assertion
+	// timestamp the C7 supersession mechanism (figure.ResolveTemporal) orders "latest wins" by, so the
+	// latest email time supersedes a stale calendar time and the disagreement surfaces as a
+	// cross-source contradiction. The composite PK lets each source hold ONE time per meeting subject.
+	{
+		Version: 36,
+		Name:    "meeting_nodes",
+		SQL: `
+CREATE TABLE IF NOT EXISTS meeting_nodes (
+    content_id  TEXT NOT NULL,
+    entity_norm TEXT NOT NULL,
+    when_utc    TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    asserted_at TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (content_id, entity_norm, source)
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_nodes_entity ON meeting_nodes(entity_norm);
+`,
+	},
 }
 
 // applyMigrations applies all pending migrations to the database.

@@ -32,7 +32,46 @@ var voieAStreamDelay = 12 * time.Millisecond
 const (
 	laneIdentifier = "identifier"
 	laneFigure     = "figure"
+	laneMeeting    = "meeting"
 )
+
+// meetingCues mark a meeting-time (rendez-vous) question. DATA — a domain-agnostic set of meeting
+// words (EN + FR). Folded keys. "rendez-vous" folds to the tokens "rendez"/"vous", so "rendez" cues.
+var meetingCues = map[string]bool{
+	"meeting": true, "meetings": true, "rendezvous": true, "rendez": true,
+	"appointment": true, "appointments": true,
+}
+
+func hasMeetingCue(q string) bool {
+	for _, t := range queryTokens(q) {
+		if meetingCues[t] {
+			return true
+		}
+	}
+	return false
+}
+
+// meetingParty extracts whom a meeting is WITH — the word(s) after "with"/"avec". This is the OTHER
+// party (never the owner), so a first-person framing ("MY meeting with Acme") still resolves Acme.
+// Returns "" when no party is named. Preserves the original casing (for display) from the raw query.
+func meetingParty(q string) string {
+	fields := strings.Fields(q)
+	for i, w := range fields {
+		lw := strings.ToLower(strings.Trim(w, ".,?!:;'\""))
+		if lw == "with" || lw == "avec" {
+			party := strings.Join(fields[i+1:], " ")
+			party = strings.TrimRight(party, " .,?!:;")
+			// Drop a trailing time clause ("Acme at 3pm") — keep just the party.
+			for _, sep := range []string{" at ", " on ", " à ", " le "} {
+				if idx := strings.Index(strings.ToLower(party), sep); idx >= 0 {
+					party = party[:idx]
+				}
+			}
+			return strings.TrimSpace(party)
+		}
+	}
+	return ""
+}
 
 // voieAPlan is the deterministic pre-match verdict: which engine to call and with what args, all
 // extracted from the query by the generic label normalizer (DATA, not a per-type router).
@@ -152,6 +191,15 @@ func planVoieA(query string, subjectFn func(string) string) (voieAPlan, bool) {
 		}
 	}
 
+	// MEETING lane: a meeting cue ("meeting"/"rendez-vous"/"appointment") PLUS a named other party
+	// ("with X"). The party is the OTHER side, so a first-person framing ("my meeting with Acme")
+	// still resolves Acme, not the owner. No identifiable party → the lane declines (→ voie B).
+	if hasMeetingCue(q) {
+		if party := meetingParty(q); party != "" {
+			return voieAPlan{lane: laneMeeting, entity: party}, true
+		}
+	}
+
 	// FIGURE lane takes precedence: a seeded figure label PLUS an amount or direction cue is
 	// unambiguously a "how much" question (this is the 357 € fix — it never reaches RAG).
 	if figLabel := figure.NormalizeFigureLabel(q); figLabel != "" {
@@ -183,6 +231,9 @@ func (h *RAGChatHandler) serveVoieA(ctx context.Context, plan voieAPlan, writeSS
 	case laneFigure:
 		tool, toolName = h.figTool, "lookup_figure"
 		args = map[string]any{"entity": plan.entity, "label": plan.label, "direction": plan.direction, "period": plan.period}
+	case laneMeeting:
+		tool, toolName = h.meetTool, "lookup_meeting"
+		args = map[string]any{"entity": plan.entity}
 	default:
 		return false
 	}
@@ -286,6 +337,12 @@ func composeVoieAAnswer(evt *DeterminedAnswerEvent) string {
 	}
 	if titles := determinedSourceTitles(evt.Sources); titles != "" {
 		sentence += " (source: " + titles + ")"
+	}
+	// A gated action offer (e.g. draft a confirmation + update the calendar) comes AFTER the sourced
+	// fact — the value stands on its own; the offer invites the fix. The action only runs through the
+	// pending_action confirmation gate, never from this text.
+	if offer := strings.TrimSpace(evt.Offer); offer != "" {
+		sentence += " " + offer
 	}
 	return sentence
 }

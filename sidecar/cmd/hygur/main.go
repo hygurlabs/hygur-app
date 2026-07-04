@@ -752,6 +752,15 @@ func main() {
 	// lookup_identifier; the value + context (period, direction, source) come from a traversal, never
 	// a RAG guess. Rendered by the same cut-LLM-safe determined_answer card.
 	toolRegistry.MustRegister(tools.NewLookupFigureTool(db, ownerMatcher, ownerSubject))
+	// lookup_meeting: the contradiction-aware rendez-vous. Reconciles a meeting time across the email
+	// thread and the calendar, reusing C7's supersession mechanism (internal/rendezvous →
+	// figure.ResolveTemporal): the latest assertion is the current time; a stale calendar surfaces as a
+	// cross-source contradiction. Read-only — the FIX is a separate gated action.
+	toolRegistry.MustRegister(tools.NewLookupMeetingTool(db))
+	// draft_meeting_confirmation: the GATED action that fixes a stale meeting time — drafts a
+	// confirmation email + a calendar update. SideEffect, so the registry holds it behind the WP3
+	// confirmation card; nothing is sent or changed until the user confirms. Times are engine-filled.
+	toolRegistry.MustRegister(tools.NewDraftMeetingConfirmationTool())
 
 	// Web access (opt-in): register web_search + fetch_url only when a search
 	// endpoint is configured. Web access means data leaves the machine, so it is

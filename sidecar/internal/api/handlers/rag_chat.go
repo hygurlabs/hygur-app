@@ -175,7 +175,11 @@ type DeterminedAnswerEvent struct {
 	Message    string `json:"message,omitempty"`
 	// Note carries a cross-document supersession contradiction ("Previously 5 mg — updated.") shown
 	// alongside a determined figure. Empty when nothing was superseded.
-	Note    string                   `json:"note,omitempty"`
+	Note string `json:"note,omitempty"`
+	// Offer carries a gated follow-up ACTION offer ("Want me to draft a confirmation email and update
+	// your calendar?") appended to the answer. Empty when no action is offered. The action itself is
+	// only executed through the pending_action confirmation gate — the offer is just the invitation.
+	Offer   string                   `json:"offer,omitempty"`
 	Sources []DeterminedAnswerSource `json:"sources,omitempty"`
 }
 
@@ -238,6 +242,34 @@ func determinedAnswerFromToolResult(toolName string, result json.RawMessage) (*D
 			evt.Message = "No verified figure — I don't have a confirmed value for that."
 		}
 		return evt, true
+	case "lookup_meeting":
+		// A meeting TIME reconciled across email + calendar (contradiction-aware rendez-vous). The
+		// engine determined the current time and any cross-source contradiction; the tool pre-composed
+		// the display Value + Label + the contradiction Note + the gated action Offer. Rendered by the
+		// SAME cut-LLM-safe card — the time is on the wire before the prose, so the LLM cannot move it.
+		var mr tools.MeetingResponse
+		if err := json.Unmarshal(result, &mr); err != nil {
+			return nil, false
+		}
+		evt := &DeterminedAnswerEvent{
+			Type:       "determined_answer",
+			Label:      strings.TrimSpace(mr.Label),
+			Subject:    strings.TrimSpace(mr.Subject),
+			Confidence: string(mr.Tier),
+			Note:       strings.TrimSpace(mr.Note),
+			Offer:      strings.TrimSpace(mr.Offer),
+		}
+		for _, s := range mr.Sources {
+			evt.Sources = append(evt.Sources, DeterminedAnswerSource{ContentID: s.ContentID, Title: s.Title})
+		}
+		switch mr.Tier {
+		case fact.TierHigh, fact.TierMed:
+			evt.Value = mr.Value
+		default:
+			evt.Confidence = "none"
+			evt.Message = "No verified meeting time — I don't have a confirmed one for that meeting."
+		}
+		return evt, true
 	default:
 		return nil, false
 	}
@@ -290,6 +322,7 @@ type RAGChatHandler struct {
 	// Voie A off (the handler behaves exactly as the LLM-driven tool path did).
 	idTool           valueLookup
 	figTool          valueLookup
+	meetTool         valueLookup   // contradiction-aware rendez-vous (lookup_meeting)
 	chatTokenCap     int           // monthly chat-token cap; 0 = unlimited (local default)
 	chatTokenCapDay  int           // daily chat-token cap; 0 = unlimited (the fast fuse)
 	rpmLimiter       *rateLimiter  // per-tenant request-rate fuse; nil = off
@@ -413,6 +446,7 @@ func (h *RAGChatHandler) SetDeterminedFacts(db *store.DB, owner *identity.Matche
 	// determined values the LLM-driven tools would — the difference is only WHO calls them.
 	h.idTool = tools.NewLookupIdentifierTool(db, owner, h.ownerSubject)
 	h.figTool = tools.NewLookupFigureTool(db, owner, h.ownerSubject)
+	h.meetTool = tools.NewLookupMeetingTool(db)
 }
 
 // SetVoieATools overrides the Voie A resolvers (test seam). Production wiring builds them in
@@ -420,6 +454,12 @@ func (h *RAGChatHandler) SetDeterminedFacts(db *store.DB, owner *identity.Matche
 func (h *RAGChatHandler) SetVoieATools(identifier, figure valueLookup) {
 	h.idTool = identifier
 	h.figTool = figure
+}
+
+// SetVoieAMeetingTool overrides the meeting resolver (test seam), so a handler test can drive the
+// rendez-vous lane with a stub without a populated store.
+func (h *RAGChatHandler) SetVoieAMeetingTool(meeting valueLookup) {
+	h.meetTool = meeting
 }
 
 // baseFormatGuidance is the persona/format hint prepended to every chat turn.
@@ -954,7 +994,7 @@ func (h *RAGChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// streams it — the LLM is skipped, so P(the LLM writes the value) = 0 by construction. This is
 	// the fix for "the chat ignores the engine" (the 357 € RAG hallucination). No match → the turn
 	// falls straight through to voie B (the RAG path below) unchanged.
-	if h.idTool != nil && h.figTool != nil && latestUserQuery != "" {
+	if (h.idTool != nil || h.figTool != nil || h.meetTool != nil) && latestUserQuery != "" {
 		subjectFn := func(q string) string {
 			if h.factsDB == nil {
 				return ""

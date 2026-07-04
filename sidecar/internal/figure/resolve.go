@@ -163,7 +163,7 @@ func Resolve(ctx context.Context, s Store, query, rawLabel, rawDirection, rawPer
 	// If they AGREE, that's the value. If they DISAGREE, the LATEST document wins (ordered by doc date)
 	// and the older reading is surfaced as a contradiction (res.Prior) — never averaged, never guessed.
 	// When no clear latest exists (tie / no dates), we decline.
-	pick, prior, reason := resolveTemporal(nodes)
+	pick, prior, reason := ResolveTemporal(nodes)
 	if reason != "" {
 		res.Reason = reason
 		return res, nil
@@ -187,11 +187,13 @@ func Resolve(ctx context.Context, s Store, query, rawLabel, rawDirection, rawPer
 	return res, nil
 }
 
-// resolveTemporal picks the current value from a set of same-fact nodes, applying temporal
+// ResolveTemporal picks the current value from a set of same-fact nodes, applying temporal
 // supersession when they disagree: the node(s) from the LATEST document date win, and the distinct
 // older values become Prior (the surfaced contradiction). Declines (reason) when the survivors
 // disagree but cannot be ordered (no doc dates, or a tie at the latest date holding several values).
-func resolveTemporal(nodes []store.FigureNode) (store.FigureNode, []PriorValue, string) {
+// Exported so the SAME mechanism resolves other latest-assertion-wins facts (e.g. a meeting time
+// across email + calendar sources — internal/rendezvous) without a parallel implementation.
+func ResolveTemporal(nodes []store.FigureNode) (store.FigureNode, []PriorValue, string) {
 	if len(nodes) == 0 {
 		return store.FigureNode{}, nil, ReasonNoFigure
 	}

@@ -37,6 +37,8 @@ func TestPlanVoieA_Routing(t *testing.T) {
 		{"duns → identifier", "mon DUNS", true, laneIdentifier, "moi", "DUNS"},
 		{"named subject figure", "le montant de TVA à payer de Acme", true, laneFigure, "acme", ""},
 		{"dosage → figure", "what's my Amoxicillin dose?", true, laneFigure, "moi", ""},
+		{"meeting with party → meeting", "what time is my meeting with Acme?", true, laneMeeting, "Acme", ""},
+		{"meeting no party → voie B", "when is my meeting?", false, "", "", ""},
 		{"exploratory → voie B", "résume ma semaine", false, "", "", ""},
 		{"bare tax word → voie B", "explique-moi comment fonctionne la TVA", false, "", "", ""},
 	}

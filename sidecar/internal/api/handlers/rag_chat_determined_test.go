@@ -77,6 +77,34 @@ func TestDeterminedAnswerFromToolResult(t *testing.T) {
 			t.Errorf("figure decline should be none + honest message, no value: %+v", evt)
 		}
 	})
+
+	t.Run("meeting contradiction renders time, note and gated offer", func(t *testing.T) {
+		res := mk(tools.MeetingResponse{Label: "Meeting with Acme", Subject: "Acme",
+			Value: "Fri Jul 10, 3:00 PM", Tier: "high", Contradiction: true, StaleSource: "calendar",
+			Note:  "Your calendar still shows Fri Jul 10, 2:00 PM — that's a contradiction (stale).",
+			Offer: "Want me to draft a confirmation email and update your calendar?"})
+		evt, ok := determinedAnswerFromToolResult("lookup_meeting", res)
+		if !ok {
+			t.Fatal("expected a determined_answer event for lookup_meeting")
+		}
+		if evt.Value != "Fri Jul 10, 3:00 PM" || evt.Confidence != "high" {
+			t.Errorf("unexpected meeting event: %+v", evt)
+		}
+		if evt.Note == "" || evt.Offer == "" {
+			t.Errorf("meeting contradiction must carry the note AND the gated offer: %+v", evt)
+		}
+	})
+
+	t.Run("meeting decline renders no time", func(t *testing.T) {
+		res := mk(tools.MeetingResponse{Label: "Meeting with Acme", Subject: "Acme", Tier: "none", Reason: "no_meeting"})
+		evt, ok := determinedAnswerFromToolResult("lookup_meeting", res)
+		if !ok {
+			t.Fatal("expected a determined_answer event on meeting decline")
+		}
+		if evt.Value != "" || evt.Confidence != "none" || evt.Message == "" {
+			t.Errorf("meeting decline should be none + honest message, no time: %+v", evt)
+		}
+	})
 }
 
 // stubLookupTool is a canned lookup_identifier that returns the engine's high-confidence VAT
