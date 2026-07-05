@@ -653,8 +653,8 @@ func metadataFloat(m map[string]any, key string) (float64, bool) {
 // metadata, or a fresh LLM classification. fresh=true means the caller should
 // persist them. Pure of DB writes (safe to run concurrently). Empty when there's
 // no indexing LLM client or no text.
-func (i *Ingestor) classifyItem(ctx context.Context, item *store.KnowledgeItem) (cats []string, fresh bool) {
-	if cachedFresh(item.Metadata, "mail_categories", mailCategoryVersion) {
+func (i *Ingestor) classifyItem(ctx context.Context, item *store.KnowledgeItem, force bool) (cats []string, fresh bool) {
+	if !force && cachedFresh(item.Metadata, "mail_categories", mailCategoryVersion) {
 		if cached := categoriesFromMetadata(item.Metadata); len(cached) > 0 {
 			return cached, false
 		}
@@ -699,10 +699,10 @@ func (i *Ingestor) TagItem(ctx context.Context, item *store.KnowledgeItem, prune
 	if i.autoTagger == nil || item == nil {
 		return
 	}
-	cats, fresh := i.classifyItem(ctx, item)
+	cats, fresh := i.classifyItem(ctx, item, false)
 	i.applyItemTags(ctx, item, cats, fresh)
 	// W6: extract + cache semantic claims (skips junk senders / Notifications).
-	claims, cfresh := i.extractClaimsForItem(ctx, item, cats)
+	claims, cfresh := i.extractClaimsForItem(ctx, item, cats, false)
 	i.applyItemClaims(ctx, item, claims, cfresh, false) // live ingestion: normal timestamp
 	// Inline project suggestion (W4): cache the best-matching project so the
 	// detail panel can offer "Add to <project>".
@@ -721,10 +721,12 @@ const retagConcurrency = 4
 
 // RetagItems rebuilds auto-tags across all mail + notes: it purges existing
 // auto-tags (dropping stale rules), then classifies + tags every item, reusing
-// categories already cached in metadata. Classification runs up to
+// categories already cached in metadata. When force is true the version cache is
+// bypassed and every item is RE-CLASSIFIED on the LLM (a full re-derive over the
+// whole corpus, e.g. after re-extracting text with OCR). Classification runs up to
 // retagConcurrency in parallel; tag writes are serialized. Pruning happens once
 // at the end. Long-running — callers should run it async. Returns items processed.
-func (i *Ingestor) RetagItems(ctx context.Context) (int, error) {
+func (i *Ingestor) RetagItems(ctx context.Context, force bool) (int, error) {
 	if i.autoTagger == nil || i.store == nil {
 		return 0, nil
 	}
@@ -763,7 +765,7 @@ func (i *Ingestor) RetagItems(ctx context.Context) (int, error) {
 		go func(it *store.KnowledgeItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			cats, fresh := i.classifyItem(ctx, it) // LLM — runs in parallel
+			cats, fresh := i.classifyItem(ctx, it, force) // LLM — runs in parallel
 			mu.Lock()
 			i.applyItemTags(ctx, it, cats, fresh) // DB — serialized
 			processed++

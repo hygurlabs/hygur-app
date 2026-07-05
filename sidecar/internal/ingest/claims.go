@@ -89,11 +89,11 @@ func isAutomatedSender(from string) bool {
 // concurrently). Skips ineligible items and already-fresh caches without an LLM
 // call. An empty result on an eligible item is still fresh=true, so "no claims"
 // is cached and not recomputed.
-func (i *Ingestor) extractClaimsForItem(ctx context.Context, item *store.KnowledgeItem, cats []string) (claims []contradict.Claim, fresh bool) {
+func (i *Ingestor) extractClaimsForItem(ctx context.Context, item *store.KnowledgeItem, cats []string, force bool) (claims []contradict.Claim, fresh bool) {
 	if item == nil {
 		return nil, false
 	}
-	if cachedFresh(item.Metadata, "extracted_claims", extractedClaimsVersion) {
+	if !force && cachedFresh(item.Metadata, "extracted_claims", extractedClaimsVersion) {
 		return nil, false
 	}
 	if !claimsEligible(item, cats) {
@@ -349,10 +349,12 @@ func typedIdentifierMentions(item *store.KnowledgeItem) []store.EntityMention {
 
 // BackfillClaims extracts + caches claims across all eligible mail + notes,
 // reusing already-cached categories (run RetagItems first so eligibility reads
-// cached cats without an extra LLM call). Extraction runs up to retagConcurrency
-// in parallel on the main model; metadata writes are serialized. Long-running —
-// callers should run it async. Returns items scanned.
-func (i *Ingestor) BackfillClaims(ctx context.Context) (int, error) {
+// cached cats without an extra LLM call). When force is true the version cache is
+// bypassed and claims are RE-EXTRACTED on the LLM for every eligible item (a full
+// re-derive over the whole corpus, e.g. after re-extracting text with OCR).
+// Extraction runs up to retagConcurrency in parallel on the main model; metadata
+// writes are serialized. Long-running — callers should run it async. Returns items scanned.
+func (i *Ingestor) BackfillClaims(ctx context.Context, force bool) (int, error) {
 	if i.store == nil || i.llmClient == nil {
 		return 0, nil
 	}
@@ -386,8 +388,8 @@ func (i *Ingestor) BackfillClaims(ctx context.Context) (int, error) {
 		go func(it *store.KnowledgeItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			cats, _ := i.classifyItem(ctx, it) // cached → no LLM when retag ran first
-			claims, fresh := i.extractClaimsForItem(ctx, it, cats)
+			cats, _ := i.classifyItem(ctx, it, false) // cached → no LLM when retag ran first
+			claims, fresh := i.extractClaimsForItem(ctx, it, cats, force)
 			mu.Lock()
 			i.applyItemClaims(ctx, it, claims, fresh, true) // backfill: preserve updated_at
 			processed++

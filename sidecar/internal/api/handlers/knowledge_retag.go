@@ -13,7 +13,8 @@ var retagInFlight atomic.Bool
 // Retag rebuilds mail auto-tags over the whole corpus (purge stale auto-tags →
 // mailbox-folder + Tier-2 topic tags). POST /knowledge/retag. The job runs in the
 // background and is reported via logs; the request returns immediately. Watch the
-// result by polling GET /tags. Idempotent — cached topics are reused on re-runs.
+// result by polling GET /tags. Idempotent — cached topics are reused on re-runs;
+// ?force=1 bypasses the cache and re-classifies every item on the LLM.
 func (h *KnowledgeHandler) Retag(w http.ResponseWriter, r *http.Request) {
 	if h.ingestor == nil {
 		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
@@ -23,15 +24,18 @@ func (h *KnowledgeHandler) Retag(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
 		return
 	}
+	// ?force=1 re-classifies every item on the LLM (full re-derive), bypassing the
+	// version cache — used after re-extracting text (OCR) to re-tag the whole corpus.
+	force := r.URL.Query().Get("force") == "1"
 	go func() {
 		defer retagInFlight.Store(false)
 		// Detached from the request: the backfill outlives the HTTP call.
-		n, err := h.ingestor.RetagItems(context.Background())
+		n, err := h.ingestor.RetagItems(context.Background(), force)
 		if err != nil {
 			h.logger.Error().Err(err).Int("processed", n).Msg("mail retag failed")
 			return
 		}
-		h.logger.Info().Int("processed", n).Msg("mail retag complete")
+		h.logger.Info().Int("processed", n).Bool("force", force).Msg("mail retag complete")
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
@@ -76,6 +80,7 @@ var claimsInFlight atomic.Bool
 // notes. POST /knowledge/backfill-claims. Runs in the background (reported via
 // logs); returns immediately. Run /knowledge/retag first so categories are cached
 // (eligibility check) and the backfill only spends LLM on claim extraction.
+// ?force=1 bypasses the version cache and re-extracts claims for every eligible item.
 func (h *KnowledgeHandler) BackfillClaims(w http.ResponseWriter, r *http.Request) {
 	if h.ingestor == nil {
 		writeKnowledgeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "ingestor not configured")
@@ -85,14 +90,17 @@ func (h *KnowledgeHandler) BackfillClaims(w http.ResponseWriter, r *http.Request
 		writeKnowledgeJSON(w, http.StatusOK, map[string]string{"status": "already_running"})
 		return
 	}
+	// ?force=1 re-extracts claims on the LLM for every eligible item (full re-derive),
+	// bypassing the version cache — used after re-extracting text (OCR) / a full rebuild.
+	force := r.URL.Query().Get("force") == "1"
 	go func() {
 		defer claimsInFlight.Store(false)
-		n, err := h.ingestor.BackfillClaims(context.Background())
+		n, err := h.ingestor.BackfillClaims(context.Background(), force)
 		if err != nil {
 			h.logger.Error().Err(err).Int("scanned", n).Msg("claim backfill failed")
 			return
 		}
-		h.logger.Info().Int("scanned", n).Msg("claim backfill complete")
+		h.logger.Info().Int("scanned", n).Bool("force", force).Msg("claim backfill complete")
 	}()
 	writeKnowledgeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }

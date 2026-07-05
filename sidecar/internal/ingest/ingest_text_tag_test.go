@@ -121,7 +121,7 @@ func TestRetagItems_PurgesAndRefoldersMail(t *testing.T) {
 		t.Fatalf("AddTagToItem: %v", err)
 	}
 
-	n, err := i.RetagItems(ctx)
+	n, err := i.RetagItems(ctx, false)
 	if err != nil {
 		t.Fatalf("RetagItems: %v", err)
 	}
