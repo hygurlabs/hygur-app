@@ -105,6 +105,31 @@ func TestLocalReal(t *testing.T) {
 		t.Logf("  entity kinds=%v keys=%v docs=%d soft=%d", e.Kinds, keys, len(e.Docs), len(e.Soft))
 	}
 
+	// ── THE MEASUREMENT (docs/AUTO_CORRELATION_PLAN.md): how many auto-engrams work ──
+	s := g.Stats()
+	t.Logf("=== AUTO-ENGRAM MEASUREMENT (counts only, no PII) ===")
+	t.Logf("  observations fed        : %d", s.Observations)
+	t.Logf("  canonical entities (keyed): %d", s.Entities)
+	t.Logf("  keyless groups (noise)  : %d", s.KeylessGroups)
+	t.Logf("  AUTO-CORRELATED MERGES  : %d  (keyed entity fused from >=2 observations)", s.Merges)
+	t.Logf("  RICH engrams            : %d  (keyed entity carrying >=1 attribute/relation)", s.Rich)
+	t.Logf("  vehicles (plate-anchored): %d  (with insurance attrs: %d)", s.Vehicles, s.VehiclesRich)
+	t.Logf("  by hard-key type        : %v", s.ByKeyType)
+
+	t.Logf("=== TOP MERGE CLUSTERS (masked) ===")
+	for i, e := range g.TopMergeClusters(12) {
+		var keys []string
+		for _, k := range e.Keys {
+			keys = append(keys, k.Type+":"+mask(k.Value))
+		}
+		var softMasked []string
+		for _, sn := range e.Soft {
+			softMasked = append(softMasked, mask(sn))
+		}
+		t.Logf("  #%d obs=%d docs=%d kinds=%v keys=%v attrs=%d soft=%v",
+			i+1, e.Obs, len(e.Docs), e.Kinds, keys, len(e.Attrs), softMasked)
+	}
+
 	t.Logf("=== GOLDEN QUERY: list all my vehicles with insurer + price ===")
 	for _, v := range g.Vehicles() {
 		t.Logf("  plate=%s | insurer=%s | pj=%s | broker=%s | price=%s | declined=%v | srcDocs=%d",
