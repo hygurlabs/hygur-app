@@ -94,6 +94,9 @@ func main() {
 		case "memory":
 			runMemory(os.Args[2:])
 			return
+		case "decisions":
+			runDecisions(os.Args[2:])
+			return
 		case "mail-breakdown":
 			runMailBreakdown(os.Args[2:])
 			return

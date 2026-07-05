@@ -34,12 +34,21 @@ const (
 	DecisionSuperseded = "superseded" // no longer holds
 )
 
+// NormalizeStatement collapses whitespace and lowercases a decision statement so
+// two statements that differ only in spacing/case compare equal. Shared by the
+// dedup key and the duplicate-cleanup grouping so they agree on identity.
+func NormalizeStatement(statement string) string {
+	return strings.ToLower(strings.Join(strings.Fields(statement), " "))
+}
+
 // DecisionDedupKey is the stable key that makes the nightly scan idempotent: the
-// same decision (same source item + same statement) is never re-proposed. Empty
-// for manually-logged decisions (no dedup).
+// same decision (same source scope + same statement) is never re-proposed. The
+// sourceRef is the dedup SCOPE — the caller passes the source item's content
+// HASH when known (so two ingested copies of the same content, each under its own
+// content_id, collapse to one decision) and falls back to the content_id
+// otherwise. Empty for manually-logged decisions (no dedup).
 func DecisionDedupKey(sourceRef, statement string) string {
-	s := strings.ToLower(strings.Join(strings.Fields(statement), " "))
-	sum := sha256.Sum256([]byte(sourceRef + "\n" + s))
+	sum := sha256.Sum256([]byte(sourceRef + "\n" + NormalizeStatement(statement)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -197,6 +206,116 @@ func (d *DB) GetDecision(ctx context.Context, id string) (*Decision, error) {
 		return nil, err
 	}
 	return dec, nil
+}
+
+// DecisionDupGroup is one set of scan-created decisions that collapsed onto the
+// same content: the same normalized statement grounded in source items that
+// share a content_hash (identical ingested content — e.g. the same attachment
+// sent twice, each stored under its own content_id). Keep is the earliest-created
+// survivor; Delete are the later duplicates to remove.
+type DecisionDupGroup struct {
+	StatementHash string   // sha256 of the normalized statement — a PII-safe id (no statement text leaks)
+	ContentHash   string   // the shared source content_hash the copies collapsed on
+	Keep          string   // survivor decision content_id (earliest created)
+	Delete        []string // duplicate decision content_ids to delete (later-created)
+}
+
+// FindDuplicateDecisions returns the groups of decisions that are duplicates of
+// one another because their source items share a content_hash AND their
+// statements are identical (whitespace/case-insensitive). Read-only — the caller
+// verifies the set before deleting (fail-closed). Fail-closed on scope, too: a
+// decision whose source content_hash is unknown ('') is NEVER grouped, so two
+// genuinely distinct decisions can't be collapsed.
+func (d *DB) FindDuplicateDecisions(ctx context.Context) ([]DecisionDupGroup, error) {
+	rows, err := d.db.QueryContext(ctx, `
+SELECT ki.content_id, ki.title,
+       COALESCE(json_extract(src.metadata, '$.content_hash'), '') AS chash
+FROM knowledge_items ki
+JOIN decision_attrs da ON da.content_id = ki.content_id
+LEFT JOIN knowledge_items src ON src.content_id = json_extract(da.source_refs, '$[0]')
+WHERE ki.source_type = 'decision'
+ORDER BY ki.created_at ASC, ki.content_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type key struct{ stmt, hash string }
+	order := []key{}
+	groups := map[key][]string{}
+	for rows.Next() {
+		var id, title, chash string
+		if err := rows.Scan(&id, &title, &chash); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(chash) == "" {
+			continue // fail-closed: no shared content scope → never a duplicate
+		}
+		k := key{stmt: NormalizeStatement(title), hash: chash}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], id) // created_at ASC → first is earliest
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var out []DecisionDupGroup
+	for _, k := range order {
+		ids := groups[k]
+		if len(ids) < 2 {
+			continue
+		}
+		sum := sha256.Sum256([]byte(k.stmt))
+		out = append(out, DecisionDupGroup{
+			StatementHash: hex.EncodeToString(sum[:]),
+			ContentHash:   k.hash,
+			Keep:          ids[0],
+			Delete:        ids[1:],
+		})
+	}
+	return out, nil
+}
+
+// DeleteDecisions removes the given decision content_ids in one transaction: the
+// derived item_norm rows (no FK) plus the knowledge_items rows, whose ON DELETE
+// CASCADE fans out to decision_attrs / project_links / chunks. Foreign keys are
+// enforced for this connection so the cascade fires even when opened via the CLI
+// (which defaults them off). Returns the number of decisions deleted.
+func (d *DB) DeleteDecisions(ctx context.Context, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if _, err := d.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		return 0, err
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+	in := "(" + strings.Join(ph, ",") + ")"
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM item_norm WHERE content_id IN `+in, args...); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM knowledge_items WHERE content_id IN `+in, args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // GetAppSetting reads a value from the generic app_settings key/value store;

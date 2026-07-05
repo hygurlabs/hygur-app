@@ -88,6 +88,14 @@ func (s *DecisionScanner) Run(ctx context.Context, now time.Time, force bool) (i
 		if ctx.Err() != nil {
 			break
 		}
+		// Scan guard: the decision scanner keys off INGESTION time. A metadata-only
+		// backfill (e.g. the engram re-embed) bumps updated_at without touching the
+		// content; ListKnowledgeItemsSince also matches on updated_at, so such items
+		// re-enter the window. Skip any item first ingested before `since` — its
+		// content is unchanged, so re-scanning it can only re-mint decisions.
+		if scanSkipUnchanged(item, since) {
+			continue
+		}
 		for _, c := range s.extract(ctx, item.NormalizedText) {
 			added, perr := s.propose(ctx, item, c, now)
 			if perr != nil {
@@ -111,6 +119,29 @@ func (s *DecisionScanner) Run(ctx context.Context, now time.Time, force bool) (i
 	return proposed, nil
 }
 
+// scanSkipUnchanged reports whether an item that surfaced in the scan window has
+// unchanged content — it was ingested before `since` and only re-entered the
+// window via a metadata-only updated_at bump. Such items must not be re-scanned.
+func scanSkipUnchanged(item *store.KnowledgeItem, since time.Time) bool {
+	return item.CreatedAt.Before(since)
+}
+
+// decisionDedupRef is the dedup SCOPE for a source item: its content hash when
+// available (so two ingested copies of the SAME content — e.g. the same
+// attachment sent twice, each stored under its own content_id — collapse to a
+// single decision rather than each minting their own), falling back to the
+// content_id when the item carries no content_hash (e.g. manual notes).
+func decisionDedupRef(item *store.KnowledgeItem) string {
+	if item != nil && item.Metadata != nil {
+		if h, ok := item.Metadata["content_hash"].(string); ok {
+			if h = strings.TrimSpace(h); h != "" {
+				return "hash:" + h
+			}
+		}
+	}
+	return item.ContentID
+}
+
 // propose stores one detected decision as a "proposed" decision linked to its
 // source. Returns false (no error) when an identical decision already exists.
 func (s *DecisionScanner) propose(ctx context.Context, item *store.KnowledgeItem, c decisionCandidate, now time.Time) (bool, error) {
@@ -118,7 +149,7 @@ func (s *DecisionScanner) propose(ctx context.Context, item *store.KnowledgeItem
 	if statement == "" {
 		return false, nil
 	}
-	dedup := store.DecisionDedupKey(item.ContentID, statement)
+	dedup := store.DecisionDedupKey(decisionDedupRef(item), statement)
 	exists, err := s.store.DecisionDedupExists(ctx, dedup)
 	if err != nil {
 		return false, err

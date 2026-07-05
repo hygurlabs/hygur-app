@@ -1,6 +1,76 @@
 package scheduler
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/hygur/sidecar/internal/store"
+	"github.com/rs/zerolog"
+)
+
+// Two ingested copies of the SAME content (same content_hash, different
+// content_id — e.g. the same attachment sent twice in a thread) with the same
+// statement must mint exactly ONE decision, not two.
+func TestProposeDedupOnContentHash(t *testing.T) {
+	db, err := store.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	s := &DecisionScanner{store: db, logger: zerolog.Nop()}
+	now := time.Now()
+
+	copyA := &store.KnowledgeItem{ContentID: "file:copyA", Metadata: map[string]any{"content_hash": "abc123"}}
+	copyB := &store.KnowledgeItem{ContentID: "file:copyB", Metadata: map[string]any{"content_hash": "abc123"}}
+	cand := decisionCandidate{Statement: "Sign the lease by Friday", Quote: "sign the lease by friday"}
+
+	added, err := s.propose(ctx, copyA, cand, now)
+	if err != nil || !added {
+		t.Fatalf("first propose: added=%v err=%v", added, err)
+	}
+	added, err = s.propose(ctx, copyB, cand, now)
+	if err != nil {
+		t.Fatalf("second propose err: %v", err)
+	}
+	if added {
+		t.Error("second copy (same content_hash + statement) minted a duplicate decision")
+	}
+	all, _ := db.ListDecisions(ctx, "", "")
+	if len(all) != 1 {
+		t.Fatalf("want exactly 1 decision, got %d", len(all))
+	}
+}
+
+func TestDecisionDedupRef(t *testing.T) {
+	withHash := &store.KnowledgeItem{ContentID: "file:x", Metadata: map[string]any{"content_hash": "h1"}}
+	if got := decisionDedupRef(withHash); got != "hash:h1" {
+		t.Errorf("content_hash item → %q, want hash:h1", got)
+	}
+	noHash := &store.KnowledgeItem{ContentID: "note:y", Metadata: map[string]any{}}
+	if got := decisionDedupRef(noHash); got != "note:y" {
+		t.Errorf("hashless item → %q, want note:y", got)
+	}
+	blank := &store.KnowledgeItem{ContentID: "note:z", Metadata: map[string]any{"content_hash": "  "}}
+	if got := decisionDedupRef(blank); got != "note:z" {
+		t.Errorf("blank hash → %q, want fallback note:z", got)
+	}
+}
+
+// A metadata-only backfill bumps updated_at without changing content; such an
+// item (ingested before the scan window) must be skipped, not re-scanned.
+func TestScanSkipUnchanged(t *testing.T) {
+	since := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	old := &store.KnowledgeItem{CreatedAt: since.AddDate(0, 0, -10)} // ingested before window
+	if !scanSkipUnchanged(old, since) {
+		t.Error("metadata-only updated_at bump on an old item must be skipped")
+	}
+	fresh := &store.KnowledgeItem{CreatedAt: since.AddDate(0, 0, 1)} // ingested inside window
+	if scanSkipUnchanged(fresh, since) {
+		t.Error("freshly-ingested item must be scanned")
+	}
+}
 
 func TestParseDecisionsVerbatimGate(t *testing.T) {
 	source := "After review we decided to proceed with vendor A and to sign the lease by Friday. We are still weighing the budget."
