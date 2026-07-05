@@ -1620,6 +1620,17 @@ const determinedFactsRule = "These values are DETERMINED by Hygur's deterministi
 	"This rule is about identifiers and reference numbers only; ordinary prose, monetary amounts, quotes, " +
 	"dates of events and summaries are still drawn from the retrieved content as usual."
 
+// keyedClosedWorldRule closes the world over a keyed entity's (a vehicle's) attributes: the attributes
+// listed for it in the Verified-facts block are the COMPLETE determined set, so any OTHER attribute of
+// that specific vehicle must be honestly declined rather than lifted from retrieved documents. This is
+// the anti-conflation guarantee for the vehicle cluster (anchor-or-decline), scoped to the keyed subject
+// so ordinary Q&A elsewhere is untouched.
+const keyedClosedWorldRule = "  ↳ For THIS vehicle, the attribute(s) listed above are the ONLY verified ones. " +
+	"If asked about any other attribute of it — insurance/assurance, lease/loyer/LOA, financing, omnium — " +
+	"that is NOT listed here, say plainly you have no verified value for it. Do NOT infer it from retrieved " +
+	"documents: a quote/cotation is not a policy, and another vehicle's or the company car's data must never " +
+	"be attributed to this one.\n"
+
 // injectDeterminedFacts prepends the authoritative "Verified facts" block (the query's
 // subjects' determined identifiers + active claims) plus the value-source rule to the system
 // prompt. Values are shown from the deterministic resolver; the LLM only voices them. Merges
@@ -1660,6 +1671,15 @@ func injectDeterminedFacts(messages []llm.Message, subjects []retrieval.Determin
 		}
 		for _, c := range s.Claims {
 			b.WriteString(fmt.Sprintf("- %s: %s (%s, %d source(s))\n", c.Attribute, c.Value, c.State, c.Corroboration))
+		}
+		// CLOSED-WORLD for a keyed entity (a vehicle by its plate): its verified attributes above are the
+		// COMPLETE determined set for THIS specific entity. Any other attribute of it — insurance, lease
+		// / loyer, financing — that is NOT listed must be DECLINED, never inferred from retrieved content,
+		// which conflates distinct vehicles (a price QUOTE, the company car, another plate). This is what
+		// stops « votre assurance » being answered with a different vehicle's or a mere offer. (voie A owns
+		// this keyed entity; RAG must not fill its gaps.)
+		if s.Subject.Type == "vehicle" {
+			b.WriteString(keyedClosedWorldRule)
 		}
 		for _, f := range s.Figures {
 			amt := f.Raw

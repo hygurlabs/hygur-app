@@ -35,6 +35,44 @@ func TestAssessTextQuality_Clean(t *testing.T) {
 	}
 }
 
+// TestAssessTextQuality_Merged is the FIX-1 regression: space-losing extractor
+// output (`dailyrate600`) previously scored ~1.0 and OUTRANKED clean poppler text
+// (~0.95), so the keep-better guard preferred the garbage. Merged-words text must
+// now score low and be flagged low-confidence.
+func TestAssessTextQuality_Merged(t *testing.T) {
+	// ledongthuc merged-words shape: whitespace dropped, words fused into long runs.
+	merged := "contractoragreement betweenacmegaming ltdandjohndoe theagreeddaily " +
+		"rate600euro perworkingday invoicedmonthly nettotalpayable 7200euroverthe " +
+		"twelvemonthterm signedinlondon paymenttermsnet thirtydaysfrom invoicedatehereto"
+	q := AssessTextQuality(merged)
+	if !q.Merged {
+		t.Errorf("expected merged=true, got %+v", q)
+	}
+	if !q.LowConfidence {
+		t.Errorf("expected low_confidence=true for merged-words, got %+v", q)
+	}
+	if q.Score >= LowConfidenceThreshold {
+		t.Errorf("expected merged score < %.2f, got %.2f", LowConfidenceThreshold, q.Score)
+	}
+}
+
+// TestAssessTextQuality_CleanOutranksMerged is the core FIX-1 guarantee the
+// keep-better guard relies on: clean poppler prose must score strictly higher than
+// the merged-words extraction of the same content.
+func TestAssessTextQuality_CleanOutranksMerged(t *testing.T) {
+	clean := "Contractor Agreement between ACME Gaming Ltd and John Doe. " +
+		"The agreed daily rate is 600 EUR per working day, invoiced monthly. " +
+		"Net total payable 7200 EUR over the twelve month term. Signed in London."
+	merged := "contractoragreement betweenacmegaming ltdandjohndoe theagreeddaily " +
+		"rate600euro perworkingday invoicedmonthly nettotalpayable 7200euroverthe " +
+		"twelvemonthterm signedinlondon paymenttermsnet thirtydaysfrom invoicedatehereto"
+	qc := AssessTextQuality(clean)
+	qm := AssessTextQuality(merged)
+	if qc.Score <= qm.Score {
+		t.Errorf("clean (%.2f) must outrank merged (%.2f)", qc.Score, qm.Score)
+	}
+}
+
 func TestAssessTextQuality_ShortTitleNotGarbled(t *testing.T) {
 	// A short clean title must not be mis-flagged as garbled just for being short.
 	q := AssessTextQuality("Invoice March 2026")

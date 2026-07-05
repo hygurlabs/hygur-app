@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +94,45 @@ func TestAssembleQueryFacts_VehicleModelPlateAnchored(t *testing.T) {
 		if c.Value == "Tesla Model Y" || c.Value == "Tesla Model 3" {
 			t.Errorf("distinct vehicle leaked into GT-139-RR: %q", c.Value)
 		}
+	}
+}
+
+// FOUNDER SCENARIO (voie A): « le modèle ET l'assurance de mon véhicule GT-139-RR ». The plate carries
+// a determined MODEL (Model X) but NO determined insurance — the CBC omnium was a QUOTE (declined at
+// anchoring) and no policy is anchored to the plate. Voie A must surface the model and stay SILENT on
+// insurance (decline), never asserting the company Model Y's CBC/loyer here. This is the authoritative
+// layer that keeps the chat from re-deriving « votre assurance » from conflating RAG.
+func TestAssembleQueryFacts_VehicleInsuranceDeclines(t *testing.T) {
+	db, owner, now := seedVehicle(t)
+	ctx := context.Background()
+
+	facts, err := AssembleQueryFacts(ctx, db, "quel est le modèle et l'assurance de mon véhicule GT-139-RR ?", now, owner, "Alex Martin")
+	if err != nil {
+		t.Fatalf("AssembleQueryFacts: %v", err)
+	}
+	var veh *DeterminedFacts
+	for i := range facts {
+		if facts[i].Subject.Norm == "gt 139 rr" {
+			veh = &facts[i]
+		}
+	}
+	if veh == nil {
+		t.Fatalf("no determined facts for GT-139-RR: %+v", facts)
+	}
+	var sawModel bool
+	for _, c := range veh.Claims {
+		if c.Attribute == "modèle" && c.Value == "Tesla Model X 2023" {
+			sawModel = true
+		}
+		// No insurance/loyer may be affirmed for the personal plate — and never a CBC / omnium value.
+		lc := strings.ToLower(c.Attribute + " " + c.Value)
+		if strings.Contains(lc, "assurance") || strings.Contains(lc, "omnium") ||
+			strings.Contains(lc, "cbc") || strings.Contains(lc, "loyer") {
+			t.Errorf("GT-139-RR must decline insurance/loyer, but surfaced %q = %q", c.Attribute, c.Value)
+		}
+	}
+	if !sawModel {
+		t.Errorf("expected determined model Tesla Model X 2023, claims=%+v", veh.Claims)
 	}
 }
 

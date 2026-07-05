@@ -63,6 +63,44 @@ func TestInjectDeterminedFacts_BlockAndRule(t *testing.T) {
 
 // PII: the assembled prompt for the OWNER's own identifier question must never spell the owner's
 // raw name — only a neutral "the user (owner)" label. The value is still voiced from the block.
+// A KEYED vehicle subject carries a CLOSED-WORLD clause: its listed attributes are the complete
+// determined set, and any other attribute (insurance/loyer) must be declined, not drawn from RAG. This
+// is the anti-conflation guarantee that stops « votre assurance » being answered with a quote or the
+// company car. A person subject gets NO such clause (ordinary Q&A untouched).
+func TestInjectDeterminedFacts_VehicleClosedWorld(t *testing.T) {
+	in := []llm.Message{
+		{Role: "system", Content: "PERSONA"},
+		{Role: "user", Content: "le modèle et l'assurance de mon véhicule GT-139-RR ?"},
+	}
+	subjects := []retrieval.DeterminedFacts{
+		{
+			Subject: retrieval.EngramSubject{Norm: "gt 139 rr", Type: "vehicle"},
+			Claims: []retrieval.EngramClaim{
+				{Attribute: "modèle", Value: "Tesla Model X 2023", State: "corroborated", Corroboration: 2},
+			},
+		},
+	}
+	sys := injectDeterminedFacts(in, subjects)[0].Content
+	if !strings.Contains(sys, "Tesla Model X 2023") {
+		t.Fatalf("determined model missing:\n%s", sys)
+	}
+	for _, want := range []string{"ONLY verified ones", "no verified value", "quote/cotation is not a policy"} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("vehicle closed-world clause missing %q:\n%s", want, sys)
+		}
+	}
+	// A person subject must NOT trigger the vehicle clause.
+	personOnly := injectDeterminedFacts(in, []retrieval.DeterminedFacts{{
+		Subject: retrieval.EngramSubject{Norm: "alex martin", Type: "person"},
+		Identity: []retrieval.EngramIdentifier{
+			{Type: "enterprise_number", Label: "enterprise number", Value: "0000000097", Tier: "high"},
+		},
+	}})[0].Content
+	if strings.Contains(personOnly, "ONLY verified ones") {
+		t.Errorf("person subject must not carry the vehicle closed-world clause:\n%s", personOnly)
+	}
+}
+
 func TestInjectDeterminedFacts_OwnerNameNotInPrompt(t *testing.T) {
 	in := []llm.Message{
 		{Role: "system", Content: "PERSONA"},

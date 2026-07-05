@@ -162,9 +162,9 @@ func (p *PDFParser) Parse(ctx context.Context, r io.Reader) (content string, met
 	// sync path off the critical path: sync never OCRs synchronously (a
 	// per-attachment vision call would saturate the inference model); instead it
 	// STAMPS low_confidence so an async re-extraction pass can OCR later.
-	if !p.disableOCR && (isSparseText(content, pageCount) || quality.Garbled) {
+	if !p.disableOCR && (isSparseText(content, pageCount) || quality.Garbled || quality.Merged) {
 		slog.WarnContext(ctx, "pdf.parse: sparse or garbled text, attempting OCR fallback",
-			"page_count", pageCount, "content_len", len(content), "garbled", quality.Garbled)
+			"page_count", pageCount, "content_len", len(content), "garbled", quality.Garbled, "merged", quality.Merged)
 		ocrText := strings.TrimSpace(p.ocrFallback(ctx, data))
 		if ocrQ := ingest.AssessTextQuality(ocrText); ocrText != "" && ocrQ.Score > quality.Score {
 			content = ocrText

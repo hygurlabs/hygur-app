@@ -132,8 +132,38 @@ func AttrNodesFromClaims(claims []contradict.Claim) []store.AttrNode {
 		if attr == "" || val == "" {
 			continue
 		}
+		// PROSPECTIVE-CONTEXT DECLINE (fail-closed): a QUOTE/OFFER/PROJECTION is not an established
+		// fact. A « cotation » / « devis » / « offre de prix » for a Model Y omnium is a PRICE OFFER,
+		// not an active policy — anchoring it as a determined attribute is exactly the conflation the
+		// founder rejects (« I have NO insurance at CBC »). Such a claim is dropped: anchor-or-decline,
+		// never assert a proposal as truth. Applies before key anchoring so no prospective value can
+		// fill any key's cluster.
+		if isProspective(c.Attribute + " " + c.Value + " " + c.Quote + " " + c.Entity) {
+			continue
+		}
+		// INVERSE REGISTRATION ANCHOR: the natural phrasing of a vehicle fact makes the MODEL the entity
+		// and the PLATE the value — « Tesla Model X 2023 (registration number) GT-139-RR ». The direct
+		// anchor below would miss the model (the plate is not in the entity/quote as a subject). So when
+		// the attribute is a registration/immatriculation attribute and the VALUE carries the plate, we
+		// invert: the plate's « modèle » is the entity. This is what puts « GT-139-RR → Model X » into the
+		// determined layer so the chat stops re-deriving the vehicle's attributes from conflating RAG. It
+		// is tightly gated (registration attribute + a real, non-key entity) so it never over-anchors.
+		if isRegistrationAttr(attr) {
+			ent := strings.TrimSpace(c.Entity)
+			if ent != "" && len(RecognizeKeys(c.Entity)) == 0 {
+				for _, k := range RecognizeKeys(c.Value) {
+					out = append(out, store.AttrNode{
+						KeyNorm: k.Norm, KeyType: k.KeyType, Kind: k.Kind,
+						Attribute: "modele", AttrRaw: "modèle",
+						Value: contradict.NormKey(ent), ValueRaw: ent, Prox: 1.0,
+					})
+				}
+			}
+		}
 		// Anchor on the KEY named in the claim's own entity first (precise); fall back to the key
-		// named in its verbatim quote (proximity within the asserted span).
+		// named in its verbatim quote (proximity within the asserted span). A claim naming NO key —
+		// e.g. an attribute tied only to « votre Tesla » with no plate/VIN/owner — anchors to nothing
+		// and is declined here (never guessed onto a vehicle).
 		keys := RecognizeKeys(c.Entity)
 		if len(keys) == 0 {
 			keys = RecognizeKeys(c.Quote)
@@ -152,6 +182,45 @@ func AttrNodesFromClaims(claims []contradict.Claim) []store.AttrNode {
 		}
 	}
 	return out
+}
+
+// registrationAttrMarkers are the folded attribute tokens that denote « this thing's registration /
+// plate is … » — the claim shape whose VALUE is the plate and whose ENTITY is the vehicle. Bounded
+// FR+EN. Used only to trigger the inverse anchor (plate → modèle = entity).
+var registrationAttrMarkers = []string{"registration", "immatricul", "plaque", "plate", "licence"}
+
+// isRegistrationAttr reports whether a normalized attribute denotes a vehicle's registration/plate.
+func isRegistrationAttr(attr string) bool {
+	for _, m := range registrationAttrMarkers {
+		if strings.Contains(attr, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// prospectiveMarkers are the case-folded tokens that frame a claim as a QUOTE / OFFER / PROJECTION
+// rather than an established fact. Bounded and language-aware (FR + EN) for the vehicle-finance domain
+// that motivated it (a Model Y omnium « cotation »), and generic enough to guard any attribute: a
+// price offer, a draft, an estimate or a projection is prospective, so its value is NOT a determined
+// truth. Fail-closed by design — the founder wants « anchor-or-decline, never guess a proposal ».
+var prospectiveMarkers = []string{
+	"cotation", "devis", "offre de prix", "offre de", "proposition", "simulation",
+	"estimation", "projet d", "projet de", "prévisionnel", "previsionnel", "à titre indicatif",
+	"quote", "quotation", "offer", "estimate", "draft", "proposal", "projected", "forecast",
+}
+
+// isProspective reports whether a span reads as a quote/offer/projection (see prospectiveMarkers).
+// Case-insensitive substring test on the folded span. Kept deliberately conservative: it only fires
+// on explicit prospective vocabulary, so it declines quotes without swallowing ordinary facts.
+func isProspective(span string) bool {
+	s := strings.ToLower(span)
+	for _, m := range prospectiveMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolvedAttr is one DETERMINED attribute of a keyed entity: the surviving value, how many distinct
