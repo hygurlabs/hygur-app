@@ -153,6 +153,23 @@ func (idx *EmailIndexer) ReconcileAccount(ctx context.Context, accountID string,
 	return removed, nil
 }
 
+// ocrCtxKey flags a single IndexThread call to OCR its PDF attachments. It is a
+// context value (not a signature change) so the bulk sync/backfill callers are
+// untouched — only the operator re-index endpoint opts in via WithAttachmentOCR.
+type ocrCtxKey struct{}
+
+// WithAttachmentOCR marks ctx so this IndexThread run OCRs scanned/image-only PDF
+// attachments (the operator re-index of a doc whose key lives only in a scan).
+func WithAttachmentOCR(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ocrCtxKey{}, true)
+}
+
+// attachmentOCR reports whether ctx opted into attachment OCR.
+func attachmentOCR(ctx context.Context) bool {
+	v, _ := ctx.Value(ocrCtxKey{}).(bool)
+	return v
+}
+
 // extractAttachmentText parses the downloaded PDF attachments across all
 // messages and returns their concatenated text (capped at
 // maxAttachmentTextChars). Returns "" when no attachment bytes are present or
@@ -171,8 +188,17 @@ func (idx *EmailIndexer) extractAttachmentText(ctx context.Context, messages []M
 			}
 			// The PDF parser returns RAW text; collapse it here so mail keeps the
 			// exact normalized attachment text it always stored (mail is unaffected
-			// by the notes/files raw_text change).
-			text := ingest.NormalizeText(parsers.ExtractPDFTextIsolated(ctx, att.Data, parsers.DefaultPDFExtractTimeout))
+			// by the notes/files raw_text change). On the operator re-index path
+			// (attachmentOCR set) run the OCR-capable, isolated extractor so a
+			// scanned/image-only attachment (a plate hidden in a relevé scan) is read;
+			// bulk sync never sets the flag, so its per-attachment cost is unchanged.
+			var raw string
+			if attachmentOCR(ctx) {
+				raw = parsers.ExtractPDFTextIsolatedOCR(ctx, att.Data, parsers.DefaultPDFOCRTimeout)
+			} else {
+				raw = parsers.ExtractPDFTextIsolated(ctx, att.Data, parsers.DefaultPDFExtractTimeout)
+			}
+			text := ingest.NormalizeText(raw)
 			if strings.TrimSpace(text) == "" {
 				continue
 			}

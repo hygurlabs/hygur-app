@@ -31,11 +31,23 @@ const pdfChildWatchInterval = 100 * time.Millisecond
 // parses in well under a second; this only fires for pathological inputs.
 const DefaultPDFExtractTimeout = 30 * time.Second
 
+// DefaultPDFOCRTimeout caps a single isolated OCR extraction. OCR renders every
+// page (pdftoppm) then runs tesseract/vision per page, so it is far slower than
+// text extraction — minutes, not milliseconds. Only used on the operator-triggered
+// re-index path (never bulk sync), so a generous cap is safe.
+const DefaultPDFOCRTimeout = 5 * time.Minute
+
+// pdfOCREnvVar, when set to "1" in the child's environment, switches the isolated
+// extractor to the OCR-capable parser (NewPDFParser) instead of the text-only one.
+// Set by ExtractPDFTextIsolatedOCR; unset on the default (bulk) path so sync never OCRs.
+const pdfOCREnvVar = "HYGUR_PDF_OCR"
+
 // RunPDFExtractSubprocess is the entrypoint for the isolated child. It reads PDF
-// bytes from stdin, extracts text (no OCR), writes the text to stdout and exits
-// 0. Any failure exits non-zero so the parent skips the attachment. A heap
-// watchdog force-exits if the parse balloons, so a parse bomb can never reach
-// the host's memory ceiling. This function never returns (it always os.Exit).
+// bytes from stdin, extracts text, writes the text to stdout and exits 0. Text-only
+// by default; when HYGUR_PDF_OCR=1 it runs the OCR fallback (scanned/image-only PDFs).
+// Any failure exits non-zero so the parent skips the attachment. A heap watchdog
+// force-exits if the parse balloons, so a parse bomb can never reach the host's
+// memory ceiling. This function never returns (it always os.Exit).
 func RunPDFExtractSubprocess() {
 	// Heap watchdog: a malformed PDF can make the parser allocate without bound;
 	// the goroutine running Parse can't be killed, so the whole process bails.
@@ -55,12 +67,30 @@ func RunPDFExtractSubprocess() {
 	if err != nil {
 		os.Exit(1)
 	}
-	text, _, perr := NewPDFParserTextOnly().Parse(context.Background(), bytes.NewReader(data))
+	// OCR-capable parser only when explicitly requested (operator re-index); the
+	// default (bulk sync) stays text-only so per-attachment vision/tesseract calls
+	// never saturate the inference model. The child inherits the vision endpoint env.
+	parser := NewPDFParserTextOnly()
+	if os.Getenv(pdfOCREnvVar) == "1" {
+		parser = NewPDFParser()
+	}
+	text, _, perr := parser.Parse(context.Background(), bytes.NewReader(data))
 	if perr != nil {
 		os.Exit(2)
 	}
 	_, _ = os.Stdout.WriteString(text)
 	os.Exit(0)
+}
+
+// ExtractPDFTextIsolatedOCR is ExtractPDFTextIsolated with the OCR fallback ENABLED
+// in the child (HYGUR_PDF_OCR=1) — for the operator-triggered re-index of scanned /
+// image-only attachments (e.g. an insurance relevé whose plate lives only in a scan).
+// Still fully process-isolated + heap-capped; only the timeout is larger (OCR is slow).
+func ExtractPDFTextIsolatedOCR(ctx context.Context, data []byte, timeout time.Duration) string {
+	if timeout <= 0 {
+		timeout = DefaultPDFOCRTimeout
+	}
+	return extractPDFTextIsolated(ctx, data, timeout, true)
 }
 
 // ExtractPDFTextIsolated extracts text from `data` in a child process (this same
@@ -70,15 +100,21 @@ func RunPDFExtractSubprocess() {
 // of the input by the child's heap watchdog; this is the only safe way to run
 // the fragile pure-Go PDF parser over untrusted mail attachments.
 func ExtractPDFTextIsolated(ctx context.Context, data []byte, timeout time.Duration) string {
+	if timeout <= 0 {
+		timeout = DefaultPDFExtractTimeout
+	}
+	return extractPDFTextIsolated(ctx, data, timeout, false)
+}
+
+// extractPDFTextIsolated is the shared implementation; ocr toggles the child's OCR
+// fallback via HYGUR_PDF_OCR. Both variants are process-isolated and heap-capped.
+func extractPDFTextIsolated(ctx context.Context, data []byte, timeout time.Duration, ocr bool) string {
 	if len(data) == 0 {
 		return ""
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
-	}
-	if timeout <= 0 {
-		timeout = DefaultPDFExtractTimeout
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, timeout)
@@ -88,6 +124,9 @@ func ExtractPDFTextIsolated(ctx context.Context, data []byte, timeout time.Durat
 	cmd.Stdin = bytes.NewReader(data)
 	// Don't let the child inherit pprof binding or other side effects.
 	cmd.Env = append(os.Environ(), "HYGUR_PPROF=", "HYGUR_MEM_LIMIT_MIB=0")
+	if ocr {
+		cmd.Env = append(cmd.Env, pdfOCREnvVar+"=1")
+	}
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = nil

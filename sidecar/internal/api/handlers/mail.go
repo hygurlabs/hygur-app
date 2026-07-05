@@ -562,8 +562,14 @@ func (h *MailHandler) Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Index the thread
-	result, err := indexer.IndexThread(r.Context(), thread, messages, "")
+	// Index the thread. ?ocr=1 re-extracts scanned/image-only PDF attachments with
+	// OCR (operator-triggered recovery of a key hidden in a scan, e.g. an insurance
+	// relevé's plate); default off so bulk sync cost is unchanged.
+	idxCtx := r.Context()
+	if r.URL.Query().Get("ocr") == "1" {
+		idxCtx = mail.WithAttachmentOCR(idxCtx)
+	}
+	result, err := indexer.IndexThread(idxCtx, thread, messages, "")
 	if err != nil {
 		h.logger.Error().Err(err).Str("thread_id", threadID).Msg("failed to index thread")
 		writeMailError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to index thread")
