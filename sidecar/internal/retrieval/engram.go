@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -655,6 +656,22 @@ func AssembleQueryFacts(ctx context.Context, db *store.DB, query string, now tim
 		}
 	}
 
+	// MODEL → PLATE traversal. A query names the vehicle by its MODEL/type ("l'assureur de mon Model Y",
+	// "l'assurance de la Zoé"), not its plate — so KeysInQuery finds nothing above. Resolve the plate by
+	// its determined modèle: distinctive query tokens are matched against the plate-anchored modèle
+	// values, and each matching plate's determined facts (assureur/courtier/…) are assembled. Still a
+	// hard-key anchor (the plate) — only the ENTRY is the model word; a model that matches no anchored
+	// plate resolves nothing (honest decline, RAG unaffected). Cheap single indexed read; best-effort.
+	for _, kn := range plateNormsForQueryModel(ctx, db, query) {
+		if covered[kn] {
+			continue
+		}
+		if df := assembleKeyedFacts(ctx, db, keyed.Key{Norm: kn, Kind: "vehicle", KeyType: "plate"}); df != nil && df.HasFacts() {
+			out = append(out, *df)
+			covered[kn] = true
+		}
+	}
+
 	// The owner — always a subject of a first-person turn ("my VAT", "mon numéro…"), which
 	// names no proper noun so detectQuerySubject can't surface it. ownerSubject is a configured
 	// owner name; empty (owner unconfigured) simply skips this.
@@ -685,6 +702,54 @@ func AssembleQueryFacts(ctx context.Context, db *store.DB, query string, now tim
 		}
 	}
 	return out, nil
+}
+
+// queryModelStopwords are the folded tokens that carry NO vehicle-identity signal, so they never seed a
+// model → plate match (they would over-join). Bounded FR+EN function words + the generic insurance /
+// vehicle vocabulary that appears in every such question.
+var queryModelStopwords = map[string]bool{
+	"quel": true, "quelle": true, "quels": true, "quelles": true, "est": true, "sont": true, "mon": true,
+	"ma": true, "mes": true, "les": true, "des": true, "une": true, "assureur": true, "assurance": true,
+	"assurances": true, "vehicule": true, "voiture": true, "voitures": true, "auto": true, "the": true,
+	"what": true, "who": true, "insurer": true, "insurance": true, "vehicle": true, "car": true, "my": true,
+	"pour": true, "avec": true, "chez": true, "dans": true, "sur": true, "par": true, "femme": true,
+	"epouse": true, "mari": true, "conjoint": true, "conjointe": true,
+	// AMBIGUOUS across the household's vehicles — matching on these would conflate distinct plates (a
+	// "Model Y" question must never surface the Model X). Only a DISTINCTIVE model token (e.g. "zoe")
+	// may seed the traversal; a generic make/class word falls through to RAG (honest).
+	"model": true, "tesla": true, "berline": true, "suv": true, "van": true,
+}
+
+var queryWordRe = regexp.MustCompile(`[0-9A-Za-zé]+`)
+
+// plateNormsForQueryModel extracts the distinctive vehicle-model/type tokens from a query and returns
+// the plate keys whose determined modèle matches them (model → plate traversal). Deterministic, cheap.
+func plateNormsForQueryModel(ctx context.Context, db *store.DB, query string) []string {
+	if db == nil {
+		return nil
+	}
+	var tokens []string
+	for _, w := range queryWordRe.FindAllString(strings.ToLower(query), -1) {
+		w = strings.ReplaceAll(w, "é", "e")
+		if len(w) < 3 || queryModelStopwords[w] {
+			continue
+		}
+		tokens = append(tokens, w)
+	}
+	if len(tokens) == 0 {
+		return nil
+	}
+	norms, err := db.PlateNormsByModelLike(ctx, tokens)
+	if err != nil {
+		return nil
+	}
+	// Fail-closed on ambiguity: a distinctive model token should resolve to exactly ONE plate. If it
+	// matches several (or none), decline the traversal rather than risk surfacing the wrong vehicle's
+	// insurer — anchor-or-decline, never conflate distinct vehicles.
+	if len(norms) != 1 {
+		return nil
+	}
+	return norms
 }
 
 // assembleKeyedFacts builds the authoritative DETERMINED facts for one keyed entity (a vehicle by its

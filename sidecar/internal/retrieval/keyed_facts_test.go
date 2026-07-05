@@ -179,3 +179,103 @@ func TestKeyedResolve_ContestedUnorderableDeclines(t *testing.T) {
 		t.Fatalf("contested unorderable model should decline, got %+v", got)
 	}
 }
+
+// MODEL → PLATE traversal (the insurance fix): a plate carries a determined assureur + a DISTINCTIVE
+// modèle ("renault zoe"); asking by the model word ("l'assurance de la Zoé"), never the plate, must
+// surface that plate's assureur. A generic/ambiguous model word ("Model") that would match several
+// plates resolves NOTHING (fail-closed, no cross-vehicle leak).
+func TestAssembleQueryFacts_ModelToPlateAssureur(t *testing.T) {
+	db, owner, now := seedVehicle(t)
+	ctx := context.Background()
+	// The Zoé: its own plate, a distinctive modèle + a determined assureur.
+	if err := db.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
+		ContentID: "zoe", SourceType: store.SourceTypeNote, Title: "zoe",
+		NormalizedText: "x", VersionID: "v1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert zoe: %v", err)
+	}
+	zoe := []store.AttrNode{
+		{ContentID: "zoe", KeyNorm: "1 xyz 234", KeyType: "plate", Kind: "vehicle", Attribute: "modele", AttrRaw: "modèle", Value: "renault zoe", ValueRaw: "Renault Zoe", Prox: 1},
+		{ContentID: "zoe", KeyNorm: "1 xyz 234", KeyType: "plate", Kind: "vehicle", Attribute: "assureur", AttrRaw: "assureur", Value: "baloise", ValueRaw: "Baloise", Prox: 1},
+	}
+	if err := db.ReplaceAttrNodes(ctx, "zoe", zoe); err != nil {
+		t.Fatalf("attr nodes zoe: %v", err)
+	}
+
+	facts, err := AssembleQueryFacts(ctx, db, "quelle est l'assurance de la Zoé de ma femme ?", now, owner, "Alex Martin")
+	if err != nil {
+		t.Fatalf("AssembleQueryFacts: %v", err)
+	}
+	var found bool
+	for _, f := range facts {
+		if f.Subject.Norm == "1 xyz 234" {
+			found = true
+			var gotAssureur string
+			for _, c := range f.Claims {
+				if c.Attribute == "assureur" {
+					gotAssureur = c.Value
+				}
+			}
+			if gotAssureur != "Baloise" {
+				t.Errorf("Zoé assureur = %q, want Baloise", gotAssureur)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("model→plate traversal did not surface the Zoé plate: %+v", facts)
+	}
+
+	// Ambiguous "Model" (matches Model X / Y / 3) must resolve NO plate via the model traversal.
+	facts2, _ := AssembleQueryFacts(ctx, db, "quel est l'assureur de mon Model ?", now, owner, "Alex Martin")
+	for _, f := range facts2 {
+		if f.Subject.Norm == "gt 139 rr" || f.Subject.Norm == "aa 111 bb" || f.Subject.Norm == "cc 222 dd" {
+			t.Errorf("ambiguous model word leaked plate %q", f.Subject.Norm)
+		}
+	}
+}
+
+// TYPE → PLATE traversal (the moto fix): a plate with no distinctive model name still carries a
+// distinctive vehicle-CLASS word ("moto") in its "description" attribute (written by
+// keyed.InsuranceNodes off the certificate body) plus a determined assureur. Asking by class
+// ("l'assureur de ma moto"), never the plate, must surface that plate's assureur — the same
+// traversal mechanism as the Zoé (model name), just keyed off "description" instead of "modele".
+func TestAssembleQueryFacts_VehicleTypeToPlateAssureur(t *testing.T) {
+	db, owner, now := seedVehicle(t)
+	ctx := context.Background()
+	if err := db.InsertKnowledgeItem(ctx, &store.KnowledgeItem{
+		ContentID: "moto", SourceType: store.SourceTypeNote, Title: "moto",
+		NormalizedText: "x", VersionID: "v1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert moto: %v", err)
+	}
+	moto := []store.AttrNode{
+		{ContentID: "moto", KeyNorm: "m bqv 633", KeyType: "plate", Kind: "vehicle", Attribute: "description", AttrRaw: "type", Value: "moto", ValueRaw: "moto", Prox: 1},
+		{ContentID: "moto", KeyNorm: "m bqv 633", KeyType: "plate", Kind: "vehicle", Attribute: "assureur", AttrRaw: "assureur", Value: "ag insurance", ValueRaw: "AG Insurance", Prox: 1},
+	}
+	if err := db.ReplaceAttrNodes(ctx, "moto", moto); err != nil {
+		t.Fatalf("attr nodes moto: %v", err)
+	}
+
+	facts, err := AssembleQueryFacts(ctx, db, "quel est l'assureur de ma moto ?", now, owner, "Alex Martin")
+	if err != nil {
+		t.Fatalf("AssembleQueryFacts: %v", err)
+	}
+	var found bool
+	for _, f := range facts {
+		if f.Subject.Norm == "m bqv 633" {
+			found = true
+			var gotAssureur string
+			for _, c := range f.Claims {
+				if c.Attribute == "assureur" {
+					gotAssureur = c.Value
+				}
+			}
+			if gotAssureur != "AG Insurance" {
+				t.Errorf("moto assureur = %q, want AG Insurance", gotAssureur)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("type→plate traversal did not surface the moto plate: %+v", facts)
+	}
+}

@@ -55,6 +55,45 @@ func (d *DB) ReplaceAttrNodes(ctx context.Context, contentID string, nodes []Att
 	return tx.Commit()
 }
 
+// PlateNormsByModelLike returns the distinct plate keys whose determined modèle/description VALUE
+// contains any of the given lowercased tokens — the model → plate traversal that lets "l'assurance de
+// la Zoé" reach the plate-anchored assureur without the user ever typing the plate. Each token must be
+// ≥3 chars (the caller filters stopwords); matching is a case-insensitive substring on the stored
+// (already lowercased) value. Bounded to the modèle/description attributes so it never joins on an
+// unrelated attribute. Empty/short tokens → no rows.
+func (d *DB) PlateNormsByModelLike(ctx context.Context, tokens []string) ([]string, error) {
+	conds := make([]string, 0, len(tokens))
+	args := make([]any, 0, len(tokens))
+	for _, t := range tokens {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if len(t) < 3 {
+			continue
+		}
+		conds = append(conds, "value LIKE ?")
+		args = append(args, "%"+t+"%")
+	}
+	if len(conds) == 0 {
+		return nil, nil
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT key_norm FROM entity_attr_nodes
+		 WHERE key_type = 'plate' AND attribute IN ('modele','description') AND (`+strings.Join(conds, " OR ")+`)`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 // AttrNodesForKeys returns every keyed-attribute node anchored (key edge) to ANY of the given key
 // norms, across all attributes — the candidate set the determined-facts resolver traverses so a
 // keyed entity's attributes are available in-context. Empty keys → no rows.

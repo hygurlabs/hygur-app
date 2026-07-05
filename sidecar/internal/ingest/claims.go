@@ -181,10 +181,24 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	}
 	// Keyed-entity attribute nodes (GENERALIZATION_PLAN — the universal entity-anchor): anchor each
 	// claim to a KEY it names (a vehicle by its plate, generically any keyed entity), so "the model
-	// of my vehicle GT-139-RR" resolves to the plate-anchored value. Best-effort.
-	if aerr := i.store.ReplaceAttrNodes(ctx, item.ContentID, keyed.AttrNodesFromClaims(claims)); aerr != nil {
+	// of my vehicle GT-139-RR" resolves to the plate-anchored value. Plus the deterministic
+	// vehicle-INSURANCE anchor (assureur/courtier/PJ from a certificate — no claims needed, the certs
+	// are no-reply). Best-effort.
+	if aerr := i.store.ReplaceAttrNodes(ctx, item.ContentID, allAttrNodes(item, claims)); aerr != nil {
 		log.Printf("[ingest] attr-node sync failed for %s: %v", item.ContentID, aerr)
 	}
+}
+
+// allAttrNodes assembles a document's keyed attribute nodes: the claim-anchored ones (a vehicle's
+// modèle etc.) PLUS the deterministic vehicle-INSURANCE anchor (assureur/courtier/PJ read straight
+// from an insurance certificate/contract, which carries no semantic claims — its sender is a
+// no-reply). Both anchor to the same plate key, so a vehicle's model and its insurer resolve together.
+func allAttrNodes(item *store.KnowledgeItem, claims []contradict.Claim) []store.AttrNode {
+	nodes := keyed.AttrNodesFromClaims(claims)
+	if item != nil {
+		nodes = append(nodes, keyed.InsuranceNodes(item.Title, item.DisplayText(), metaStrings(item.Metadata, "extracted_orgs"))...)
+	}
+	return nodes
 }
 
 // entityMentionsFromClaims derives the distinct (entity, attribute) index rows
@@ -418,8 +432,8 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 				// Keyed-entity attribute nodes (GENERALIZATION_PLAN): its error was previously
 				// SWALLOWED here (`_ =`), so a failing write left entity_attr_nodes silently empty on
 				// home while the sibling indexes populated. Check + log it, and count what we write so
-				// a backfill run is observable.
-				attrNodes := keyed.AttrNodesFromClaims(claims)
+				// a backfill run is observable. Includes the deterministic vehicle-insurance anchor.
+				attrNodes := allAttrNodes(it, claims)
 				if aerr := i.store.ReplaceAttrNodes(ctx, it.ContentID, attrNodes); aerr != nil {
 					log.Printf("[ingest] attr-node backfill failed for %s: %v", it.ContentID, aerr)
 				} else {
