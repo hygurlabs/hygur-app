@@ -181,7 +181,7 @@ func (i *Ingestor) applyItemClaims(ctx context.Context, item *store.KnowledgeIte
 	}
 	// Keyed-entity attribute nodes (GENERALIZATION_PLAN — the universal entity-anchor): anchor each
 	// claim to a KEY it names (a vehicle by its plate, generically any keyed entity), so "the model
-	// of my vehicle GT-139-RR" resolves to the plate-anchored value. Plus the deterministic
+	// of my vehicle AB-123-CD" resolves to the plate-anchored value. Plus the deterministic
 	// vehicle-INSURANCE anchor (assureur/courtier/PJ from a certificate — no claims needed, the certs
 	// are no-reply). Best-effort.
 	if aerr := i.store.ReplaceAttrNodes(ctx, item.ContentID, allAttrNodes(item, claims)); aerr != nil {
