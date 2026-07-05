@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -630,35 +631,20 @@ func AssembleQueryFacts(ctx context.Context, db *store.DB, query string, now tim
 	var out []DeterminedFacts
 	covered := map[string]bool{}
 
-	// The owner — always a subject of a first-person turn ("my VAT", "mon numéro…"), which
-	// names no proper noun so detectQuerySubject can't surface it. ownerSubject is a configured
-	// owner name; empty (owner unconfigured) simply skips this.
-	if ownerSubject != "" {
-		if df, err := AssembleDeterminedFacts(ctx, db, ownerSubject, now, owner); err == nil && df.HasFacts() {
-			df.IsOwner = true
-			out = append(out, *df)
-			covered[df.Subject.Norm] = true
-		}
-	}
-
-	// The query's single named subject (deterministic; "" when the query names none). Skip when
-	// it IS the owner (already covered) or the same norm was already emitted.
-	subj, err := detectQuerySubject(ctx, db, query)
-	if err != nil {
-		return out, err
-	}
-	if subj != "" && !owner.IsOwnerNorm(subj) && !covered[contradict.NormKey(subj)] {
-		if df, err := AssembleDeterminedFacts(ctx, db, subj, now, owner); err == nil && df.HasFacts() {
-			out = append(out, *df)
-			covered[df.Subject.Norm] = true
-		}
-	}
-
 	// Keyed entities NAMED in the query (GENERALIZATION_PLAN — the universal entity-anchor). A vehicle
 	// by its PLATE (generically any keyed entity) resolves straight to its key-anchored determined
 	// attributes — "the model of my vehicle GT-139-RR" → the plate's Model X. Distinct-entity rejection
 	// is intrinsic: only claims anchored to THIS key can fill it, so a Model Y (order-ref) / Model 3
-	// (sold) claim never surfaces here. Appended after the person subjects and de-duplicated by norm.
+	// (sold) claim never surfaces here.
+	//
+	// Resolved FIRST — before the owner and named-subject steps below — ON PURPOSE. Those steps call
+	// AssembleDeterminedFacts / detectQuerySubject → EntityNormsMatching, which can hit the turn's 5s
+	// timeout on a large entity_mentions table and burn the whole shared context budget. This keyed
+	// lookup is a single indexed read on entity_attr_nodes(key_norm) — cheap and deterministic — so
+	// running it against the STILL-FRESH context guarantees a vehicle-by-plate resolves even when the
+	// slower steps time out. This is the exact LIVE failure: entity_attr_nodes was correctly populated,
+	// but the owner/subject match exhausted the deadline and the assembly returned before the keyed
+	// dossier was ever built, so « GT-139-RR » silently declined and the chat fell back to conflating RAG.
 	for _, k := range keyed.KeysInQuery(query) {
 		if covered[k.Norm] {
 			continue
@@ -666,6 +652,36 @@ func AssembleQueryFacts(ctx context.Context, db *store.DB, query string, now tim
 		if df := assembleKeyedFacts(ctx, db, k); df != nil && df.HasFacts() {
 			out = append(out, *df)
 			covered[k.Norm] = true
+		}
+	}
+
+	// The owner — always a subject of a first-person turn ("my VAT", "mon numéro…"), which
+	// names no proper noun so detectQuerySubject can't surface it. ownerSubject is a configured
+	// owner name; empty (owner unconfigured) simply skips this.
+	if ownerSubject != "" {
+		if df, err := AssembleDeterminedFacts(ctx, db, ownerSubject, now, owner); err == nil && df.HasFacts() {
+			df.IsOwner = true
+			if !covered[df.Subject.Norm] {
+				out = append(out, *df)
+				covered[df.Subject.Norm] = true
+			}
+		}
+	}
+
+	// The query's single named subject (deterministic; "" when the query names none). Skip when it IS
+	// the owner (already covered) or the same norm was already emitted. BEST-EFFORT: a slow/failed
+	// subject match (EntityNormsMatching hitting the turn's timeout on a large corpus) must NOT discard
+	// the owner + keyed facts already gathered — degrade to "no named subject" instead of aborting the
+	// whole authoritative layer (that abort is what silently killed the keyed vehicle path LIVE).
+	subj, err := detectQuerySubject(ctx, db, query)
+	if err != nil {
+		log.Printf("[determined-facts] subject detection skipped (%v) — owner/keyed facts preserved", err)
+		return out, nil
+	}
+	if subj != "" && !owner.IsOwnerNorm(subj) && !covered[contradict.NormKey(subj)] {
+		if df, err := AssembleDeterminedFacts(ctx, db, subj, now, owner); err == nil && df.HasFacts() {
+			out = append(out, *df)
+			covered[df.Subject.Norm] = true
 		}
 	}
 	return out, nil

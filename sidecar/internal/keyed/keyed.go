@@ -149,7 +149,11 @@ func AttrNodesFromClaims(claims []contradict.Claim) []store.AttrNode {
 		// determined layer so the chat stops re-deriving the vehicle's attributes from conflating RAG. It
 		// is tightly gated (registration attribute + a real, non-key entity) so it never over-anchors.
 		if isRegistrationAttr(attr) {
-			ent := strings.TrimSpace(c.Entity)
+			// Strip a leading generic vehicle-class noun so « véhicule Tesla Model X 2023 » and « Tesla
+			// Model X 2023 » (the SAME model, one carrying an extraction-noise prefix) anchor to the SAME
+			// value — otherwise two documents that AGREE read as a disagreement and the attribute is
+			// falsely marked « superseded », which makes the chat hedge the model as obsolete.
+			ent := stripVehicleClassPrefix(strings.TrimSpace(c.Entity))
 			if ent != "" && len(RecognizeKeys(c.Entity)) == 0 {
 				for _, k := range RecognizeKeys(c.Value) {
 					out = append(out, store.AttrNode{
@@ -182,6 +186,31 @@ func AttrNodesFromClaims(claims []contradict.Claim) []store.AttrNode {
 		}
 	}
 	return out
+}
+
+// vehicleClassPrefixes are leading generic vehicle nouns (FR+EN) that carry NO model information. A
+// claim entity « véhicule Tesla Model X 2023 » names the same model as « Tesla Model X 2023 »; the
+// prefix is stripped before anchoring so two agreeing documents are not read as a false disagreement.
+var vehicleClassPrefixes = []string{"véhicule", "vehicule", "vehicle", "voiture", "automobile", "auto", "car"}
+
+// stripVehicleClassPrefix removes any leading run of generic vehicle-class nouns from s (case-folded
+// prefix, space-delimited), preserving the original casing of the remainder. Bounded and idempotent.
+func stripVehicleClassPrefix(s string) string {
+	t := strings.TrimSpace(s)
+	for {
+		low := strings.ToLower(t)
+		stripped := false
+		for _, p := range vehicleClassPrefixes {
+			if strings.HasPrefix(low, p+" ") {
+				t = strings.TrimSpace(t[len(p):])
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			return t
+		}
+	}
 }
 
 // registrationAttrMarkers are the folded attribute tokens that denote « this thing's registration /

@@ -89,6 +89,36 @@ func TestAttrNodesFromClaims_InverseRegistration(t *testing.T) {
 	}
 }
 
+// A leading generic vehicle-class noun (« véhicule Tesla Model X 2023 ») names the SAME model as the
+// bare form, so the inverse anchor strips it — otherwise two agreeing documents read as a false
+// disagreement (superseded) and the chat hedges the model as obsolete.
+func TestAttrNodesFromClaims_InverseRegistrationStripsVehicleClass(t *testing.T) {
+	bare := AttrNodesFromClaims([]contradict.Claim{
+		{Entity: "Tesla Model X 2023", Attribute: "immatriculation", Value: "GT-139-RR", Polarity: "affirm",
+			Quote: "Tesla Model X 2023 immatriculation GT-139-RR"},
+	})
+	prefixed := AttrNodesFromClaims([]contradict.Claim{
+		{Entity: "véhicule Tesla Model X 2023", Attribute: "immatriculation", Value: "GT-139-RR", Polarity: "affirm",
+			Quote: "véhicule Tesla Model X 2023 immatriculation GT-139-RR"},
+	})
+	pick := func(nodes []store.AttrNode) store.AttrNode {
+		for _, n := range nodes {
+			if n.KeyNorm == "gt 139 rr" && n.Attribute == "modele" {
+				return n
+			}
+		}
+		t.Fatalf("no modele node: %+v", nodes)
+		return store.AttrNode{}
+	}
+	b, p := pick(bare), pick(prefixed)
+	if p.ValueRaw != "Tesla Model X 2023" {
+		t.Errorf("prefixed model ValueRaw = %q, want Tesla Model X 2023 (prefix stripped)", p.ValueRaw)
+	}
+	if b.Value != p.Value {
+		t.Errorf("bare (%q) and prefixed (%q) model values must AGREE after stripping", b.Value, p.Value)
+	}
+}
+
 // The inverse anchor must NOT fire for a QUOTE (company Model Y « immatriculé au nom de la société »
 // inside a cotation) — decline-on-quote still wins, so the company model never lands via a price offer.
 func TestAttrNodesFromClaims_InverseRegistrationQuoteDeclines(t *testing.T) {

@@ -136,6 +136,22 @@ func TestAssembleQueryFacts_VehicleInsuranceDeclines(t *testing.T) {
 	}
 }
 
+// REGRESSION (the LIVE bug): a slow/failed named-subject detection (EntityNormsMatching hitting the
+// turn's timeout on a large corpus) must NOT abort the whole determined-facts layer. Before the fix,
+// AssembleQueryFacts returned early with the subject-match error, dropping the keyed vehicle dossier
+// that entity_attr_nodes had correctly populated — so « GT-139-RR » silently declined LIVE. Here a
+// cancelled context forces detectQuerySubject to error; the assembly must degrade to best-effort
+// (no error surfaced), never propagate the subject-match failure as fatal.
+func TestAssembleQueryFacts_SubjectDetectionFailureIsNonFatal(t *testing.T) {
+	db, owner, now := seedVehicle(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // downstream DB reads (incl. EntityNormsMatching) now error with context canceled
+
+	if _, err := AssembleQueryFacts(ctx, db, "le modèle de mon véhicule GT-139-RR ?", now, owner, "Alex Martin"); err != nil {
+		t.Fatalf("subject-detection failure must be non-fatal (best-effort), got err=%v", err)
+	}
+}
+
 // A vehicle plate with no determined attribute declines (no facts surfaced) — no guess.
 func TestAssembleQueryFacts_UnknownPlateDeclines(t *testing.T) {
 	db, owner, now := seedVehicle(t)

@@ -394,6 +394,7 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	var processed int
+	var attrNodesWritten int
 	for _, src := range store.MailAndSourceTypes(store.SourceTypeNote, store.SourceTypeDecision) {
 		const batch = 500
 		for offset := 0; ; offset += batch {
@@ -414,7 +415,16 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 				}
 				_ = i.store.ReplaceIdentifierLinks(ctx, it.ContentID, identifierProximityLinks(it))
 				_ = i.store.ReplaceFigureNodes(ctx, it.ContentID, figureNodes(it))
-				_ = i.store.ReplaceAttrNodes(ctx, it.ContentID, keyed.AttrNodesFromClaims(claims))
+				// Keyed-entity attribute nodes (GENERALIZATION_PLAN): its error was previously
+				// SWALLOWED here (`_ =`), so a failing write left entity_attr_nodes silently empty on
+				// home while the sibling indexes populated. Check + log it, and count what we write so
+				// a backfill run is observable.
+				attrNodes := keyed.AttrNodesFromClaims(claims)
+				if aerr := i.store.ReplaceAttrNodes(ctx, it.ContentID, attrNodes); aerr != nil {
+					log.Printf("[ingest] attr-node backfill failed for %s: %v", it.ContentID, aerr)
+				} else {
+					attrNodesWritten += len(attrNodes)
+				}
 				processed++
 			}
 			if len(page) < batch {
@@ -422,5 +432,6 @@ func (i *Ingestor) BackfillEntityIndex(ctx context.Context) (int, error) {
 			}
 		}
 	}
+	log.Printf("[ingest] entity-index backfill: processed=%d attr_nodes_written=%d", processed, attrNodesWritten)
 	return processed, nil
 }
