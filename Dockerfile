@@ -39,8 +39,16 @@ FROM debian:bookworm-slim AS runtime
 # pdftoppm (page rasteriser for the OCR fallback). Without it the server silently
 # degrades to the pure-Go ledongthuc extractor, which emits spaced-glyph garbage
 # on some PDFs (the TARA « Contractor Agreement » failure).
+#
+# tesseract-ocr (+ fra/eng traineddata) is the deterministic, local OCR engine the
+# image/PDF OCR fallback prefers (internal/ingest/parsers/image.go tryTesseract →
+# only falls back to the vision model when tesseract is absent). Without it,
+# image-only PDFs (e.g. the Sogessur relevé carrying the plate) are unreadable by
+# the deterministic path. fra+eng cover the founder's French/English documents.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates poppler-utils \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates poppler-utils \
+        tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/hygur-server /usr/local/bin/hygur-server
 
