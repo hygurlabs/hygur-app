@@ -74,6 +74,7 @@ type Entity struct {
 	Soft  []string
 	Attrs []Attr
 	Docs  []string
+	Obs   int // number of source OBSERVATIONS fused into this entity (≥2 ⇒ an auto-correlated merge)
 }
 
 // HasKeyType reports whether the entity carries any hard key of the given type (e.g. "plate").
@@ -175,7 +176,7 @@ func Correlate(obs []Observation) *Graph {
 // kinds, distinct soft names, distinct source docs, and attributes grouped by (Name,Role,Value)
 // with their sources unioned (so corroboration count = distinct source docs).
 func aggregate(obs []Observation, idx []int) *Entity {
-	e := &Entity{}
+	e := &Entity{Obs: len(idx)}
 	keySeen, kindSeen, softSeen, docSeen := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	attrIdx := map[string]int{} // (name|role|value) -> position in e.Attrs
 	for _, i := range idx {
